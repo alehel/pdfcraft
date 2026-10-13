@@ -83,8 +83,9 @@ fn preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
 }
 
 /// One theme card: its title, Active when it is what shows now, a preview of the chosen theme
-/// and a radio row per theme.
-fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) {
+/// and a radio row per theme. The radio is on only while that theme is on screen, and clicking
+/// it chooses the theme explicitly, so the mode follows the card the user picked.
+fn card(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) {
     egui::Frame::new()
         .fill(t.card)
         .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.border }))
@@ -103,8 +104,12 @@ fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(The
             preview(ui, shown, ui.available_width());
             ui.add_space(4.0);
             for (kind, label) in themes {
-                // One theme per card today, so it is always the chosen one.
-                let _ = ui.add(widgets::radio(*kind == shown, tl!(label)));
+                if ui.add(widgets::radio(active && *kind == shown, tl!(label))).clicked() {
+                    app.execute(mode_command(match kind {
+                        ThemeKind::Light => ThemePreference::Light,
+                        ThemeKind::Dark => ThemePreference::Dark,
+                    }));
+                }
             }
         });
 }
@@ -127,15 +132,15 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     let light_active = app.theme == ThemeKind::Light;
     ui.columns(2, |cols| {
         let [light, dark] = cols else { return };
-        card(light, t, tl!("Light theme"), light_active, LIGHT_THEMES);
-        card(dark, t, tl!("Dark theme"), !light_active, DARK_THEMES);
+        card(light, app, t, tl!("Light theme"), light_active, LIGHT_THEMES);
+        card(dark, app, t, tl!("Dark theme"), !light_active, DARK_THEMES);
     });
 }
 
 #[cfg(test)]
 mod tests {
     use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     use super::*;
 
@@ -178,5 +183,43 @@ mod tests {
         h.get_by_label("Use system setting").click();
         h.run();
         assert_eq!(h.state().theme_preference, ThemePreference::System);
+    }
+
+    /// Only the theme on screen has its radio on, and clicking the other card's radio switches
+    /// to that theme explicitly.
+    #[test]
+    fn the_theme_cards_radios_show_and_choose_the_theme_on_screen() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_theme_preference(ThemePreference::Light);
+        let mut fonts = false;
+        let mut h = Harness::builder().with_size(egui::vec2(640.0, 400.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                preferences_section(ui, app, &t);
+            },
+            app,
+        );
+        h.run();
+        let checked =
+            |h: &Harness<'_, PdfCraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+        assert!(checked(&h, "Light gray") && !checked(&h, "Dark gray"));
+
+        h.get_by_label("Dark gray").click();
+        h.run();
+        assert_eq!(h.state().theme_preference, ThemePreference::Dark);
+        assert_eq!(h.state().theme, ThemeKind::Dark);
+        assert!(!checked(&h, "Light gray") && checked(&h, "Dark gray"));
+        assert_eq!(h.query_all_by_label("Active").count(), 1);
+
+        h.get_by_label("Light gray").click();
+        h.run();
+        assert_eq!(h.state().theme_preference, ThemePreference::Light);
+        assert!(checked(&h, "Light gray") && !checked(&h, "Dark gray"));
     }
 }

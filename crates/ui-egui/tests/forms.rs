@@ -4,10 +4,14 @@ use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    harness_for(include_bytes!("data/form.pdf").to_vec())
+}
+
+fn harness_for(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        app.open_bytes("form.pdf", None, bytes).unwrap();
         app.set_option("left", "closed").unwrap();
         // The whole 300×400 pt page on screen.
         app.set_option("zoom", "150").unwrap();
@@ -381,6 +385,51 @@ fn validated_form() -> Vec<u8> {
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (qty) /V (4) /Rect [20 350 280 372] /P 3 0 R /F 4 /AA << /V << /S /JavaScript /JS (if (event.value > 100) { app.alert('At most 100'); event.rc = false; }) >> >> >>",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ])
+}
+
+/// The cursor after hovering `p`.
+fn cursor_at(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) -> egui::CursorIcon {
+    h.hover_at(p);
+    h.run_steps(2);
+    h.output().platform_output.cursor_icon
+}
+
+/// A ticked check box whose appearance draws its dot as a bullet character (the page's text
+/// layer includes annotation appearances), and a radio button over page text: hovering either
+/// shows the pointing hand they are clicked with, not the text-selection I-beam.
+#[test]
+fn check_boxes_and_radios_over_text_show_the_pointing_hand() {
+    let content = "BT /F1 24 Tf 60 340 Td (MMMMMM) Tj ET";
+    // \225 is the WinAnsi bullet (U+2022).
+    let dot = "BT 0 g /F1 24 Tf 3 2 Td (\\225) Tj ET";
+    let content_obj = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let dot_obj = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Resources << /Font << /F1 9 0 R >> >> /Length {} >>\nstream\n{dot}\nendstream",
+        dot.len()
+    );
+    let mut h = harness_for(pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (dot) /V /Yes /AS /Yes /F 4 /Rect [20 340 40 360] /P 3 0 R /AP << /N << /Yes 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 32768 /T (pick) /F 4 /Rect [70 340 90 360] /P 3 0 R /AS /Off /AP << /N << /a 10 0 R /Off 10 0 R >> >> >>",
+        &content_obj,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        &dot_obj,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 0 >>\nstream\n\nendstream",
+    ]));
+    let rect = |h: &Harness<'static, PdfCraftApp>, name: &str| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+    };
+    let (dot, pick) = (rect(&h, "dot"), rect(&h, "pick"));
+    // The text layer is there: the page text beside the fields shows the I-beam.
+    assert_eq!(cursor_at(&mut h, pick.center() + egui::vec2(pick.width() * 3.5, 0.0)), egui::CursorIcon::Text);
+    assert_eq!(cursor_at(&mut h, dot.center()), egui::CursorIcon::PointingHand, "a check box over its own dot");
+    assert_eq!(cursor_at(&mut h, pick.center()), egui::CursorIcon::PointingHand, "a radio button over page text");
 }
 
 fn pdf_from_objects(objs: &[&str]) -> Vec<u8> {

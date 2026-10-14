@@ -2673,7 +2673,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 view.current = i;
                 open_boxes = true;
             }
-            let on_field = if preparing {
+            let (on_field, over_field) = if preparing {
                 let field_tool = match tool {
                     QuickTool::Field(f) => Some(f),
                     _ => None,
@@ -2681,11 +2681,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, can_modify, view);
                 field_props |= o.properties;
                 field_placed |= o.placed;
-                o.consumed || field_tool.is_some()
+                (o.consumed || field_tool.is_some(), false)
+            } else if tool == QuickTool::Select && !comments::select_grabs(ui, &pcx, view) {
+                let o = crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view);
+                (o.consumed, o.hovered)
             } else {
-                tool == QuickTool::Select
-                    && !comments::select_grabs(ui, &pcx, view)
-                    && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
+                (false, false)
             };
             // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
             let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
@@ -2787,9 +2788,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     // Column select (#740): the Column select tool, or Alt (Option on macOS) held
                     // while a drag starts, as in Acrobat.
                     let column = tool == QuickTool::ColumnSelect || ui.input(|inp| inp.modifiers.alt);
-                    if column && !over_link {
+                    // A form field keeps the cursor it set (the pointing hand over a check box)
+                    // over text: a label under it, or its own appearance, which the layer includes.
+                    let own_cursor = !over_link && !over_field;
+                    if column && own_cursor {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                    } else if over_text && !over_link {
+                    } else if over_text && own_cursor {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
                     }
                     let press_here = ui.input(|inp| inp.pointer.press_origin()).is_some_and(|o| r.contains(o));

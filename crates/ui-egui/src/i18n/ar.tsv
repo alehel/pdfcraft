@@ -1580,6 +1580,7 @@
 	Created 1 link	أُنشئ رابط واحد
 	Created {n} links	أُنشئ {n} روابط
 	Text recognition is already running	التعرف على النص قيد التشغيل بالفعل
+	The document changed while text was being recognized, so nothing was added. Run Recognize Text again.	تغيّر المستند أثناء التعرف على النص، فلم يُضف شيء. شغّل «التعرف على النص» مرة أخرى.
 	Recognizing text… file {d} of {t}	جارٍ التعرف على النص… الملف {d} من {t}
 	Recognizing text… page {d} of {t}	جارٍ التعرف على النص… الصفحة {d} من {t}
 	Recognized 1 word	تم التعرف على كلمة واحدة

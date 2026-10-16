@@ -1096,6 +1096,7 @@
 	Created 1 link	Δημιουργήθηκε 1 σύνδεσμος
 	Created {n} links	Δημιουργήθηκαν {n} σύνδεσμοι
 	Text recognition is already running	Η αναγνώριση κειμένου εκτελείται ήδη
+	The document changed while text was being recognized, so nothing was added. Run Recognize Text again.	Το έγγραφο τροποποιήθηκε κατά την αναγνώριση κειμένου, οπότε δεν προστέθηκε τίποτα. Εκτελέστε ξανά την Αναγνώριση κειμένου.
 	Optimizing… removing user data	Βελτιστοποίηση… αφαίρεση δεδομένων χρήστη
 	Optimizing… image {d} of {t}	Βελτιστοποίηση… εικόνα {d} από {t}
 	Optimizing… cleaning up	Βελτιστοποίηση… εκκαθάριση

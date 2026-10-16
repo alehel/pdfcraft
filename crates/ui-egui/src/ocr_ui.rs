@@ -64,6 +64,9 @@ pub struct BatchProgress {
 
 pub struct OcrRun {
     pub doc: DocId,
+    /// The document's edit generation when recognition started: words found on an older state
+    /// are not added to a newer one.
+    pub generation: u64,
     pub progress: Arc<Mutex<OcrProgress>>,
 }
 
@@ -166,6 +169,7 @@ impl PdfCraftApp {
         };
         let settings = d.settings();
         let Some(job) = self.session.ocr_job(id, &pages, settings) else { return };
+        let Some(generation) = self.session.get(id).map(|d| d.edit_generation()) else { return };
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         let work = move || {
@@ -189,7 +193,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.ocr_run = Some(OcrRun { doc: id, progress });
+        self.ocr_run = Some(OcrRun { doc: id, generation, progress });
         self.poll_ocr();
     }
 
@@ -313,7 +317,7 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress) = (run.doc, run.progress.clone());
+        let (doc, generation, progress) = (run.doc, run.generation, run.progress.clone());
         let Ok(mut s) = progress.lock() else { return };
         let Some(result) = s.result.take() else {
             let msg = crate::i18n::fmt(
@@ -338,6 +342,11 @@ impl PdfCraftApp {
                 return;
             }
         };
+        // The words were placed on the pages as they were when recognition started.
+        if self.session.get(doc).is_some_and(|d| d.edit_generation() != generation) {
+            self.notify_tr("The document changed while text was being recognized, so nothing was added. Run Recognize Text again.");
+            return;
+        }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let skipped = found.len() - read;
         match self.session.apply_ocr(doc, &found) {
@@ -365,5 +374,53 @@ impl PdfCraftApp {
             }
             Err(e) => self.notify_error(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pdfcraft_engine::Edit;
+    use pdfcraft_engine::ocr::PlacedWord;
+
+    use super::*;
+
+    fn finished(app: &mut PdfCraftApp) -> (DocId, u64, Arc<Mutex<OcrProgress>>) {
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        let generation = app.session.get(doc).unwrap().edit_generation();
+        let word = PlacedWord { text: "word".into(), origin: [72.0, 72.0], across: [40.0, 0.0], up: [0.0, 12.0] };
+        let found = vec![OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None }];
+        (doc, generation, Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(found)), cancel: false })))
+    }
+
+    #[test]
+    fn words_found_on_an_unchanged_document_are_added() {
+        let mut app = PdfCraftApp::new();
+        let (doc, generation, progress) = finished(&mut app);
+        app.ocr_run = Some(OcrRun { doc, generation, progress });
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        assert_eq!(app.session.get(doc).unwrap().can_undo(), Some("Recognize text"));
+    }
+
+    /// Words recognized on one state of the document are not added to another: an edit made
+    /// while recognition ran discards the result, and the user is told to run it again.
+    #[test]
+    fn words_found_before_an_edit_are_not_added_after_it() {
+        let mut app = PdfCraftApp::new();
+        let (doc, generation, progress) = finished(&mut app);
+        app.ocr_run = Some(OcrRun { doc, generation, progress });
+        // The user rotates the page while recognition runs.
+        app.session.apply(doc, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        let rotated = app.session.get(doc).unwrap().can_undo().map(str::to_owned);
+
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        assert_eq!(app.session.get(doc).unwrap().can_undo().map(str::to_owned), rotated, "nothing was added");
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.0.as_str()),
+            Some("The document changed while text was being recognized, so nothing was added. Run Recognize Text again.")
+        );
     }
 }

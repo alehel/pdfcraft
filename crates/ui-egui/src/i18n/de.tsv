@@ -1565,6 +1565,7 @@
 	Created 1 link	1 Link erstellt
 	Created {n} links	{n} Links erstellt
 	Text recognition is already running	Die Texterkennung läuft bereits
+	The document changed while text was being recognized, so nothing was added. Run Recognize Text again.	Das Dokument hat sich während der Texterkennung geändert; deshalb wurde nichts hinzugefügt. Führe „Text erkennen“ erneut aus.
 	Optimizing… removing user data	Optimieren… Benutzerdaten werden entfernt
 	Optimizing… image {d} of {t}	Optimieren… Bild {d} von {t}
 	Optimizing… cleaning up	Optimieren… Aufräumen

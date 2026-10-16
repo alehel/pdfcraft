@@ -1646,6 +1646,7 @@ key	Space	Mezerník
 	Created 1 link	Vytvořen 1 odkaz
 	Created {n} links	Vytvořeno odkazů: {n}
 	Text recognition is already running	Rozpoznávání textu už běží
+	The document changed while text was being recognized, so nothing was added. Run Recognize Text again.	Dokument se během rozpoznávání textu změnil, proto nebylo nic přidáno. Spusťte Rozpoznat text znovu.
 	Recognizing text… file {d} of {t}	Rozpoznávání textu… soubor {d} z {t}
 	Recognizing text… page {d} of {t}	Rozpoznávání textu… stránka {d} z {t}
 	Recognized 1 word	Rozpoznáno 1 slovo

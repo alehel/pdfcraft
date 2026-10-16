@@ -1483,6 +1483,7 @@
 	Created 1 link	已建立 1 個連結
 	Created {n} links	已建立{n}個連結
 	Text recognition is already running	文字識別已在執行
+	The document changed while text was being recognized, so nothing was added. Run Recognize Text again.	辨識文字時文件已變更，因此未加入任何內容。請重新執行「辨識文字」。
 	Optimizing… removing user data	正在最佳化…移除使用者資料
 	Optimizing… image {d} of {t}	正在最佳化…第{d}張圖片，共{t}張
 	Optimizing… cleaning up	正在最佳化…清理

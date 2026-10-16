@@ -2298,6 +2298,7 @@ comment menu	Edit	Redaguoti
 	Text language is specified	Teksto kalba nurodyta
 	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	Tekstas turi pakankamai išsiskirti iš fono, kad jį matytų silpnaregiai. Patikrinkite spalvas vizualiai arba kontrasto tikrinimo įrankiu.
 	Text recognition is already running	Teksto atpažinimas jau vykdomas
+	The document changed while text was being recognized, so nothing was added. Run Recognize Text again.	Atpažįstant tekstą dokumentas pasikeitė, todėl nieko nepridėta. Paleiskite „Atpažinti tekstą“ dar kartą.
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Teksto atpažinimas neįdiegtas: trūksta modelių (vykdykite `cargo xtask models` arba nustatykite PDFCRAFT_MODELS).
 	That didn't work: an internal error stopped it ({m}).	Veiksmas nepavyko: jį sustabdė vidinė klaida ({m}).
 	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	Veiksmas nepavyko: jį sustabdė vidinė klaida ({m}). Dokumentai nepakeisti.

@@ -5,13 +5,12 @@
 //! and shows its progress in a notice with a bar and a Cancel button; the copy is saved once it
 //! is done.
 
-use std::sync::{Arc, Mutex};
-
 use egui::{Align, Layout};
 use pdfcraft_engine::optimize::{Compression, ImageSettings, QUALITIES, Settings};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
-use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
+use pdfcraft_engine::{EditError, Hidden, OptimizeReport};
 
+use crate::jobs::{Job, Polled};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
@@ -39,15 +38,6 @@ impl Default for OptimizeDraft {
     }
 }
 
-/// Progress of a background optimization: the stage, the result once finished, and a cancel
-/// request.
-#[derive(Default)]
-pub struct OptimizeProgress {
-    pub stage: OptimizeStage,
-    pub result: Option<Result<Optimized, EditError>>,
-    pub cancel: bool,
-}
-
 /// Which command started an optimization: they save under different names, and only the
 /// Optimizer's notice lists what it did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,12 +59,12 @@ impl OptimizeKind {
 }
 
 pub struct OptimizeRun {
-    pub doc: DocId,
     pub kind: OptimizeKind,
     /// The size of the document the optimization started from: the saving is measured against
     /// it, not against the document as edited since.
     pub before: usize,
-    pub progress: Arc<Mutex<OptimizeProgress>>,
+    /// The optimization, with the stage it is at as its progress.
+    pub job: Job<Result<Optimized, EditError>, OptimizeStage>,
 }
 
 /// The notice's text for a stage.
@@ -286,65 +276,43 @@ impl PdfCraftApp {
             Ok(job) => job,
             Err(e) => return self.save_optimized(id, kind, before, Err(e)),
         };
-        let progress = Arc::new(Mutex::new(OptimizeProgress::default()));
-        let p = progress.clone();
-        let work = move || {
-            let result = job.run(|stage| {
-                let Ok(mut s) = p.lock() else { return false };
-                s.stage = stage;
-                !s.cancel
-            });
-            if let Ok(mut s) = p.lock() {
-                s.result = Some(result);
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.run_inline {
-            work();
-        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-optimize".into()).spawn(work) {
-            // No worker: report the failure instead of waiting for a result that never comes.
-            if let Ok(mut s) = progress.lock() {
-                s.result = Some(Err(EditError::Optimize(e.to_string())));
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        work();
-        self.optimize_run = Some(OptimizeRun { doc: id, kind, before, progress });
+        let job =
+            Job::start(&self.session, id, "pdfcraft-optimize", self.run_inline, OptimizeStage::default(), move |r| job.run(|stage| r.report(stage)));
+        self.optimize_run = job.map(|job| OptimizeRun { kind, before, job });
         self.poll_optimize();
     }
 
     /// Stop a running optimization (nothing is saved).
     pub fn cancel_optimize(&mut self) {
-        if let Some(r) = &self.optimize_run
-            && let Ok(mut s) = r.progress.lock()
-        {
-            s.cancel = true;
+        if let Some(r) = &self.optimize_run {
+            r.job.cancel();
         }
     }
 
     /// Show progress; save the copy once the worker is done.
     pub(crate) fn poll_optimize(&mut self) {
         let Some(run) = self.optimize_run.as_ref() else { return };
-        let (doc, kind, before, progress) = (run.doc, run.kind, run.before, run.progress.clone());
-        let Ok(mut s) = progress.lock() else {
-            // The worker panicked while holding the lock: it will never report back.
-            self.optimize_run = None;
-            self.progress_notice = None;
-            self.notify_tr("Couldn't optimize the file");
-            return;
-        };
-        let Some(result) = s.result.take() else {
-            let cancelling = s.cancel;
-            let stage = s.stage;
-            drop(s);
-            let label = if cancelling { tl!("Cancelling…").to_string() } else { stage_label(stage) };
-            self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction: stage.fraction(), cancellable: !cancelling });
-            if let Some(ctx) = &self.ctx {
-                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        let (doc, kind, before) = (run.job.doc(), run.kind, run.before);
+        let result = match run.job.poll(&self.session) {
+            Polled::Running(stage, cancelling) => {
+                let label = if cancelling { tl!("Cancelling…").to_string() } else { stage_label(stage) };
+                self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction: stage.fraction(), cancellable: !cancelling });
+                if let Some(ctx) = &self.ctx {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                }
+                return;
             }
-            return;
+            // The copy is of the document as it was when the run started, which is what was asked
+            // for; the saving is measured against that state (`before`).
+            Polled::Done(result) | Polled::Stale(result) => result,
+            Polled::Lost => {
+                // The worker stopped without a result: it will never report back.
+                self.optimize_run = None;
+                self.progress_notice = None;
+                self.notify_tr("Couldn't optimize the file");
+                return;
+            }
         };
-        drop(s);
         self.optimize_run = None;
         self.progress_notice = None;
         match result {
@@ -369,14 +337,19 @@ mod tests {
 
     #[test]
     fn the_progress_card_shows_the_stage_and_cancels() {
-        let progress = Arc::new(Mutex::new(OptimizeProgress { stage: OptimizeStage::Images { done: 3, total: 10 }, ..Default::default() }));
-        let p = progress.clone();
+        // A worker at image 4 of 10 that goes on when told to, and stops if it was cancelled.
+        let (go, wait) = std::sync::mpsc::channel::<()>();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
             let (_, doc) = app.active_ids().unwrap();
-            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, before: 0, progress: p });
+            let stage = OptimizeStage::Images { done: 3, total: 10 };
+            let job = Job::start(&app.session, doc, "pdfcraft-test-optimize", false, stage, move |r| {
+                let _ = wait.recv();
+                if r.report(OptimizeStage::Writing) { Err(EditError::Optimize("not cancelled".into())) } else { Err(EditError::Cancelled) }
+            });
+            app.optimize_run = job.map(|job| OptimizeRun { kind: OptimizeKind::Advanced, before: 0, job });
             app.notify("Saved notes.pdf");
             app
         });
@@ -392,13 +365,16 @@ mod tests {
 
         h.get_by_label("Cancel").click();
         h.run_steps(2);
-        assert!(progress.lock().unwrap().cancel, "the worker is asked to stop");
         h.get_by_label("Cancelling…");
         assert!(h.query_by_label("Cancel").is_none(), "Cancel is not offered twice");
 
-        // The worker stops and reports back.
-        progress.lock().unwrap().result = Some(Err(EditError::Cancelled));
-        h.run_steps(2);
+        // The worker sees the request at its next report, stops and reports back.
+        go.send(()).unwrap();
+        let start = std::time::Instant::now();
+        while h.state().optimize_run.is_some() && start.elapsed() < std::time::Duration::from_secs(10) {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert!(h.state().optimize_run.is_none() && h.state().progress_notice.is_none());
         assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Optimization cancelled"));
     }
@@ -409,7 +385,8 @@ mod tests {
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
         let (_, doc) = app.active_ids().unwrap();
-        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, before: 0, progress: Arc::default() });
+        let job = Job::start(&app.session, doc, "test", true, OptimizeStage::default(), |_| Err(EditError::Cancelled));
+        app.optimize_run = job.map(|job| OptimizeRun { kind: OptimizeKind::Reduce, before: 0, job });
         app.optimize_with_draft();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
     }
@@ -428,8 +405,9 @@ mod tests {
         let (_, doc) = app.active_ids().unwrap();
         let start = app.session.get(doc).unwrap().bytes.clone();
         // The copy is exactly as large as the document it was made from.
-        let progress = Arc::new(Mutex::new(OptimizeProgress { result: Some(Ok((start.clone(), OptimizeReport::default()))), ..Default::default() }));
-        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, before: start.len(), progress });
+        let copy = start.clone();
+        let job = Job::start(&app.session, doc, "test", true, OptimizeStage::default(), move |_| Ok((copy, OptimizeReport::default())));
+        app.optimize_run = job.map(|job| OptimizeRun { kind: OptimizeKind::Advanced, before: start.len(), job });
         // The user edits the document while the optimization runs.
         app.session.apply(doc, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
         assert!(app.session.get(doc).unwrap().bytes.len() > start.len(), "the edit grew the file");

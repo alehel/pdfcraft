@@ -5,9 +5,9 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use pdfcraft_engine::DocId;
 use pdfcraft_engine::ocr::{LANGUAGES, OcrPage, OcrSettings};
 
+use crate::jobs::{Job, Polled};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
@@ -45,15 +45,6 @@ impl OcrDraft {
     }
 }
 
-/// Progress of a run: pages done, total, the result once finished, and a cancel request.
-#[derive(Default)]
-pub struct OcrProgress {
-    pub done: usize,
-    pub total: usize,
-    pub result: Option<Result<Vec<OcrPage>, String>>,
-    pub cancel: bool,
-}
-
 /// Recognize text in multiple files: files done, total, and the summary once finished.
 #[derive(Default)]
 pub struct BatchProgress {
@@ -62,13 +53,9 @@ pub struct BatchProgress {
     pub message: Option<String>,
 }
 
-pub struct OcrRun {
-    pub doc: DocId,
-    /// The document's edit generation when recognition started: words found on an older state
-    /// are not added to a newer one.
-    pub generation: u64,
-    pub progress: Arc<Mutex<OcrProgress>>,
-}
+/// A Recognize Text run: the pages read (or why recognition couldn't start), with (pages done,
+/// total) as its progress.
+pub type OcrRun = Job<Result<Vec<OcrPage>, String>, (usize, usize)>;
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
@@ -169,31 +156,10 @@ impl PdfCraftApp {
         };
         let settings = d.settings();
         let Some(job) = self.session.ocr_job(id, &pages, settings) else { return };
-        let Some(generation) = self.session.get(id).map(|d| d.edit_generation()) else { return };
-        let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
-        let p = progress.clone();
-        let work = move || {
-            let result = pdfcraft_engine::ocr::engine().map(|ocr| {
-                job.run(&ocr, |done, total| {
-                    let Ok(mut s) = p.lock() else { return false };
-                    s.done = done;
-                    s.total = total;
-                    !s.cancel
-                })
-            });
-            if let Ok(mut s) = p.lock() {
-                s.result = Some(result);
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.run_inline {
-            work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
-        }
-        #[cfg(target_arch = "wasm32")]
-        work();
-        self.ocr_run = Some(OcrRun { doc: id, generation, progress });
+        let total = job.pages.len();
+        self.ocr_run = Job::start(&self.session, id, "pdfcraft-ocr", self.run_inline, (0, total), move |r| {
+            pdfcraft_engine::ocr::engine().map(|ocr| job.run(&ocr, |done, total| r.report((done, total))))
+        });
         self.poll_ocr();
     }
 
@@ -285,10 +251,8 @@ impl PdfCraftApp {
 
     /// Stop a running recognition (the pages read so far are kept).
     pub fn cancel_ocr(&mut self) {
-        if let Some(r) = &self.ocr_run
-            && let Ok(mut s) = r.progress.lock()
-        {
-            s.cancel = true;
+        if let Some(r) = &self.ocr_run {
+            r.cancel();
         }
     }
 
@@ -317,23 +281,33 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, generation, progress) = (run.doc, run.generation, run.progress.clone());
-        let Ok(mut s) = progress.lock() else { return };
-        let Some(result) = s.result.take() else {
-            let msg = crate::i18n::fmt(
-                tl!("Recognizing text… page {d} of {t}"),
-                &[("d", &(s.done + 1).min(s.total.max(1)).to_string()), ("t", &s.total.max(1).to_string())],
-            );
-            drop(s);
-            if self.toast.as_ref().is_none_or(|t| t.0 != msg) {
-                self.notify(msg);
+        let doc = run.doc();
+        let result = match run.poll(&self.session) {
+            Polled::Running((done, total), _) => {
+                let msg = crate::i18n::fmt(
+                    tl!("Recognizing text… page {d} of {t}"),
+                    &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+                );
+                if self.toast.as_ref().is_none_or(|t| t.0 != msg) {
+                    self.notify(msg);
+                }
+                if let Some(ctx) = &self.ctx {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                return;
             }
-            if let Some(ctx) = &self.ctx {
-                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            Polled::Done(result) => result,
+            // The words were placed on the pages as they were when recognition started.
+            Polled::Stale(Ok(_)) => {
+                self.ocr_run = None;
+                if self.session.get(doc).is_some() {
+                    self.notify_tr("The document changed while text was being recognized, so nothing was added. Run Recognize Text again.");
+                }
+                return;
             }
-            return;
+            Polled::Stale(Err(e)) => Err(e),
+            Polled::Lost => Err("text recognition stopped unexpectedly".into()),
         };
-        drop(s);
         self.ocr_run = None;
         let found = match result {
             Ok(f) => f,
@@ -342,11 +316,6 @@ impl PdfCraftApp {
                 return;
             }
         };
-        // The words were placed on the pages as they were when recognition started.
-        if self.session.get(doc).is_some_and(|d| d.edit_generation() != generation) {
-            self.notify_tr("The document changed while text was being recognized, so nothing was added. Run Recognize Text again.");
-            return;
-        }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let skipped = found.len() - read;
         match self.session.apply_ocr(doc, &found) {
@@ -379,26 +348,26 @@ impl PdfCraftApp {
 
 #[cfg(test)]
 mod tests {
-    use pdfcraft_engine::Edit;
     use pdfcraft_engine::ocr::PlacedWord;
+    use pdfcraft_engine::{DocId, Edit};
 
     use super::*;
 
-    fn finished(app: &mut PdfCraftApp) -> (DocId, u64, Arc<Mutex<OcrProgress>>) {
+    /// A document with a finished recognition run on it, not yet picked up.
+    fn finished(app: &mut PdfCraftApp) -> DocId {
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
         let (_, doc) = app.active_ids().unwrap();
-        let generation = app.session.get(doc).unwrap().edit_generation();
         let word = PlacedWord { text: "word".into(), origin: [72.0, 72.0], across: [40.0, 0.0], up: [0.0, 12.0] };
         let found = vec![OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None }];
-        (doc, generation, Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(found)), cancel: false })))
+        app.ocr_run = Job::start(&app.session, doc, "test", true, (1, 1), move |_| Ok(found));
+        doc
     }
 
     #[test]
     fn words_found_on_an_unchanged_document_are_added() {
         let mut app = PdfCraftApp::new();
-        let (doc, generation, progress) = finished(&mut app);
-        app.ocr_run = Some(OcrRun { doc, generation, progress });
+        let doc = finished(&mut app);
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(doc).unwrap().can_undo(), Some("Recognize text"));
@@ -409,8 +378,7 @@ mod tests {
     #[test]
     fn words_found_before_an_edit_are_not_added_after_it() {
         let mut app = PdfCraftApp::new();
-        let (doc, generation, progress) = finished(&mut app);
-        app.ocr_run = Some(OcrRun { doc, generation, progress });
+        let doc = finished(&mut app);
         // The user rotates the page while recognition runs.
         app.session.apply(doc, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
         let rotated = app.session.get(doc).unwrap().can_undo().map(str::to_owned);

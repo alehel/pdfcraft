@@ -6,9 +6,6 @@
 //! otherwise it comes back as [`Polled::Stale`], and the caller decides what an older state's
 //! result is still good for.
 
-// Used by the jobs that move onto it next.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, PoisonError};
 

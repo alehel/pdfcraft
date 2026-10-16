@@ -230,15 +230,17 @@ impl PdfCraftApp {
     }
 
     /// Save an optimized copy (Reduce File Size, Optimize PDF) next to the original, reporting
-    /// the saving. A Reduce File Size copy that isn't smaller is not saved (#490).
+    /// the saving against `before`, the size of the document the optimization started from. A
+    /// Reduce File Size copy that isn't smaller is not saved (#490).
     pub(crate) fn save_optimized(
         &mut self,
         id: pdfcraft_engine::DocId,
         kind: crate::optimize_ui::OptimizeKind,
+        before: usize,
         result: Result<(Arc<Vec<u8>>, String), pdfcraft_engine::EditError>,
     ) {
         let Some(doc) = self.session.get(id) else { return };
-        let (before, name) = (doc.bytes.len(), format!("{} ({}).pdf", stem(&doc.name), kind.suffix()));
+        let name = format!("{} ({}).pdf", stem(&doc.name), kind.suffix());
         let (bytes, detail) = match result {
             Ok(r) => r,
             Err(e) => {

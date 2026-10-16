@@ -71,6 +71,9 @@ impl OptimizeKind {
 pub struct OptimizeRun {
     pub doc: DocId,
     pub kind: OptimizeKind,
+    /// The size of the document the optimization started from: the saving is measured against
+    /// it, not against the document as edited since.
+    pub before: usize,
     pub progress: Arc<Mutex<OptimizeProgress>>,
 }
 
@@ -278,9 +281,10 @@ impl PdfCraftApp {
             self.notify_tr("Optimization is already running");
             return;
         }
+        let before = self.session.get(id).map_or(0, |d| d.bytes.len());
         let job = match self.session.optimize_job(id, settings, discard) {
             Ok(job) => job,
-            Err(e) => return self.save_optimized(id, kind, Err(e)),
+            Err(e) => return self.save_optimized(id, kind, before, Err(e)),
         };
         let progress = Arc::new(Mutex::new(OptimizeProgress::default()));
         let p = progress.clone();
@@ -305,7 +309,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.optimize_run = Some(OptimizeRun { doc: id, kind, progress });
+        self.optimize_run = Some(OptimizeRun { doc: id, kind, before, progress });
         self.poll_optimize();
     }
 
@@ -321,7 +325,7 @@ impl PdfCraftApp {
     /// Show progress; save the copy once the worker is done.
     pub(crate) fn poll_optimize(&mut self) {
         let Some(run) = self.optimize_run.as_ref() else { return };
-        let (doc, kind, progress) = (run.doc, run.kind, run.progress.clone());
+        let (doc, kind, before, progress) = (run.doc, run.kind, run.before, run.progress.clone());
         let Ok(mut s) = progress.lock() else {
             // The worker panicked while holding the lock: it will never report back.
             self.optimize_run = None;
@@ -350,7 +354,7 @@ impl PdfCraftApp {
                     let detail = if kind == OptimizeKind::Advanced { summary(&r) } else { String::new() };
                     (b, detail)
                 });
-                self.save_optimized(doc, kind, result);
+                self.save_optimized(doc, kind, before, result);
             }
         }
     }
@@ -372,7 +376,7 @@ mod tests {
             app.set_option("language", "en").unwrap();
             app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
             let (_, doc) = app.active_ids().unwrap();
-            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, progress: p });
+            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, before: 0, progress: p });
             app.notify("Saved notes.pdf");
             app
         });
@@ -405,8 +409,36 @@ mod tests {
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
         let (_, doc) = app.active_ids().unwrap();
-        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, before: 0, progress: Arc::default() });
         app.optimize_with_draft();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
+    }
+
+    /// The saving is measured against the document the optimization started from. An
+    /// edit made meanwhile (which grows the file) must not make the copy look smaller.
+    #[test]
+    fn the_saving_is_measured_against_the_document_as_it_was_when_the_run_started() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-optimize-before-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("optimized.pdf");
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
+        app.save_override = Some(out.to_string_lossy().into_owned());
+        let (_, doc) = app.active_ids().unwrap();
+        let start = app.session.get(doc).unwrap().bytes.clone();
+        // The copy is exactly as large as the document it was made from.
+        let progress = Arc::new(Mutex::new(OptimizeProgress { result: Some(Ok((start.clone(), OptimizeReport::default()))), ..Default::default() }));
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, before: start.len(), progress });
+        // The user edits the document while the optimization runs.
+        app.session.apply(doc, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        assert!(app.session.get(doc).unwrap().bytes.len() > start.len(), "the edit grew the file");
+
+        app.poll_optimize();
+        assert!(app.optimize_run.is_none());
+        assert_eq!(std::fs::read(&out).unwrap(), *start);
+        let size = crate::panels::human_size(start.len());
+        let expected = format!("Saved {}: {size} → {size} (not smaller)", out.display());
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(expected.as_str()));
     }
 }

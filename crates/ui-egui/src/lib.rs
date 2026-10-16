@@ -47,6 +47,7 @@ mod credits;
 mod crop;
 mod drag_pointer;
 mod export_ui;
+mod jobs;
 mod js_ui;
 mod marks_ui;
 mod measure_ui;

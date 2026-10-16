@@ -4100,6 +4100,7 @@ name = "pdfcraft-engine"
 version = "0.8.0"
 dependencies = [
  "chrono",
+ "flate2",
  "icu_properties",
  "idna",
  "image",
@@ -4107,6 +4108,7 @@ dependencies = [
  "pdfcraft-annot",
  "pdfcraft-audit",
  "pdfcraft-compare",
+ "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-create",
  "pdfcraft-edit",

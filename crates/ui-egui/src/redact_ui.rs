@@ -8,6 +8,7 @@ use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, REDACTION_CODE_SETS,
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 use crate::{PdfCraftApp, widgets};
@@ -237,7 +238,6 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 /// the gesture is a box.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
-    ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
     ptr: &PagePointer,
@@ -263,7 +263,7 @@ pub(crate) fn page_input(
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
     if !over_text(p) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
     if resp.drag_started() {
         let origin = ptr.origin.unwrap_or(p);

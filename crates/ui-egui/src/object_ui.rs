@@ -8,6 +8,7 @@ use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKi
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
@@ -249,7 +250,7 @@ fn input(
         } else {
             s.gesture = Some(gesture);
         }
-        ui.ctx().set_cursor_icon(if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move });
+        view.cursor.claim(Layer::Drag, if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move });
         return true;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p) && ui.clip_rect().contains(*p) && resp.rect.contains(*p)) else {
@@ -259,7 +260,7 @@ fn input(
         if s.page == Some(page) && !s.selected.is_empty() {
             let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
             if union.contains(p) {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+                view.cursor.claim(Layer::Placed, egui::CursorIcon::Move);
             }
             return true;
         }

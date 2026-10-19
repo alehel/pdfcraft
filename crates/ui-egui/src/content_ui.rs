@@ -8,6 +8,7 @@ use pdfcraft_engine::{Added, AddedContent, AddedText, Edit, FontFamily, TextAlig
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 use crate::widgets;
@@ -307,7 +308,6 @@ pub(crate) fn select_grabs(xf: &PageXform, ptr: &PagePointer, page: usize, info:
 /// used the input.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
-    ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
     ptr: &PagePointer,
@@ -359,7 +359,7 @@ pub(crate) fn page_input(
         .map(|(_, a)| screen_rect(xf, info, page, a.content.rect()));
     let corner = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= 6.0));
     if adding_text && hit.is_none() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Text);
         if resp.clicked() {
             // Text that can't be drawn stays where it is being typed (#125).
             if cv.hold_blocked() {
@@ -385,9 +385,9 @@ pub(crate) fn page_input(
         return consumed;
     }
     if let Some((_, left, top)) = corner {
-        ui.ctx().set_cursor_icon(if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+        view.cursor.claim(Layer::Handle, if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
     } else if hit.is_some() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+        view.cursor.claim(Layer::Placed, egui::CursorIcon::Move);
     }
     if resp.drag_started() {
         let origin = ptr.origin.unwrap_or(p);

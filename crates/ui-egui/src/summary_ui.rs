@@ -1,11 +1,11 @@
 //! Summarize Comments: the options dialog and its live preview.
 //!
 //! Two sections: **Include** (which comment types, optionally only what the Comments panel's filter
-//! shows, and whether to quote marked text) and **Appearance** (order and theme). A stylesheet
-//! the user loads is one more entry in the theme menu, and the preview beside the options is the
-//! summary's first page, drawn again whenever an option changes.
+//! shows, and whether to quote marked text) and **Appearance** (order, theme and each author's
+//! colour). A stylesheet the user loads is one more entry in the theme menu, and the preview beside
+//! the options is the summary's first page, drawn again whenever an option changes.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::{DocId, SummaryOptions, SummarySort};
@@ -16,6 +16,16 @@ use crate::{PdfCraftApp, widgets};
 
 /// The theme menu's entry for the loaded stylesheet (`SummaryDraft::theme`).
 pub const CUSTOM: &str = "custom";
+/// The most authors' colours kept between sessions.
+pub const MAX_SAVED_AUTHOR_COLORS: usize = 500;
+
+/// `#rrggbb` as sRGB bytes.
+pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
+    let h = s.strip_prefix('#').filter(|h| h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit()))?;
+    // Six ASCII hex digits: every slice below is on a character boundary.
+    let byte = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok());
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
 
 /// The dialog's choices, kept for the session; the theme and stylesheet are also remembered.
 #[derive(Default)]
@@ -33,7 +43,11 @@ pub struct SummaryDraft {
     pub stylesheet: Option<(String, String)>,
     /// What the loaded stylesheet says that can't be used.
     pub warnings: Vec<String>,
+    /// Colours chosen for authors, by name as the summary prints it; the others are automatic.
+    pub author_colors: BTreeMap<String, [u8; 3]>,
     preview: Option<(String, egui::TextureHandle)>,
+    /// Whether the chosen look draws authors' colours, for the look it was worked out for.
+    shows_author_colors: Option<(u64, bool)>,
 }
 
 impl SummaryDraft {
@@ -51,7 +65,26 @@ impl SummaryDraft {
             stylesheet: if custom { self.stylesheet.as_ref().map(|(_, css)| css.clone()) } else { None },
             only,
             marked_text: self.marked_text,
+            author_colors: self.author_colors.clone(),
         }
+    }
+
+    /// Whether the chosen theme or stylesheet draws anything in authors' colours. Worked out again
+    /// only when the look changes.
+    fn shows_author_colors(&mut self) -> bool {
+        use std::hash::{Hash, Hasher};
+        let opts = self.options(None);
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (&opts.theme, &opts.stylesheet).hash(&mut h);
+        let key = h.finish();
+        if let Some((k, shows)) = self.shows_author_colors
+            && k == key
+        {
+            return shows;
+        }
+        let shows = pdfcraft_engine::summary_style(&opts).map_or(true, |(style, _)| style.uses_author_color());
+        self.shows_author_colors = Some((key, shows));
+        shows
     }
 }
 
@@ -161,6 +194,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> Outc
             include_section(ui, app, id, t);
             ui.add_space(10.0);
             appearance_section(ui, app, t, &mut out);
+            author_colors(ui, app, id, t);
         });
         ui.add_space(16.0);
         ui.vertical(|ui| {
@@ -248,6 +282,41 @@ fn include_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, id: DocId, t: &Toke
         ui.add(widgets::checkbox(&mut d.panel_filter, tl!("Only comments the Comments panel's filter shows")));
     }
     ui.add(widgets::checkbox(&mut d.marked_text, tl!("Quote the text that highlights, underlines and strikethroughs mark")));
+}
+
+/// Each author the summary can name, with their colour: automatic until one is picked, and back
+/// to automatic with the button beside it.
+fn author_colors(ui: &mut egui::Ui, app: &mut PdfCraftApp, id: DocId, t: &Tokens) {
+    let Some(doc) = app.session.get(id) else { return };
+    let authors = pdfcraft_engine::summary_author_colors(&doc.info.annotations, &app.summary.author_colors);
+    if authors.is_empty() {
+        return;
+    }
+    let d = &mut app.summary;
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(tl!("Author colours")).small().color(t.text_muted));
+    if !d.shows_author_colors() {
+        ui.label(egui::RichText::new(tl!("This theme doesn't colour authors' names.")).small().color(t.text_faint));
+    }
+    egui::ScrollArea::vertical().id_salt("summary-authors").max_height(110.0).auto_shrink([false, true]).show(ui, |ui| {
+        egui::Grid::new("summary-author-colors").num_columns(2).spacing([18.0, 4.0]).show(ui, |ui| {
+            for (i, (name, color)) in authors.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let mut c = *color;
+                    if ui.color_edit_button_srgb(&mut c).changed() {
+                        d.author_colors.insert(name.clone(), c);
+                    }
+                    ui.add(egui::Label::new(name.as_str()).truncate());
+                    if d.author_colors.contains_key(name) && ui.small_button(tl!("Auto")).clicked() {
+                        d.author_colors.remove(name);
+                    }
+                });
+                if i % 2 == 1 {
+                    ui.end_row();
+                }
+            }
+        });
+    });
 }
 
 fn appearance_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, out: &mut Outcome) {

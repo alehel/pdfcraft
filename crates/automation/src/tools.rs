@@ -778,7 +778,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
-        t("comments_summarize", "Summarize comments", "Make a PDF summarising the document's comments (number, author, type, date, text, replies, and the words each highlight, underline, strikethrough or squiggly marks), sorted by page, author, date or type. `types` and `authors` limit it to some comments, e.g. types [\"Highlight\"] for a summary of the highlights. `theme` picks a built-in look; `stylesheet` (a .css file) or `css` restyles it (see comments_summary_themes). Parts of a stylesheet that can't be used are skipped and listed in `warnings`.")
+        t("comments_summarize", "Summarize comments", "Make a PDF summarising the document's comments (number, author, type, date, text, replies, and the words each highlight, underline, strikethrough or squiggly marks), sorted by page, author, date or type. `types` and `authors` limit it to some comments, e.g. types [\"Highlight\"] for a summary of the highlights. `theme` picks a built-in look; `stylesheet` (a .css file) or `css` restyles it (see comments_summary_themes); `author_colors` sets authors' colours. Parts of a stylesheet that can't be used are skipped and listed in `warnings`.")
             .cmd("comment.summarize")
             .with(schema(
                 json!({
@@ -790,12 +790,13 @@ pub fn tools() -> Vec<ToolDef> {
                     "theme": { "type": "string", "enum": ["modern", "simple", "classic", "compact", "ink-saver"], "description": "The built-in look. Default modern." },
                     "stylesheet": path_arg(),
                     "css": { "type": "string", "description": "A stylesheet's text, instead of `stylesheet`." },
+                    "author_colors": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Colours for some authors, by name as the summary prints it (\"Unknown author\" for none): #RRGGBB or a colour name. The others get an automatic colour each; the result lists every author with the colour used. The built-in modern, compact and ink-saver themes set authors' names in them; a stylesheet uses them as var(--author)." },
                     "out": save_out,
                     "open": open
                 }),
                 &["doc"],
             )),
-        t("comments_summary_themes", "List comment summary themes", "The built-in comment summary themes with their stylesheets, to start a custom one from. A stylesheet is a small subset of CSS (docs/report-stylesheets.md): classes for the report's parts (.title, .heading, .card, .quote, .body, .reply…), @page for paper and margins, var(--comment) for each comment's colour, and @import \"classic\"; to start from a built-in theme.")
+        t("comments_summary_themes", "List comment summary themes", "The built-in comment summary themes with their stylesheets, to start a custom one from. A stylesheet is a small subset of CSS (docs/report-stylesheets.md): classes for the report's parts (.title, .heading, .card, .author, .quote, .body, .reply…), @page for paper and margins, var(--comment) for each comment's colour, var(--author) for its author's, and @import \"classic\"; to start from a built-in theme.")
             .ro()
             .with(schema(json!({}), &[])),
         t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp) or position (`move` [dx, dy] in points). Stamps keep their original appearance when resized. One undo step.").with(schema(

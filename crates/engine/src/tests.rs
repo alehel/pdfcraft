@@ -2885,6 +2885,46 @@ fn comment_summary_includes_replies_to_replies() {
     assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
 }
 
+/// Every author of a comment or reply gets a colour: the palette's next one in name order
+/// (ignoring case), or the one chosen for them, which leaves the others' colours alone. The
+/// summary gives each card and reply its author's colour; sorted by author, the heading names
+/// the author and the card doesn't.
+#[test]
+fn comment_summary_gives_each_author_a_colour() {
+    let (mut s, id) = session_with(1);
+    let rect = |author: &str| match rect_comment(0, [40.0, 40.0, 90.0, 90.0]) {
+        Edit::AddAnnotation(n) => Edit::AddAnnotation(NewAnnotation { author: author.into(), ..n }),
+        other => other,
+    };
+    s.apply(id, rect("zoe")).unwrap();
+    s.apply(id, rect("Ada")).unwrap();
+    s.apply(id, rect("")).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "Agreed".into(), author: "Bo".into() }).unwrap();
+    let all = s.get(id).unwrap().info.annotations.clone();
+    let auto = summary_author_colors(&all, &Default::default());
+    let names: Vec<&str> = auto.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["Ada", "Bo", "Unknown author", "zoe"]);
+    assert_eq!(auto.iter().map(|(_, c)| *c).collect::<Vec<_>>(), AUTHOR_PALETTE[..4].to_vec());
+    let chosen: std::collections::BTreeMap<String, [u8; 3]> = [("Bo".to_string(), [1, 2, 3])].into();
+    let mixed = summary_author_colors(&all, &chosen);
+    assert_eq!(mixed[1].1, [1, 2, 3]);
+    assert_eq!((mixed[0].1, mixed[2].1, mixed[3].1), (AUTHOR_PALETTE[0], AUTHOR_PALETTE[2], AUTHOR_PALETTE[3]), "the others keep theirs");
+
+    let opts = SummaryOptions { author_colors: chosen, ..Default::default() };
+    let report = comment_report("doc.pdf", &all, &opts, &Default::default());
+    let entries: Vec<&pdfcraft_create::Entry> =
+        report.blocks.iter().filter_map(|b| if let pdfcraft_create::Block::Entry(e) = b { Some(e) } else { None }).collect();
+    let rgb = |c: [u8; 3]| Some(c.map(|v| f32::from(v) / 255.0));
+    let zoe = entries.iter().find(|e| e.author == "zoe").expect("zoe's card");
+    assert_eq!(zoe.author_color, rgb(AUTHOR_PALETTE[3]));
+    assert_eq!(zoe.replies.first().map(|r| (r.author.as_str(), r.color)), Some(("Bo", rgb([1, 2, 3]))));
+    assert!(entries.iter().any(|e| e.author == "Unknown author" && e.author_color == rgb(AUTHOR_PALETTE[2])));
+    assert!(!zoe.meta.contains("zoe"), "the author is a part of its own: {}", zoe.meta);
+    let by_author = comment_report("doc.pdf", &all, &SummaryOptions { sort: SummarySort::Author, ..Default::default() }, &Default::default());
+    assert!(by_author.blocks.iter().any(|b| *b == pdfcraft_create::Block::Heading("zoe".into())));
+    assert!(by_author.blocks.iter().all(|b| !matches!(b, pdfcraft_create::Block::Entry(e) if !e.author.is_empty())));
+}
+
 /// A text markup comment over the words `needle` on page 1, as selecting them and choosing the
 /// tool does: one quad per line, from the text layer.
 fn markup_over(s: &mut Session, id: DocId, kind: Markup, needle: &str, note: &str) {

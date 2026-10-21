@@ -13,6 +13,7 @@
 .card { background: transparent; border-left: none; padding: 8pt 0 8pt 0; border-bottom: 0.5pt solid #bbbbbb; margin-bottom: 0; }
 .number { font-family: serif; font-size: 11pt; font-weight: bold; color: black; }
 .kind { font-family: serif; font-size: 11pt; font-weight: bold; color: black; line-height: 15pt; }
+.author { font-family: serif; font-size: 10pt; font-style: italic; color: black; line-height: 14pt; }
 .meta { font-family: serif; font-size: 10pt; font-style: italic; color: #444444; line-height: 14pt; }
 .quote { font-family: serif; font-size: 11pt; font-style: italic; color: #222222; line-height: 15pt; background: transparent; border-left: 2pt solid var(--comment); padding: 0 0 0 10pt; margin-top: 4pt; margin-bottom: 2pt; }
 .body { font-family: serif; font-size: 11pt; color: black; line-height: 15pt; margin-top: 4pt; }

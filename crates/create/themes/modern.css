@@ -1,5 +1,6 @@
 /* Modern: PdfCraft's default comment summary.
-   Cards on a light grey, a stripe in each comment's colour, the marked text on a tint of it.
+   Cards on a light grey, a stripe in each comment's colour, the marked text on a tint of it,
+   each author's name in their colour.
    The report's parts and the properties they take: docs/report-stylesheets.md */
 
 @page { margin: 54pt 54pt 60pt 54pt; }
@@ -14,12 +15,13 @@
 .card { background-color: #f7f8fa; border-left: 3pt solid var(--comment); padding: 10pt 12pt 10pt 14pt; margin-bottom: 10pt; }
 .number { font-size: 9.5pt; font-weight: bold; color: #6b7380; }
 .kind { font-size: 10.5pt; font-weight: bold; color: #1c1f26; line-height: 16pt; }
+.author { font-size: 9.5pt; font-weight: bold; color: var(--author); line-height: 13pt; }
 .meta { font-size: 9.5pt; color: #6b7380; line-height: 13pt; }
 .quote { font-size: 10.5pt; font-style: italic; color: #333842; line-height: 15pt; background-color: color-mix(in srgb, var(--comment) 25%, white); padding: 2pt 6pt; margin-top: 4pt; margin-bottom: 2pt; }
 .body { font-size: 10.5pt; color: #1c1f26; line-height: 14.5pt; margin-top: 4pt; }
 
 .reply { margin: 6pt 0 0 14pt; padding-left: 8pt; border-left: 1.5pt solid #ccd1db; }
-.reply-author { font-size: 9.5pt; font-weight: bold; color: #1c1f26; line-height: 14pt; }
+.reply-author { font-size: 9.5pt; font-weight: bold; color: var(--author); line-height: 14pt; }
 .reply-meta { font-size: 9pt; color: #6b7380; }
 .reply-body { font-size: 10pt; color: #333842; line-height: 13.5pt; }
 

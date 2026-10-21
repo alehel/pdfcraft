@@ -7,7 +7,8 @@
 //!
 //! What a stylesheet can say is documented in `docs/report-stylesheets.md`: the report's parts
 //! are classes (`.title`, `.card`, `.quote`…), `@page` sets the paper and margins, `var(--comment)`
-//! is the comment's own colour, and `@import "classic";` starts from a built-in theme.
+//! is the comment's own colour, `var(--author)` its author's, and `@import "classic";` starts from
+//! a built-in theme.
 
 use crate::CreateError;
 
@@ -48,30 +49,49 @@ pub enum Paint {
     Rgb([f32; 3]),
     /// `var(--comment)`: the comment's own colour.
     Comment,
+    /// `var(--author)`: the colour of whoever wrote the comment, or the reply on a reply's parts.
+    Author,
     /// `color-mix(in srgb, a p%, b)`: `p` (0–1) of `a`, the rest of `b`.
     Mix(Box<Paint>, f32, Box<Paint>),
 }
 
+/// What the variables stand for where a part is drawn: `var(--comment)` and `var(--author)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Vars {
+    pub comment: [f32; 3],
+    pub author: [f32; 3],
+}
+
 impl Paint {
-    /// The colour drawn for a comment whose colour is `comment`; `None` draws nothing.
-    pub fn resolve(&self, comment: [f32; 3]) -> Option<[f32; 3]> {
-        self.resolve_at(comment, 0)
+    /// The colour drawn where the variables are `vars`; `None` draws nothing.
+    pub fn resolve(&self, vars: Vars) -> Option<[f32; 3]> {
+        self.resolve_at(vars, 0)
     }
-    fn resolve_at(&self, comment: [f32; 3], depth: usize) -> Option<[f32; 3]> {
+    fn resolve_at(&self, vars: Vars, depth: usize) -> Option<[f32; 3]> {
         if depth > MAX_PAINT_DEPTH {
             return None;
         }
         let c = match self {
             Paint::None => return None,
             Paint::Rgb(c) => *c,
-            Paint::Comment => comment,
+            Paint::Comment => vars.comment,
+            Paint::Author => vars.author,
             Paint::Mix(a, p, b) => {
-                let (a, b) = (a.resolve_at(comment, depth + 1)?, b.resolve_at(comment, depth + 1)?);
+                let (a, b) = (a.resolve_at(vars, depth + 1)?, b.resolve_at(vars, depth + 1)?);
                 let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.5 };
                 [0, 1, 2].map(|i| a[i] * p + b[i] * (1.0 - p))
             }
         };
         c.iter().all(|v| v.is_finite()).then(|| c.map(|v| v.clamp(0.0, 1.0)))
+    }
+
+    /// Whether this paint depends on the author's colour.
+    fn uses_author(&self) -> bool {
+        match self {
+            Paint::Author => true,
+            Paint::Mix(a, _, b) => a.uses_author() || b.uses_author(),
+            _ => false,
+        }
     }
 }
 
@@ -213,6 +233,7 @@ pub enum Part {
     Card,
     Number,
     Kind,
+    Author,
     Meta,
     Quote,
     Body,
@@ -231,6 +252,7 @@ impl Part {
             Part::Card
                 | Part::Number
                 | Part::Kind
+                | Part::Author
                 | Part::Meta
                 | Part::Quote
                 | Part::Body
@@ -300,7 +322,7 @@ impl Part {
         }
     }
 
-    pub const ALL: [Part; 16] = [
+    pub const ALL: [Part; 17] = [
         Part::Title,
         Part::Subtitle,
         Part::Header,
@@ -309,6 +331,7 @@ impl Part {
         Part::Card,
         Part::Number,
         Part::Kind,
+        Part::Author,
         Part::Meta,
         Part::Quote,
         Part::Body,
@@ -329,6 +352,7 @@ impl Part {
             Part::Card => "card",
             Part::Number => "number",
             Part::Kind => "kind",
+            Part::Author => "author",
             Part::Meta => "meta",
             Part::Quote => "quote",
             Part::Body => "body",
@@ -373,6 +397,21 @@ impl ReportStyle {
             parts: Part::ALL.iter().map(|_| PartStyle::plain()).collect(),
             typed: Vec::new(),
         }
+    }
+
+    /// Whether the report draws anything in an author's colour (`var(--author)`), so that the
+    /// colours chosen for authors show.
+    pub fn uses_author_color(&self) -> bool {
+        let drawn = |part: Part, prop: &str, paint: &Paint| part.uses(prop) && paint.uses_author();
+        Part::ALL.iter().any(|&part| {
+            let p = self.part(part);
+            !p.hidden
+                && (drawn(part, "color", &p.color)
+                    || drawn(part, "background", &p.background)
+                    || (p.border_left.0 > 0.0 && drawn(part, "border-left", &p.border_left.1))
+                    || (p.border_top.0 > 0.0 && drawn(part, "border-top", &p.border_top.1))
+                    || (p.border_bottom.0 > 0.0 && drawn(part, "border-bottom", &p.border_bottom.1)))
+        }) || self.typed.iter().any(|(_, _, _, value)| value.contains("--author"))
     }
 
     pub fn part(&self, p: Part) -> &PartStyle {
@@ -919,10 +958,10 @@ fn color(v: &str, depth: usize) -> Result<Paint, String> {
     }
     if lv.starts_with("var(") {
         let name = lv.trim_start_matches("var(").trim_end_matches(')').trim();
-        return if name == "--comment" {
-            Ok(Paint::Comment)
-        } else {
-            Err(format!("var({name}): only var(--comment), the comment's colour, is defined"))
+        return match name {
+            "--comment" => Ok(Paint::Comment),
+            "--author" => Ok(Paint::Author),
+            _ => Err(format!("var({name}): only var(--comment), the comment's colour, and var(--author), its author's, are defined")),
         };
     }
     if let Some(args) = lv.strip_prefix("color-mix(").and_then(|a| a.strip_suffix(')')) {

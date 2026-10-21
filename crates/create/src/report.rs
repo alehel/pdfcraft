@@ -9,7 +9,7 @@
 use pdfcraft_cos::{Dict, Document, Object};
 use pdfcraft_fonts::{Std14, literal, win_ansi, wrap_with};
 
-use crate::report_style::{Part, PartStyle, ReportStyle, type_class};
+use crate::report_style::{Part, PartStyle, ReportStyle, Vars, type_class};
 use crate::{CreateError, ESCAPED_NOTE, add_page, set_title};
 
 /// A report: what [`report`] lays out.
@@ -38,9 +38,14 @@ pub struct Entry {
     pub number: Option<usize>,
     /// The bold label ("Highlight").
     pub kind: String,
-    /// Grey details after the label ("Ada Lin · 2026-10-21 15:28").
+    /// Who wrote it, after the label; empty when a heading names them.
+    pub author: String,
+    /// The author's colour (`var(--author)`, RGB 0–1).
+    pub author_color: Option<[f32; 3]>,
+    /// Grey details after the author ("2026-10-21 15:28 · Page 3").
     pub meta: String,
-    /// The stripe down the card's left edge and the tint behind the quote (RGB 0–1).
+    /// The comment's colour (`var(--comment)`: the stripe down the card's left edge and the tint
+    /// behind the quote in the Modern theme), RGB 0–1.
     pub color: Option<[f32; 3]>,
     /// Text the item marks, set in italics on a tint of `color`.
     pub quote: Option<String>,
@@ -53,6 +58,8 @@ pub struct Reply {
     /// 0 for a reply to the entry, 1 for a reply to that reply…
     pub depth: usize,
     pub author: String,
+    /// The reply's author's colour (`var(--author)` on the reply's parts), RGB 0–1.
+    pub color: Option<[f32; 3]>,
     pub meta: String,
     pub body: String,
 }
@@ -99,8 +106,10 @@ fn header_text(e: &Entry) -> String {
         s.push_str(&format!("#{n}  "));
     }
     s.push_str(&e.kind);
-    if !e.meta.is_empty() {
-        s.push_str(&format!("  {}", e.meta));
+    for part in [&e.author, &e.meta] {
+        if !part.is_empty() {
+            s.push_str(&format!("  {part}"));
+        }
     }
     s
 }
@@ -110,6 +119,8 @@ const MAX_DEPTH: usize = 6;
 
 /// The colour `var(--comment)` stands for when a comment has none.
 const NO_COLOR: [f32; 3] = [0.72, 0.74, 0.78];
+/// The colour `var(--author)` stands for when an author has none, and outside comments.
+const NO_AUTHOR: [f32; 3] = [0.42, 0.45, 0.5];
 
 /// Something drawn, with `y` measured down from the top of the row it belongs to.
 #[derive(Clone)]
@@ -147,8 +158,8 @@ struct Ink<'a> {
 }
 
 impl<'a> Ink<'a> {
-    fn new(part: &'a PartStyle, comment: [f32; 3]) -> Ink<'a> {
-        Ink { part, color: part.color.resolve(comment).unwrap_or([0.0; 3]) }
+    fn new(part: &'a PartStyle, vars: Vars) -> Ink<'a> {
+        Ink { part, color: part.color.resolve(vars).unwrap_or([0.0; 3]) }
     }
     fn width(&self, s: &str) -> f64 {
         self.part.font().text_width(s, self.part.size)
@@ -271,9 +282,9 @@ fn escape(s: &str, count: &mut usize) -> String {
 
 /// A band of rows with a background and a left border (a quote, a reply): `rows` are laid out
 /// inside the part's padding and border, and the band starts `x` points in, `w` wide.
-fn banded(part: &PartStyle, comment: [f32; 3], x: f64, w: f64, rows: Vec<Row>) -> Vec<Row> {
-    let fill = part.background.resolve(comment);
-    let (bw, bc) = (part.border_left.0, part.border_left.1.resolve(comment));
+fn banded(part: &PartStyle, vars: Vars, x: f64, w: f64, rows: Vec<Row>) -> Vec<Row> {
+    let fill = part.background.resolve(vars);
+    let (bw, bc) = (part.border_left.0, part.border_left.1.resolve(vars));
     let [pt, _, pb, _] = part.padding;
     let mut out = Vec::with_capacity(rows.len() + 2);
     let band = |mut row: Row, out: &mut Vec<Row>| {
@@ -303,18 +314,14 @@ fn banded(part: &PartStyle, comment: [f32; 3], x: f64, w: f64, rows: Vec<Row>) -
 
 /// The rows of one entry's card, inside its padding, `inner` points wide.
 fn entry_rows(e: &Entry, inner: f64, style: &ReportStyle) -> Vec<Row> {
-    let comment = clean(e.color, NO_COLOR);
-    let (number, kind, meta) = (style.part(Part::Number), style.part(Part::Kind), style.part(Part::Meta));
-    let (ni, ki, mi) = (Ink::new(number, comment), Ink::new(kind, comment), Ink::new(meta, comment));
+    let vars = Vars { comment: clean(e.color, NO_COLOR), author: clean(e.author_color, NO_AUTHOR) };
+    let (number, kind, author, meta) = (style.part(Part::Number), style.part(Part::Kind), style.part(Part::Author), style.part(Part::Meta));
+    let (ni, ki, ai, mi) = (Ink::new(number, vars), Ink::new(kind, vars), Ink::new(author, vars), Ink::new(meta, vars));
     let mut rows = Vec::new();
-    // Header: the number, the kind and then the details on one baseline; the details move to
-    // lines of their own when the header would run past the card.
-    let lead = [(number, !number.hidden), (kind, !kind.hidden), (meta, !meta.hidden)]
-        .iter()
-        .filter(|(_, shown)| *shown)
-        .map(|(p, _)| p.leading())
-        .fold(0.0, f64::max);
-    let big = [number, kind, meta].iter().filter(|p| !p.hidden).map(|p| p.size).fold(0.0, f64::max);
+    // Header: the number, the kind, the author and then the details on one baseline; the author
+    // and the details move to lines of their own when the header would run past the card.
+    let lead = [number, kind, author, meta].iter().filter(|p| !p.hidden).map(|p| p.leading()).fold(0.0, f64::max);
+    let big = [number, kind, author, meta].iter().filter(|p| !p.hidden).map(|p| p.size).fold(0.0, f64::max);
     let base = lead / 2.0 + big * 0.35;
     let mut header = Row { h: lead, ops: Vec::new() };
     let mut x = 0.0;
@@ -333,38 +340,48 @@ fn entry_rows(e: &Entry, inner: f64, style: &ReportStyle) -> Vec<Row> {
     let number_text = e.number.map(|n| format!("#{n}")).unwrap_or_default();
     put(&ni, &number_text, &mut header, &mut x, 6.0);
     put(&ki, &e.kind, &mut header, &mut x, 8.0);
-    let meta_fits = x + mi.width(&mi.text(&e.meta)) <= inner;
+    let author_w = if author.hidden || e.author.is_empty() { 0.0 } else { ai.width(&ai.text(&e.author)) + 6.0 };
+    let author_fits = x + author_w <= inner;
+    if author_fits {
+        put(&ai, &e.author, &mut header, &mut x, 6.0);
+    }
+    let meta_fits = author_fits && x + mi.width(&mi.text(&e.meta)) <= inner;
     if meta_fits {
         put(&mi, &e.meta, &mut header, &mut x, 0.0);
     }
     if !header.ops.is_empty() {
         rows.push(header);
     }
+    if !author_fits && !author.hidden {
+        rows.extend(ai.rows(0.0, inner, &e.author));
+    }
     if !meta_fits && !meta.hidden {
         rows.extend(mi.rows(0.0, inner, &e.meta));
     }
     let quote = style.part(Part::Quote);
     if let Some(q) = e.quote.as_deref().filter(|q| !q.is_empty() && !quote.hidden) {
-        let qi = Ink::new(quote, comment);
+        let qi = Ink::new(quote, vars);
         let [_, mr, _, ml] = quote.margin;
         let (w, bw) = ((inner - ml - mr).max(36.0), quote.border_left.0.max(0.0));
         let text_x = ml + bw + quote.padding[3];
         let text_w = w - bw - quote.padding[3] - quote.padding[1];
         rows.push(Row::gap(quote.margin[0]));
-        rows.extend(banded(quote, comment, ml, w, qi.rows(text_x, text_w, &format!("\u{201c}{q}\u{201d}"))));
+        rows.extend(banded(quote, vars, ml, w, qi.rows(text_x, text_w, &format!("\u{201c}{q}\u{201d}"))));
         rows.push(Row::gap(quote.margin[2]));
     }
     let body = style.part(Part::Body);
     if let Some(b) = e.body.as_deref().filter(|b| !b.is_empty() && !body.hidden) {
         rows.push(Row::gap(body.margin[0]));
-        rows.extend(Ink::new(body, comment).rows(body.margin[3], inner - body.margin[3] - body.margin[1], b));
+        rows.extend(Ink::new(body, vars).rows(body.margin[3], inner - body.margin[3] - body.margin[1], b));
         rows.push(Row::gap(body.margin[2]));
     }
     let reply = style.part(Part::Reply);
     if !reply.hidden {
         let (ra, rm, rb) = (style.part(Part::ReplyAuthor), style.part(Part::ReplyMeta), style.part(Part::ReplyBody));
-        let (ai, mi, bi) = (Ink::new(ra, comment), Ink::new(rm, comment), Ink::new(rb, comment));
         for r in &e.replies {
+            // A reply's parts take its own author's colour.
+            let vars = Vars { author: clean(r.color, NO_AUTHOR), ..vars };
+            let (ai, mi, bi) = (Ink::new(ra, vars), Ink::new(rm, vars), Ink::new(rb, vars));
             let indent = (reply.margin[3] * r.depth.saturating_add(1).min(MAX_DEPTH) as f64).clamp(0.0, inner / 2.0);
             let w = (inner - indent - reply.margin[1]).max(36.0);
             let text_x = indent + reply.border_left.0.max(0.0) + reply.padding[3];
@@ -394,7 +411,7 @@ fn entry_rows(e: &Entry, inner: f64, style: &ReportStyle) -> Vec<Row> {
             }
             rows.push(Row::gap(reply.margin[0]));
             // The band starts at the indent; its rows are already placed relative to the card.
-            let mut band = banded(reply, comment, indent, w, inside);
+            let mut band = banded(reply, vars, indent, w, inside);
             rows.append(&mut band);
             rows.push(Row::gap(reply.margin[2]));
         }
@@ -429,11 +446,17 @@ pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Docu
             Block::Entry(e) => Block::Entry(Entry {
                 number: e.number,
                 kind: esc(&e.kind),
+                author: esc(&e.author),
+                author_color: e.author_color,
                 meta: esc(&e.meta),
                 color: e.color,
                 quote: e.quote.as_deref().map(&mut esc),
                 body: e.body.as_deref().map(&mut esc),
-                replies: e.replies.iter().map(|x| Reply { depth: x.depth, author: esc(&x.author), meta: esc(&x.meta), body: esc(&x.body) }).collect(),
+                replies: e
+                    .replies
+                    .iter()
+                    .map(|x| Reply { depth: x.depth, author: esc(&x.author), color: x.color, meta: esc(&x.meta), body: esc(&x.body) })
+                    .collect(),
             }),
         })
         .collect();
@@ -441,7 +464,7 @@ pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Docu
         subtitle.push(ESCAPED_NOTE.to_string());
     }
 
-    let none = NO_COLOR;
+    let none = Vars { comment: NO_COLOR, author: NO_AUTHOR };
     let rule = |p: &PartStyle, side: (f64, &crate::report_style::Paint)| (side.0, side.1.resolve(none).filter(|_| !p.hidden));
     let mut p = Pages::new(h, mt, mb);
     let (title_s, sub_s, header_s) = (style.part(Part::Title), style.part(Part::Subtitle), style.part(Part::Header));
@@ -494,15 +517,15 @@ pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Docu
                 }
                 let (stripe, [pad_t, pad_r, pad_b, pad_l]) = (card.border_left.0.max(0.0), card.padding);
                 let inner = (width - stripe - pad_l - pad_r).max(72.0);
-                let comment = clean(e.color, NO_COLOR);
+                let vars = Vars { comment: clean(e.color, NO_COLOR), author: clean(e.author_color, NO_AUTHOR) };
                 let rows = entry_rows(e, inner, style);
                 let total: f64 = rows.iter().map(|r| r.h).sum::<f64>() + pad_t + pad_b;
                 // A card that fits on a page is not split; a longer one is, row by row.
                 if total > p.room() && total <= p.body_height() {
                     p.new_page();
                 }
-                let (fill, stripe_color) = (card.background.resolve(comment), card.border_left.1.resolve(comment));
-                let (bottom_w, bottom_c) = (card.border_bottom.0.max(0.0), card.border_bottom.1.resolve(comment));
+                let (fill, stripe_color) = (card.background.resolve(vars), card.border_left.1.resolve(vars));
+                let (bottom_w, bottom_c) = (card.border_bottom.0.max(0.0), card.border_bottom.1.resolve(vars));
                 let mut rows = rows.into_iter().peekable();
                 loop {
                     if p.room() < pad_t + 20.0 + pad_b && !p.at_top() {

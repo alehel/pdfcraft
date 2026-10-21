@@ -12,12 +12,13 @@
 .card { background-color: #f7f8fa; border-left: 2pt solid var(--comment); padding: 5pt 8pt 5pt 9pt; margin-bottom: 5pt; }
 .number { font-size: 8pt; font-weight: bold; color: #6b7380; }
 .kind { font-size: 8.5pt; font-weight: bold; color: #1c1f26; line-height: 12pt; }
+.author { font-size: 8pt; font-weight: bold; color: var(--author); line-height: 11pt; }
 .meta { font-size: 8pt; color: #6b7380; line-height: 11pt; }
 .quote { font-size: 8.5pt; font-style: italic; color: #333842; line-height: 11.5pt; background-color: color-mix(in srgb, var(--comment) 25%, white); padding: 1pt 4pt; margin-top: 2pt; margin-bottom: 1pt; }
 .body { font-size: 8.5pt; color: #1c1f26; line-height: 11.5pt; margin-top: 2pt; }
 
 .reply { margin: 3pt 0 0 10pt; padding-left: 6pt; border-left: 1pt solid #ccd1db; }
-.reply-author { font-size: 8pt; font-weight: bold; color: #1c1f26; line-height: 11pt; }
+.reply-author { font-size: 8pt; font-weight: bold; color: var(--author); line-height: 11pt; }
 .reply-meta { font-size: 7.5pt; color: #6b7380; }
 .reply-body { font-size: 8pt; color: #333842; line-height: 11pt; }
 

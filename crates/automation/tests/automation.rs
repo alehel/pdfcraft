@@ -6925,3 +6925,27 @@ fn comment_summary_themes_through_tools() {
     );
     assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "css": "", "stylesheet": "mine.css" })), Err(ToolError::InvalidArgs(_))));
 }
+
+/// `author_colors` picks some authors' colours; the result lists every author with the colour
+/// the summary used, automatic or picked.
+#[test]
+fn comment_summary_author_colours_through_tools() {
+    let dir = workdir("summary-author-colours");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (author, x) in [("Bo", 60), ("Ada", 20)] {
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [x, 20], "contents": "Hi", "author": author }));
+    }
+    let r = ok(&mut a, "comments_summarize", json!({ "doc": doc, "author_colors": { "Bo": "#ff0000" }, "out": "s.pdf" }));
+    let auto_ada = pdfcraft_engine::AUTHOR_PALETTE[0];
+    assert_eq!(
+        r["authors"],
+        json!([
+            { "name": "Ada", "color": format!("#{:02X}{:02X}{:02X}", auto_ada[0], auto_ada[1], auto_ada[2]), "chosen": false },
+            { "name": "Bo", "color": "#FF0000", "chosen": true }
+        ])
+    );
+    for bad in [json!({ "Bo": "#ff00" }), json!({ "Bo": 3 }), json!(["Bo"])] {
+        assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "author_colors": bad })), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+}

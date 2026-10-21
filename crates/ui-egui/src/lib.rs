@@ -2315,6 +2315,13 @@ impl PdfCraftApp {
         v["summary_theme"] = serde_json::Value::String(self.summary.theme.clone());
         v["summary_stylesheet"] =
             self.summary.stylesheet.as_ref().map_or(serde_json::Value::Null, |(name, css)| serde_json::json!({ "name": name, "css": css }));
+        v["summary_author_colors"] = self
+            .summary
+            .author_colors
+            .iter()
+            .map(|(name, [r, g, b])| (name.clone(), serde_json::Value::String(format!("#{r:02x}{g:02x}{b:02x}"))))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
         v.to_string()
     }
 
@@ -2395,6 +2402,16 @@ impl PdfCraftApp {
         }
         if let (Some(name), Some(css)) = (v["summary_stylesheet"]["name"].as_str(), v["summary_stylesheet"]["css"].as_str()) {
             self.set_summary_stylesheet(name.to_string(), css.to_string());
+        }
+        // Authors' colours: at most `MAX_SAVED_AUTHOR_COLORS`, each "#rrggbb" by a name of at most
+        // 512 bytes; anything else is left out.
+        if let Some(saved) = v["summary_author_colors"].as_object() {
+            self.summary.author_colors = saved
+                .iter()
+                .filter(|(name, _)| name.len() <= 512)
+                .filter_map(|(name, c)| Some((name.clone(), summary_ui::parse_hex(c.as_str()?)?)))
+                .take(summary_ui::MAX_SAVED_AUTHOR_COLORS)
+                .collect();
         }
         // The loaded stylesheet's entry only when there is one.
         if let Some(theme) = v["summary_theme"].as_str().filter(|t| {

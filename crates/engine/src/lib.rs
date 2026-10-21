@@ -5039,12 +5039,61 @@ pub struct SummaryOptions {
     pub only: Option<std::collections::HashSet<(usize, usize)>>,
     /// Quote the text that highlights, underlines, strikethroughs and squigglies mark.
     pub marked_text: bool,
+    /// Colours chosen for authors (sRGB), by name as the summary prints it. The others get their
+    /// automatic colour ([`summary_author_colors`]).
+    pub author_colors: std::collections::BTreeMap<String, [u8; 3]>,
 }
 
 impl Default for SummaryOptions {
     fn default() -> Self {
-        SummaryOptions { sort: SummarySort::Page, theme: "modern".into(), stylesheet: None, only: None, marked_text: true }
+        SummaryOptions {
+            sort: SummarySort::Page,
+            theme: "modern".into(),
+            stylesheet: None,
+            only: None,
+            marked_text: true,
+            author_colors: Default::default(),
+        }
     }
+}
+
+/// The colours authors get in a comment summary when none is chosen for them: distinct from each
+/// other, and dark enough to read as text on white.
+pub const AUTHOR_PALETTE: [[u8; 3]; 10] = [
+    [0x1f, 0x6f, 0xd1],
+    [0xc6, 0x28, 0x28],
+    [0x2e, 0x7d, 0x32],
+    [0x7b, 0x3f, 0xb5],
+    [0xc7, 0x5a, 0x00],
+    [0x00, 0x83, 0x8f],
+    [0xad, 0x14, 0x57],
+    [0x6d, 0x4c, 0x41],
+    [0x54, 0x6e, 0x7a],
+    [0x82, 0x77, 0x17],
+];
+
+/// The name a comment summary prints for the author of `a`.
+pub fn summary_author(a: &pdfcraft_render::Annotation) -> String {
+    a.author.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "Unknown author".into())
+}
+
+/// The authors of the comments and replies in `all` (not status changes), as a summary prints
+/// them, by name ignoring case, each with its colour in a summary: the one `chosen` for it, or
+/// the colour of [`AUTHOR_PALETTE`] at its place in this list, so that choosing one author's
+/// colour leaves the others' alone.
+pub fn summary_author_colors(all: &[pdfcraft_render::Annotation], chosen: &std::collections::BTreeMap<String, [u8; 3]>) -> Vec<(String, [u8; 3])> {
+    let mut names: Vec<String> = all.iter().filter(|a| a.state.is_none()).map(summary_author).collect();
+    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
+    names.dedup();
+    names
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let auto = AUTHOR_PALETTE.get(i % AUTHOR_PALETTE.len()).copied().unwrap_or([0x54, 0x6e, 0x7a]);
+            let color = chosen.get(&name).copied().unwrap_or(auto);
+            (name, color)
+        })
+        .collect()
 }
 
 impl SummaryOptions {
@@ -5186,23 +5235,28 @@ pub fn comment_report(
     marked: &std::collections::HashMap<(usize, usize), String>,
 ) -> pdfcraft_create::Report {
     use pdfcraft_create::{Block, Entry, Reply};
+    type Colors = std::collections::HashMap<String, [f32; 3]>;
     let sort = opts.sort;
     let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
+    let colors: Colors =
+        summary_author_colors(all, &opts.author_colors).into_iter().map(|(name, c)| (name, c.map(|v| f32::from(v) / 255.0))).collect();
     // A comment's replies at every depth, in document order. A reply to a reply keeps its `/IRT`
     // on the direct parent, so following one level would leave the deeper replies out.
-    fn replies(out: &mut Vec<Reply>, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {
+    fn replies(out: &mut Vec<Reply>, all: &[pdfcraft_render::Annotation], colors: &Colors, parent: &str, depth: usize) {
         if depth > 64 {
             return;
         }
         for r in all.iter().filter(|r| r.state.is_none() && r.in_reply_to.as_deref() == Some(parent)) {
+            let author = summary_author(r);
             out.push(Reply {
                 depth,
-                author: r.author.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown author".into()),
+                color: colors.get(&author).copied(),
+                author,
                 meta: r.modified.clone().unwrap_or_default(),
                 body: r.contents.clone().unwrap_or_default(),
             });
             if let Some(nm) = r.name.as_deref() {
-                replies(out, all, nm, depth + 1);
+                replies(out, all, colors, nm, depth + 1);
             }
         }
     }
@@ -5219,7 +5273,6 @@ pub fn comment_report(
             numbered.push((n, a));
         }
     }
-    let author = |a: &pdfcraft_render::Annotation| a.author.clone().filter(|s| !s.is_empty());
     match sort {
         SummarySort::Page => {}
         SummarySort::Author => numbered.sort_by(|x, y| x.1.author.cmp(&y.1.author)),
@@ -5244,7 +5297,7 @@ pub fn comment_report(
     for (n, a) in numbered {
         let group = match sort {
             SummarySort::Page => Some(format!("Page {}", a.page + 1)),
-            SummarySort::Author => Some(author(a).unwrap_or_else(|| "Unknown author".into())),
+            SummarySort::Author => Some(summary_author(a)),
             SummarySort::Type => Some(comment_kind(a).to_string()),
             SummarySort::Date => None,
         };
@@ -5253,20 +5306,21 @@ pub fn comment_report(
             report.blocks.extend(group.map(Block::Heading));
         }
         let mut meta: Vec<String> = Vec::new();
-        if sort != SummarySort::Author {
-            meta.extend(author(a));
-        }
         meta.extend(a.modified.clone().filter(|m| !m.is_empty()));
         if sort != SummarySort::Page {
             meta.push(format!("Page {}", a.page + 1));
         }
         let mut thread = Vec::new();
         if let Some(nm) = a.name.as_deref() {
-            replies(&mut thread, all, nm, 0);
+            replies(&mut thread, all, &colors, nm, 0);
         }
+        let who = summary_author(a);
         report.blocks.push(Block::Entry(Entry {
             number: Some(n),
             kind: comment_kind(a).to_string(),
+            author_color: colors.get(&who).copied(),
+            // Sorted by author, the heading names them.
+            author: if sort == SummarySort::Author { String::new() } else { who },
             meta: meta.join(" \u{b7} "),
             color: a.color,
             quote: marked.get(&(a.page, a.index)).cloned(),

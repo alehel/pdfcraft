@@ -635,9 +635,28 @@ impl Automation {
             (None, css) => css.map(str::to_string),
         };
         let theme = a.opt_str("theme")?.unwrap_or("modern").to_string();
-        let opts = SummaryOptions { sort, theme, stylesheet, only, marked_text: a.opt_bool("marked_text")?.unwrap_or(true) };
+        // Colours for some authors; the others keep their automatic ones.
+        let mut author_colors = std::collections::BTreeMap::new();
+        if let Some(v) = a.get("author_colors") {
+            let map = v.as_object().ok_or_else(|| Args::wrong("author_colors", "an object of author name → colour"))?;
+            for (name, c) in map {
+                let c = c.as_str().ok_or_else(|| ToolError::InvalidArgs(format!("author_colors: the colour for {name:?} must be a string")))?;
+                let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                author_colors.insert(name.clone(), parse_color(c)?.map(byte));
+            }
+        }
+        let opts = SummaryOptions { sort, theme, stylesheet, only, marked_text: a.opt_bool("marked_text")?.unwrap_or(true), author_colors };
         let (bytes, warnings) = self.session.summarize_comments(id, &opts).map_err(failed)?;
+        let authors: Vec<Value> = self
+            .session
+            .get(id)
+            .map(|d| pdfcraft_engine::summary_author_colors(&d.info.annotations, &opts.author_colors))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, [r, g, b])| json!({ "chosen": opts.author_colors.contains_key(&name), "name": name, "color": format!("#{r:02X}{g:02X}{b:02X}") }))
+            .collect();
         let mut out = self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)?;
+        out["authors"] = json!(authors);
         if !warnings.is_empty() {
             out["warnings"] = json!(warnings);
         }

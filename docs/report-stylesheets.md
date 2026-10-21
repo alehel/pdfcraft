@@ -1,6 +1,6 @@
 # Comment summary stylesheets
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (comment-type selectors; warnings for properties a part doesn't draw)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (authors' colours: the `.author` part and `var(--author)`)
 
 The comment summary (Comments ▸ "…" ▸ Create PDF comment summary, or the `comments_summarize`
 tool) is drawn in a **theme**. Five are built in, and a **stylesheet** can restyle any of them.
@@ -11,11 +11,11 @@ file, read by PdfCraft's own parser (`crates/create/src/report_style.rs`).
 
 | Theme | Look |
 |---|---|
-| `modern` (default) | Cards on light grey, a stripe in each comment's colour, the marked text on a tint of it |
+| `modern` (default) | Cards on light grey, a stripe in each comment's colour, the marked text on a tint of it, each author's name in their colour |
 | `simple` | The plain look of the first summaries: one size of Helvetica in black, no fills, rules or stripes |
 | `classic` | A printed review in Times: black text and rules, no fills |
 | `compact` | Modern, smaller and tighter, for long reviews |
-| `ink-saver` | No filled areas; each comment's colour only in a thin stripe |
+| `ink-saver` | No filled areas; each comment's colour only in a thin stripe, authors' names in their colours |
 
 The stylesheets are in `crates/create/themes/`. To start your own, pick a theme in the Summarize
 Options dialog and use **Export CSS…** (or the `comments_summary_themes` tool), edit the file, and
@@ -48,7 +48,8 @@ Each part of the report is a class. A rule may name several, separated by commas
 | `.card` | One comment: its box (`background`, `border-left` stripe, `border-bottom`, `padding`, `margin-bottom`) |
 | `.number` | "#2" |
 | `.kind` | The comment type ("Highlight") |
-| `.meta` | Author, date, page |
+| `.author` | Who wrote the comment (left out when the summary is sorted by author: the heading names them) |
+| `.meta` | Date and page |
 | `.quote` | The text a highlight, underline or strikethrough marks |
 | `.body` | The comment's note |
 | `.reply` | One reply's band: `margin-left` is the indent per level, `border-left` the thread line, `padding-left` the space before the text |
@@ -66,7 +67,7 @@ plain rules wherever it stands, as the more specific selector does in CSS:
 .kind.sticky-note { color: #8a6d00; }
 ```
 
-The parts that take a type are `.card`, `.number`, `.kind`, `.meta`, `.quote`, `.body`, `.reply`,
+The parts that take a type are `.card`, `.number`, `.kind`, `.author`, `.meta`, `.quote`, `.body`, `.reply`,
 `.reply-author`, `.reply-meta` and `.reply-body`. The types are the names the summary prints, in
 lower case with hyphens: `sticky-note`, `text-box`, `callout`, `typewriter`, `highlight`,
 `underline`, `strikethrough`, `squiggly`, `rectangle`, `oval`, `line`, `pencil`, `polygon`,
@@ -97,8 +98,29 @@ PDF names work too (`strikeout`, `freetext`, `square`, `circle`, `ink`, `caret`,
 names, `transparent`/`none`, and:
 
 - `var(--comment)`: the comment's own colour (a light grey for comments without one).
+- `var(--author)`: the colour of whoever wrote the comment, and on a reply's parts (`.reply`,
+  `.reply-author`, `.reply-meta`, `.reply-body`) of whoever wrote the reply. See below.
 - `color-mix(in srgb, <colour> <p>%, <colour>)`: for example
   `color-mix(in srgb, var(--comment) 25%, white)` is the Modern theme's tint behind marked text.
+
+## Authors' colours
+
+Every author in the document gets a colour, so a review with several people reads at a glance. A
+stylesheet doesn't know who will review a document, so the colours come from the summary, not the
+stylesheet: each author gets the next colour of a ten-colour palette, in the order of their names,
+and the Summarize Options dialog lists the authors so you can pick another colour for any of them
+(**Auto** gives the automatic one back). The app remembers the colours picked; the
+`comments_summarize` tool takes them as `author_colors` and lists every author with the colour
+used.
+
+A stylesheet decides where the colours show, through `var(--author)`. Modern, Compact and Ink saver
+set each author's name in it (`.author` and `.reply-author`); Simple and Classic keep names black,
+and the dialog says so. For example, to put the colour in the card's stripe instead of the
+comment's colour:
+
+```css
+.card { border-left: 3pt solid var(--author); }
+```
 
 ## What is not read
 
@@ -115,5 +137,6 @@ as `[U+XXXX]` and the summary says so. Fonts can't be embedded from a stylesheet
 
 ## Revision history
 
+- 2026-10-21: Authors' colours: the `.author` part, `var(--author)`, colours picked in the dialog or given to the tool.
 - 2026-10-21: Comment-type selectors (`.card.highlight`); a warning for a property a part doesn't draw.
 - 2026-10-21: First version: five built-in themes, stylesheets, `@import`, `var(--comment)`, `color-mix()`.

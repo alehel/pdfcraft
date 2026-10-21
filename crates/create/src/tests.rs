@@ -1187,11 +1187,13 @@ fn entry(n: usize, body: &str) -> Entry {
     Entry {
         number: Some(n),
         kind: "Highlight".into(),
-        meta: "Ada · 2026-10-21 15:28".into(),
+        author: "Ada".into(),
+        author_color: Some([0.12, 0.44, 0.82]),
+        meta: "2026-10-21 15:28".into(),
         color: Some([1.0, 0.9, 0.0]),
         quote: Some("marked words".into()),
         body: Some(body.into()),
-        replies: vec![Reply { depth: 0, author: "Bo".into(), meta: "2026-10-21".into(), body: "Agreed".into() }],
+        replies: vec![Reply { depth: 0, author: "Bo".into(), color: Some([0.78, 0.16, 0.16]), meta: "2026-10-21".into(), body: "Agreed".into() }],
     }
 }
 
@@ -1231,7 +1233,10 @@ fn report_survives_hostile_entries() {
     e.kind = "批注".into();
     e.color = Some([f32::NAN, f32::INFINITY, -3.0]);
     e.quote = Some(String::new());
-    e.replies = (0..200).map(|d| Reply { depth: d, author: String::new(), meta: String::new(), body: "\u{0}\t\r\n".into() }).collect();
+    e.author_color = Some([f32::NAN, 2.0, -1.0]);
+    e.replies = (0..200)
+        .map(|d| Reply { depth: d, author: String::new(), color: Some([f32::INFINITY; 3]), meta: String::new(), body: "\u{0}\t\r\n".into() })
+        .collect();
     let r = Report { title: "T".into(), subtitle: Vec::new(), blocks: vec![Block::Entry(e), Block::Note("none".into())], footer: "f".repeat(5000) };
     let (doc, escaped) = report(&r, LETTER, &ReportStyle::default()).unwrap();
     assert_eq!(escaped, 2 + 200, "the two ideographs and each reply's NUL");
@@ -1286,7 +1291,7 @@ fn builtin_report_themes_parse_cleanly() {
 /// (fonts, colours, the comment's colour through var() and color-mix(), paper, hidden parts).
 #[test]
 fn report_stylesheet_overrides_its_imported_theme() {
-    use crate::report_style::{Family, Paint, Part};
+    use crate::report_style::{Family, Paint, Part, Vars};
     let css = r#"
         @import "classic";
         /* Paper */
@@ -1303,7 +1308,7 @@ fn report_stylesheet_overrides_its_imported_theme() {
     let quote = style.part(Part::Quote);
     assert_eq!(quote.family, Family::Mono);
     assert!(quote.italic, "kept from classic");
-    assert_eq!(quote.background.resolve([1.0, 1.0, 0.0]), Some([1.0, 1.0, 0.5]));
+    assert_eq!(quote.background.resolve(Vars { comment: [1.0, 1.0, 0.0], author: [0.0; 3] }), Some([1.0, 1.0, 0.5]));
     assert_eq!(style.part(Part::Body).family, Family::Serif, "classic's body");
     let kind = style.part(Part::Kind);
     assert_eq!((kind.color.clone(), kind.size, kind.bold, kind.uppercase), (Paint::Rgb([1.0, 0.0, 0.0]), 10.5, true, true));
@@ -1396,6 +1401,49 @@ fn report_stylesheet_styles_comment_types() {
     assert!(content.contains("0.933 0.933 0.933 rg"), "the highlight's card: {content}");
     assert_eq!(type_class("Sticky Note"), "sticky-note");
     assert_eq!(type_class(" Polygonal  Line "), "polygonal-line");
+}
+
+/// The fill colour (`r g b rg`) the text `text` is set in on the page `content`.
+fn text_colour(content: &str, text: &str) -> Option<String> {
+    let before = content.get(..content.find(&format!("({text}) Tj"))?)?;
+    let op = before.get(before.rfind("BT ")?..)?;
+    let rg = op.find(" rg")?;
+    let words: Vec<&str> = op.get(..rg)?.split_whitespace().collect();
+    Some(words.get(words.len().checked_sub(3)?..)?.join(" "))
+}
+
+/// `var(--author)` is the colour of whoever wrote the comment, and on a reply's parts of whoever
+/// wrote the reply: Modern sets each name in it, Simple and Classic in black, and a style says
+/// whether it draws anything in it. An author without a colour gets a grey.
+#[test]
+fn report_sets_each_author_in_their_colour() {
+    let modern = contents(&reopen(&report(&sample(), LETTER, &ReportStyle::default()).unwrap().0));
+    assert_eq!(text_colour(&modern, "Ada").as_deref(), Some("0.120 0.440 0.820"), "{modern}");
+    assert_eq!(text_colour(&modern, "Bo").as_deref(), Some("0.780 0.160 0.160"), "the reply's author: {modern}");
+    assert!(modern.find("(Highlight) Tj") < modern.find("(Ada) Tj") && modern.find("(Ada) Tj") < modern.find("(2026-10-21 15:28) Tj"), "{modern}");
+    let simple = contents(&reopen(&report(&sample(), LETTER, &ReportStyle::builtin("simple").unwrap()).unwrap().0));
+    assert_eq!(text_colour(&simple, "Ada").as_deref(), Some("0.000 0.000 0.000"));
+    let mut plain = sample();
+    if let Some(Block::Entry(e)) = plain.blocks.get_mut(1) {
+        e.author_color = None;
+    }
+    let grey = contents(&reopen(&report(&plain, LETTER, &ReportStyle::default()).unwrap().0));
+    assert_eq!(text_colour(&grey, "Ada").as_deref(), Some("0.420 0.450 0.500"));
+
+    for (id, uses) in [("modern", true), ("simple", false), ("classic", false), ("compact", true), ("ink-saver", true)] {
+        assert_eq!(ReportStyle::builtin(id).unwrap().uses_author_color(), uses, "{id}");
+    }
+    for (css, uses) in [
+        ("@import \"simple\"; .card { border-left: 2pt solid color-mix(in srgb, var(--author) 40%, white) }", true),
+        ("@import \"simple\"; .card { border-left: 0 solid var(--author) }", false),
+        (".author, .reply-author { color: black }", false),
+        (".author { display: none } .reply-author { color: black }", false),
+        (".author, .reply-author { color: black } .kind.highlight { color: var(--author) }", true),
+    ] {
+        assert_eq!(ReportStyle::parse(css).unwrap().0.uses_author_color(), uses, "{css}");
+    }
+    let (_, warnings) = ReportStyle::parse(".meta { color: var(--reviewer) }").unwrap();
+    assert!(warnings.iter().any(|w| w.contains("var(--author)")), "{warnings:?}");
 }
 
 /// A property this subset reads on a part that doesn't draw it is named, with what the part

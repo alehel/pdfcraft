@@ -1006,6 +1006,71 @@ fn summary_theme_and_stylesheet_are_chosen_listed_saved_and_remembered() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Summarize Options ▸ Author colours: every author is listed with an automatic colour; a colour
+/// picked for one reaches the summary, Auto gives the automatic one back, a theme that sets names
+/// in black says so, and the picked colours are remembered.
+#[test]
+fn summary_authors_get_colours_that_can_be_picked_and_reset() {
+    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    for (author, x) in [("Ada", 20.0), ("Bo", 120.0)] {
+        let rect = pdfcraft_engine::Shape::Rectangle { rect: [x, 20.0, x + 50.0, 60.0] };
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            style: pdfcraft_engine::Style::default_for(&rect),
+            shape: rect,
+            contents: format!("{author}'s box"),
+            author: author.into(),
+        }));
+    }
+    h.run_steps(3);
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Create PDF comment summary…").click();
+    h.run_steps(2);
+    h.get_by_label("Author colours");
+    assert!(h.query_by_label("This theme doesn't colour authors' names.").is_none(), "Modern colours them");
+    assert!(h.query_by_label("Auto").is_none(), "nothing picked yet");
+
+    // A colour picked for Bo (as the colour button does), then given back.
+    h.state_mut().summary.author_colors.insert("Bo".into(), [255, 0, 0]);
+    h.run_steps(2);
+    h.get_by_label("Auto").click();
+    h.run_steps(2);
+    assert!(h.state().summary.author_colors.is_empty());
+
+    h.state_mut().summary.theme = "simple".into();
+    h.run_steps(2);
+    h.get_by_label("This theme doesn't colour authors' names.");
+    h.state_mut().summary.theme = "modern".into();
+    h.state_mut().summary.author_colors.insert("Bo".into(), [255, 0, 0]);
+    h.run_steps(2);
+    h.get_by_label("Create Summary").click();
+    h.run_steps(3);
+    let s = h.state();
+    let summary = s.session.get(s.views.last().unwrap().id).unwrap();
+    let doc = pdfcraft_cos::Document::open(summary.bytes.clone()).unwrap();
+    let content: String = doc
+        .scan_objects()
+        .filter_map(|(_, o)| match &*o {
+            pdfcraft_cos::Object::Stream(st) => st.decoded().ok().map(|d| String::from_utf8_lossy(&d).into_owned()),
+            _ => None,
+        })
+        .collect();
+    let bo = content.find("(Bo) Tj").expect("Bo's name is set");
+    assert!(content[..bo].rfind("BT ").is_some_and(|bt| content[bt..bo].contains("1.000 0.000 0.000 rg")), "Bo in red");
+
+    // Remembered, and a saved colour that isn't #rrggbb is left out.
+    let saved = h.state().persist();
+    let mut again = PdfCraftApp::new();
+    again.restore(&saved);
+    assert_eq!(again.summary.author_colors.get("Bo"), Some(&[255, 0, 0]));
+    let mut v: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    v["summary_author_colors"] = serde_json::json!({ "Ada": "red", "Bo": "#00ff00", "Cy": 7 });
+    let mut odd = PdfCraftApp::new();
+    odd.restore(&v.to_string());
+    assert_eq!(odd.summary.author_colors.into_iter().collect::<Vec<_>>(), [("Bo".to_string(), [0, 255, 0])]);
+}
+
 #[test]
 fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());

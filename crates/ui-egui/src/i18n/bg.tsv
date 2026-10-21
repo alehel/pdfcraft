@@ -2397,3 +2397,9 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Include:	Включване:
+	All comments ({n})	Всички коментари ({n})
+	Only the comments currently showing ({n})	Само показаните в момента коментари ({n})
+	Comment types	Типове коментари
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Търсенето в панела „Коментари“ и филтрите по автор, състояние, цвят и отметка също се прилагат.
+	Quote the text that highlights, underlines and strikethroughs mark	Цитиране на текста, отбелязан с маркиране, подчертаване и зачертаване

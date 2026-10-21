@@ -4,7 +4,7 @@
 //! y down. It is converted to PDF user space (crop box, `/Rotate`) here.
 
 use pdfcraft_engine::{
-    Edit, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort,
+    Edit, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummaryOptions, SummarySort,
 };
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
@@ -600,7 +600,30 @@ impl Automation {
             Some(s) => SummarySort::parse(s).ok_or_else(|| ToolError::InvalidArgs(format!("unknown sort {s:?}")))?,
             None => SummarySort::Page,
         };
-        let bytes = self.session.summarize_comments(id, sort).map_err(failed)?;
+        // `types` and `authors` narrow the summary like the Comments panel's filter does.
+        let types = if a.get("types").is_some() { Some(a.strs("types")?) } else { None };
+        let authors = if a.get("authors").is_some() { Some(a.strs("authors")?) } else { None };
+        let only = (types.is_some() || authors.is_some()).then(|| {
+            self.session
+                .get(id)
+                .map(|d| {
+                    d.info
+                        .annotations
+                        .iter()
+                        .filter(|c| c.in_reply_to.is_none())
+                        .filter(|c| {
+                            types.as_ref().is_none_or(|t| {
+                                t.iter().any(|t| t.eq_ignore_ascii_case(&c.subtype) || t.eq_ignore_ascii_case(pdfcraft_engine::comment_kind(c)))
+                            })
+                        })
+                        .filter(|c| authors.as_ref().is_none_or(|w| w.iter().any(|w| *w == c.author.as_deref().unwrap_or(""))))
+                        .map(|c| (c.page, c.index))
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        let opts = SummaryOptions { sort, only, marked_text: a.opt_bool("marked_text")?.unwrap_or(true) };
+        let bytes = self.session.summarize_comments(id, &opts).map_err(failed)?;
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 

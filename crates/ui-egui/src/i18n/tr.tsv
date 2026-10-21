@@ -2430,3 +2430,9 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Include:	Dahil et:
+	All comments ({n})	Tüm yorumlar ({n})
+	Only the comments currently showing ({n})	Yalnızca şu anda gösterilen yorumlar ({n})
+	Comment types	Yorum türleri
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Yorumlar panelindeki arama ile yazar, durum, renk ve onay işareti filtreleri de uygulanır.
+	Quote the text that highlights, underlines and strikethroughs mark	Vurgulama, altını çizme ve üstünü çizmenin işaretlediği metni alıntıla

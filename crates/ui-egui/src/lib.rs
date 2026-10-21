@@ -647,6 +647,11 @@ pub struct PdfCraftApp {
     pub rotate_draft: RotateDraft,
     /// Summarize Comments: sort order.
     pub summary_sort: pdfcraft_engine::SummarySort,
+    /// Summarize Comments: list only the comments the Comments panel shows (its search and
+    /// filter), not every comment.
+    pub summary_only_shown: bool,
+    /// Summarize Comments: quote the text highlights, underlines and strikethroughs mark.
+    pub summary_marked_text: bool,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
     /// Digital ID files the user has created or added.
@@ -983,6 +988,8 @@ impl PdfCraftApp {
             extract_draft: ExtractDraft::default(),
             rotate_draft: RotateDraft::default(),
             summary_sort: Default::default(),
+            summary_only_shown: false,
+            summary_marked_text: true,
             sign_draft: None,
             digital_ids: Vec::new(),
             sig_expanded: Vec::new(),

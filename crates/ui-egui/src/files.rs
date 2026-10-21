@@ -801,10 +801,15 @@ impl PdfCraftApp {
 
     /// Summarize Comments: make the summary and open it as a new document.
     pub fn summarize_comments(&mut self) {
-        let Some((_, id)) = self.active_ids() else { return };
+        let Some((view, id)) = self.active_ids() else { return };
         let stem =
             self.session.get(id).map(|d| std::path::Path::new(&d.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
-        match self.session.summarize_comments(id, self.summary_sort) {
+        let only = self.summary_only_shown.then(|| match (self.session.get(id), self.views.get(view)) {
+            (Some(d), Some(v)) => crate::comments_panel::shown(&d.info, &v.comments).into_iter().map(|a| (a.page, a.index)).collect(),
+            _ => Default::default(),
+        });
+        let opts = pdfcraft_engine::SummaryOptions { sort: self.summary_sort, only, marked_text: self.summary_marked_text };
+        match self.session.summarize_comments(id, &opts) {
             Ok(bytes) => self.open_created(&format!("Summary of comments on {}.pdf", stem.unwrap_or_default()), bytes, "Created a comment summary"),
             Err(e) => self.notify_fmt("Couldn't summarize comments: {e}", &[("e", &e.to_string())]),
         }

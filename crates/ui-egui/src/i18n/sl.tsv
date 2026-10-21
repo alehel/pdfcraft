@@ -2439,3 +2439,9 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+	Include:	Vključi:
+	All comments ({n})	Vsi komentarji ({n})
+	Only the comments currently showing ({n})	Samo trenutno prikazani komentarji ({n})
+	Comment types	Vrste komentarjev
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Veljajo tudi iskanje v podoknu Komentarji in njegovi filtri po avtorju, stanju, barvi in kljukici.
+	Quote the text that highlights, underlines and strikethroughs mark	Navedi besedilo, ki ga označujejo poudarki, podčrtave in prečrtave

@@ -2646,3 +2646,9 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Include:	Includi:
+	All comments ({n})	Tutti i commenti ({n})
+	Only the comments currently showing ({n})	Solo i commenti visualizzati ora ({n})
+	Comment types	Tipi di commento
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Valgono anche la ricerca del pannello Commenti e i suoi filtri per autore, stato, colore e segno di spunta.
+	Quote the text that highlights, underlines and strikethroughs mark	Cita il testo segnato da evidenziazioni, sottolineature e barrature

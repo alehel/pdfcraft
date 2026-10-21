@@ -2711,3 +2711,9 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Include:	تضمين:
+	All comments ({n})	كل التعليقات ({n})
+	Only the comments currently showing ({n})	التعليقات المعروضة حاليًا فقط ({n})
+	Comment types	أنواع التعليقات
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	يُطبَّق أيضًا البحث في لوحة التعليقات وعوامل التصفية حسب المؤلف والحالة واللون وعلامة الاختيار.
+	Quote the text that highlights, underlines and strikethroughs mark	اقتباس النص الذي تحدده علامات التمييز والتسطير والشطب

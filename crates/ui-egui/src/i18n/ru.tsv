@@ -2347,3 +2347,9 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	Include:	Включить:
+	All comments ({n})	Все комментарии ({n})
+	Only the comments currently showing ({n})	Только показанные сейчас комментарии ({n})
+	Comment types	Типы комментариев
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Также действуют поиск на панели «Комментарии» и её фильтры по автору, статусу, цвету и отметке.
+	Quote the text that highlights, underlines and strikethroughs mark	Цитировать текст, отмеченный выделениями, подчёркиваниями и зачёркиваниями

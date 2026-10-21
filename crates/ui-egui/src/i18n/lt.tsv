@@ -2685,3 +2685,9 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	Include:	Įtraukti:
+	All comments ({n})	Visi komentarai ({n})
+	Only the comments currently showing ({n})	Tik dabar rodomi komentarai ({n})
+	Comment types	Komentarų tipai
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Taip pat taikoma komentarų skydelio paieška ir jo filtrai pagal autorių, būseną, spalvą ir varnelę.
+	Quote the text that highlights, underlines and strikethroughs mark	Cituoti tekstą, pažymėtą paryškinimais, pabraukimais ir perbraukimais

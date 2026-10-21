@@ -778,10 +778,18 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
-        t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
+        t("comments_summarize", "Summarize comments", "Make a PDF summarising the document's comments (number, author, type, date, text, replies, and the words each highlight, underline, strikethrough or squiggly marks), sorted by page, author, date or type. `types` and `authors` limit it to some comments, e.g. types [\"Highlight\"] for a summary of the highlights.")
             .cmd("comment.summarize")
             .with(schema(
-                json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
+                json!({
+                    "doc": doc(),
+                    "sort": { "type": "string", "enum": ["page", "author", "date", "type"] },
+                    "types": { "type": "array", "items": { "type": "string" }, "description": "Only these comment types: PDF subtypes (Highlight, Underline, StrikeOut, Squiggly, Text, FreeText, Square…) or the names the summary prints (Sticky Note, Strikethrough, Callout…), any case. Default: every type." },
+                    "authors": { "type": "array", "items": { "type": "string" }, "description": "Only comments by these authors (exact names; \"\" for none). Default: every author." },
+                    "marked_text": { "type": "boolean", "description": "Quote the text that text markup comments mark. Default true." },
+                    "out": save_out,
+                    "open": open
+                }),
                 &["doc"],
             )),
         t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp) or position (`move` [dx, dy] in points). Stamps keep their original appearance when resized. One undo step.").with(schema(

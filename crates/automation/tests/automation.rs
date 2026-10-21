@@ -4351,6 +4351,31 @@ fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "sort": "colour" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// A summary of only the highlights: `types` narrows `comments_summarize` and the summary quotes
+/// the words each highlight marks; `marked_text: false` leaves them out.
+#[test]
+fn comment_summary_of_highlights_through_tools() {
+    let dir = workdir("highlight-summary");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "highlight", "find": "page 2", "author": "Ada" }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "STICKY_NOTE", "author": "Bo" }));
+    let summary_text = |a: &mut Automation, args: Value| -> String {
+        ok(a, "comments_summarize", args);
+        let s = ok(a, "doc_open", json!({ "path": "summary.pdf" }))["doc"].as_u64().unwrap();
+        let pages = ok(a, "text_extract", json!({ "doc": s }))["pages"].as_array().cloned().unwrap_or_default();
+        let text = pages.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n");
+        ok(a, "doc_close", json!({ "doc": s }));
+        text
+    };
+    let text = summary_text(&mut a, json!({ "doc": doc, "types": ["highlight"], "out": "summary.pdf" }));
+    assert!(text.contains("Subject: Highlight") && text.contains("Marked text: \u{201c}Page 2\u{201d}"), "{text}");
+    assert!(!text.contains("STICKY_NOTE"), "only the highlights: {text}");
+    let text = summary_text(&mut a, json!({ "doc": doc, "authors": ["Bo"], "marked_text": false, "out": "summary.pdf" }));
+    assert!(text.contains("STICKY_NOTE") && !text.contains("Highlight"), "{text}");
+    assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "types": "Highlight" })), Err(ToolError::InvalidArgs(_))));
+}
+
 /// Text the standard fonts can't draw is never written as `?` silently, through the tools. A form
 /// value, a button caption, a text box and Fill & Sign text are kept as typed (as Acrobat keeps
 /// them) and the result's `warnings` names the character; a form also asks other viewers to

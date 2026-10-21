@@ -2977,6 +2977,37 @@ fn comment_summary_themes_and_stylesheets() {
     assert!(matches!(summary("modern", Some(&"x".repeat(pdfcraft_create::MAX_STYLESHEET_BYTES + 1))), Err(EditError::Create(_))));
 }
 
+/// Every comment type a summary prints has a stylesheet class (`.card.<type>`), so a type
+/// selector can reach it: the two lists can't drift apart.
+#[test]
+fn every_summary_comment_type_has_a_stylesheet_class() {
+    let subtypes = [
+        "Text",
+        "FreeText",
+        "Highlight",
+        "Underline",
+        "StrikeOut",
+        "Squiggly",
+        "Square",
+        "Circle",
+        "Line",
+        "Ink",
+        "Polygon",
+        "PolyLine",
+        "Stamp",
+        "Caret",
+        "FileAttachment",
+        "Sound",
+        "Redact",
+    ];
+    let mut names: Vec<&str> = subtypes.iter().map(|s| comment_type_name(s)).collect();
+    names.extend(["Callout", "Cloud", "Typewriter"]);
+    for name in names {
+        let class = pdfcraft_create::type_class(name);
+        assert!(pdfcraft_create::TYPE_CLASSES.contains(&class.as_str()), "{name} → {class}");
+    }
+}
+
 /// The words under a markup comment come out in reading order on one line, and nothing comes out
 /// for a comment over blank space or with quads that aren't numbers.
 #[test]

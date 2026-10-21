@@ -187,7 +187,8 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
     loop {
         match r.peek_byte() {
             Some(b'0'..=b'9') => {
-                let d = (r.read_byte().unwrap() - b'0') as u64;
+                let Some(byte) = r.read_byte() else { break };
+                let d = (byte - b'0') as u64;
                 has_digits = true;
                 if let Some(next) = mantissa.checked_mul(10).and_then(|m| m.checked_add(d)) {
                     mantissa = next;

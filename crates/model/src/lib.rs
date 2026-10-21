@@ -51,14 +51,20 @@ impl Page {
         self.dict.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
     }
 
+    fn effective_user_unit(&self, doc: &Document, crop: [f64; 4]) -> f64 {
+        let raw_w = (crop[2] - crop[0]).min(f64::MAX);
+        let raw_h = (crop[3] - crop[1]).min(f64::MAX);
+        let max_raw = raw_w.max(raw_h);
+        let u = self.user_unit(doc);
+        if max_raw > 0.0 && (max_raw * u).is_infinite() { f64::MAX / max_raw } else { u }
+    }
+
     /// The displayed size (width, height) in points, after `/UserUnit` and `/Rotate`.
     pub fn display_size(&self, doc: &Document) -> (f64, f64) {
         let c = self.crop(doc);
         let raw_w = (c[2] - c[0]).min(f64::MAX);
         let raw_h = (c[3] - c[1]).min(f64::MAX);
-        let max_raw = raw_w.max(raw_h);
-        let u = self.user_unit(doc);
-        let u = if max_raw > 0.0 && (max_raw * u).is_infinite() { f64::MAX / max_raw } else { u };
+        let u = self.effective_user_unit(doc, c);
         let (w, h) = (raw_w * u, raw_h * u);
         if self.rotation(doc) % 180 == 0 { (w, h) } else { (h, w) }
     }
@@ -66,8 +72,9 @@ impl Page {
     /// The matrix `[a b c d e f]` from display space (points, origin at the bottom-left of the
     /// page as shown, y up, after `/UserUnit` and `/Rotate`) to user space.
     pub fn view_matrix(&self, doc: &Document) -> [f64; 6] {
-        let m = view_matrix_for(self.rotation(doc), self.crop(doc));
-        let u = self.user_unit(doc);
+        let crop = self.crop(doc);
+        let m = view_matrix_for(self.rotation(doc), crop);
+        let u = self.effective_user_unit(doc, crop);
         if u == 1.0 { m } else { [m[0] / u, m[1] / u, m[2] / u, m[3] / u, m[4], m[5]] }
     }
 }

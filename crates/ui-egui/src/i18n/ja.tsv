@@ -2434,3 +2434,9 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Include:	含める:
+	All comments ({n})	すべての注釈 ({n})
+	Only the comments currently showing ({n})	現在表示されている注釈のみ ({n})
+	Comment types	注釈の種類
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	注釈パネルの検索と、作成者・ステータス・色・チェックマークのフィルターも適用されます。
+	Quote the text that highlights, underlines and strikethroughs mark	ハイライト、下線、取り消し線で示されたテキストを引用する

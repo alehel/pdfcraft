@@ -901,6 +901,48 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     assert!(s.session.get(s.views[1].id).unwrap().name.starts_with("Summary of comments on text"));
 }
 
+/// Summarize Options ▸ "Only the comments currently showing" with the Rectangle type unticked:
+/// the summary lists the highlight, quoting the words it marks, and not the rectangle. The types
+/// are the panel's own filter, so the panel hides the rectangle too.
+#[test]
+fn summary_of_only_the_highlights_quotes_their_text() {
+    use pdfcraft_engine::{Edit, Markup, NewAnnotation, Shape, Style};
+    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    let add = |shape: Shape, contents: &str| {
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: contents.into(), author: "Tester".into() })
+    };
+    // "quick" on page 1: Helvetica 14 pt from x 20, baseline 150 ("The " is 28 pt wide).
+    h.state_mut()
+        .apply_edit(add(Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[48.0, 162.0, 80.0, 162.0, 48.0, 147.0, 80.0, 147.0]] }, ""));
+    h.state_mut().apply_edit(add(Shape::Rectangle { rect: [150.0, 20.0, 200.0, 60.0] }, "BOX_NOTE"));
+    h.run_steps(3);
+
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Create PDF comment summary…").click();
+    h.run_steps(2);
+    h.get_by_label("Only the comments currently showing (2)").click();
+    h.run_steps(2);
+    h.get_by_label("Rectangle").click();
+    h.run_steps(2);
+    h.get_by_label("Only the comments currently showing (1)");
+    assert_eq!(h.state().views[0].comments.hidden_types, ["Rectangle"], "the dialog sets the panel's filter");
+    h.get_by_label("Create PDF Comment Summary").click();
+    h.run_steps(3);
+
+    let s = h.state();
+    assert_eq!(s.views.len(), 2);
+    let summary = s.session.get(s.views[1].id).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(summary.bytes.clone(), Default::default());
+    let text = r
+        .render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() })
+        .text
+        .map(|t| t.plain_text())
+        .unwrap_or_default();
+    assert!(text.contains("Subject: Highlight") && text.contains("Marked text: \u{201c}quick\u{201d}"), "{text}");
+    assert!(!text.contains("Rectangle") && !text.contains("BOX_NOTE"), "{text}");
+}
+
 #[test]
 fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());

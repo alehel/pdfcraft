@@ -4818,12 +4818,42 @@ impl Session {
         Some(self.get(id)?.config.reading_colors)
     }
 
-    /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing every comment
-    /// with its number, author, type, date, text and replies, grouped by page.
-    pub fn summarize_comments(&self, id: DocId, sort: SummarySort) -> Result<Arc<Vec<u8>>, EditError> {
+    /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing the comments
+    /// `opts` includes with their number, author, type, date, text and replies, and with
+    /// `opts.marked_text` the text each highlight, underline, strikethrough or squiggly marks.
+    pub fn summarize_comments(&self, id: DocId, opts: &SummaryOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
-        let text = comment_summary(&doc.name, &doc.info.annotations, sort);
+        let marked = if opts.marked_text { self.marked_texts(id, opts) } else { Default::default() };
+        let text = comment_summary(&doc.name, &doc.info.annotations, opts, &marked);
         self.create_report(&format!("Summary of Comments on {}", doc.name), &text)
+    }
+
+    /// The page text under each text-markup comment `opts` includes, keyed by (page, index).
+    /// Pages are read only when one of those comments is on them; a page whose text can't be
+    /// read gives no entries.
+    fn marked_texts(&self, id: DocId, opts: &SummaryOptions) -> std::collections::HashMap<(usize, usize), String> {
+        let mut out = std::collections::HashMap::new();
+        let Some(doc) = self.get(id) else { return out };
+        let mut by_page: std::collections::BTreeMap<usize, Vec<&pdfcraft_render::Annotation>> = Default::default();
+        for a in doc.info.annotations.iter().filter(|a| is_text_markup(&a.subtype) && opts.includes(a)) {
+            by_page.entry(a.page).or_default().push(a);
+        }
+        if by_page.is_empty() {
+            return out;
+        }
+        let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        for (page, comments) in by_page {
+            let Some(info) = doc.info.pages.get(page) else { continue };
+            let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            let Some(text) = res.text else { continue };
+            for a in comments {
+                if let Some(s) = marked_text(&text, info, a) {
+                    out.insert((a.page, a.index), s);
+                }
+            }
+        }
+        out
     }
 
     /// The certificates trusted for signing.
@@ -4990,6 +5020,77 @@ pub struct OptimizeReport {
     pub discarded: Vec<(Hidden, usize)>,
 }
 
+/// What Summarize Comments includes and how it orders it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SummaryOptions {
+    pub sort: SummarySort,
+    /// The comments to list, as (page, index) of each thread's first comment; `None` lists every
+    /// comment. Replies follow the comment they answer.
+    pub only: Option<std::collections::HashSet<(usize, usize)>>,
+    /// Quote the text that highlights, underlines, strikethroughs and squigglies mark.
+    pub marked_text: bool,
+}
+
+impl Default for SummaryOptions {
+    fn default() -> Self {
+        SummaryOptions { sort: SummarySort::Page, only: None, marked_text: true }
+    }
+}
+
+impl SummaryOptions {
+    /// Whether the summary lists `a` (a thread's first comment).
+    pub fn includes(&self, a: &pdfcraft_render::Annotation) -> bool {
+        self.only.as_ref().is_none_or(|only| only.contains(&(a.page, a.index)))
+    }
+}
+
+/// Whether a comment subtype marks text (`/QuadPoints` over the words it is about).
+pub fn is_text_markup(subtype: &str) -> bool {
+    matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
+}
+
+/// The words of `text` (a page's text layer) that the markup comment `a` covers, in content
+/// order, on one line: a glyph counts when its centre lies within a point of one of the
+/// comment's quadrilaterals (or of its rectangle, when it has none). `None` when it covers none.
+pub fn marked_text(text: &pdfcraft_render::PageText, info: &pdfcraft_render::PageInfo, a: &pdfcraft_render::Annotation) -> Option<String> {
+    const SLACK: f32 = 1.0;
+    let boxes: Vec<[f32; 4]> = if a.quads.is_empty() {
+        vec![a.rect]
+    } else {
+        a.quads
+            .iter()
+            .map(|q| {
+                let (xs, ys) = ([q[0], q[2], q[4], q[6]], [q[1], q[3], q[5], q[7]]);
+                [
+                    xs.iter().copied().fold(f32::MAX, f32::min),
+                    ys.iter().copied().fold(f32::MAX, f32::min),
+                    xs.iter().copied().fold(f32::MIN, f32::max),
+                    ys.iter().copied().fold(f32::MIN, f32::max),
+                ]
+            })
+            .collect()
+    };
+    let boxes: Vec<[f32; 4]> = boxes.into_iter().filter(|b| b.iter().all(|v| v.is_finite()) && b[0] <= b[2] && b[1] <= b[3]).collect();
+    let mut out = String::new();
+    let mut prev: Option<usize> = None;
+    for (i, g) in text.glyphs.iter().enumerate() {
+        let [x, y] = info.view_to_user((g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0);
+        if !boxes.iter().any(|b| x >= b[0] - SLACK && x <= b[2] + SLACK && y >= b[1] - SLACK && y <= b[3] + SLACK) {
+            continue;
+        }
+        if let Some(p) = prev {
+            let same_line = text.line_of.get(i) == text.line_of.get(p);
+            if i != p + 1 || !same_line || text.space_before.get(i).copied().unwrap_or(false) {
+                out.push(' ');
+            }
+        }
+        out.push_str(&g.text);
+        prev = Some(i);
+    }
+    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!out.is_empty()).then_some(out)
+}
+
 /// Order of Summarize Comments.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SummarySort {
@@ -5049,10 +5150,18 @@ pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
     }
 }
 
-/// The text of a comment summary: one block per comment (replies indented under it), with a
-/// "Page N" heading when sorted by page. Checkmarks and status replies are left out, as are
-/// pop-ups; the number is the comment's position on its page.
-pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: SummarySort) -> String {
+/// The text of a comment summary: one block per comment `opts` includes (replies indented under
+/// it), with a "Page N" heading when sorted by page. Checkmarks and status replies are left out,
+/// as are pop-ups; the number is the comment's position on its page among all its comments, so
+/// it stays the same whatever the summary leaves out. `marked` holds the text markup comments'
+/// marked text by (page, index).
+pub fn comment_summary(
+    name: &str,
+    all: &[pdfcraft_render::Annotation],
+    opts: &SummaryOptions,
+    marked: &std::collections::HashMap<(usize, usize), String>,
+) -> String {
+    let sort = opts.sort;
     use std::fmt::Write;
     let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
     // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
@@ -5083,7 +5192,9 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
             n = 0;
         }
         n += 1;
-        numbered.push((n, a));
+        if opts.includes(a) {
+            numbered.push((n, a));
+        }
     }
     match sort {
         SummarySort::Page => {}
@@ -5093,7 +5204,7 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
     }
     let mut out = format!("Summary of Comments on {name}\n\n");
     if numbered.is_empty() {
-        out.push_str("This document has no comments.\n");
+        out.push_str(if top.is_empty() { "This document has no comments.\n" } else { "No comments match the summary options.\n" });
         return out;
     }
     let mut heading = usize::MAX;
@@ -5107,6 +5218,9 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
             let _ = write!(out, "  Page: {}", a.page + 1);
         }
         let _ = writeln!(out, "  Date: {}", a.modified.as_deref().unwrap_or(""));
+        if let Some(m) = marked.get(&(a.page, a.index)) {
+            let _ = writeln!(out, "Marked text: \u{201c}{m}\u{201d}");
+        }
         if let Some(c) = a.contents.as_deref().filter(|c| !c.is_empty()) {
             let _ = writeln!(out, "{c}");
         }

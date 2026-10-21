@@ -774,6 +774,60 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         }
                     });
                 });
+                // Include: every comment, or the ones the Comments panel shows. The types below
+                // are the panel's own type filter, so the panel and the summary always agree.
+                ui.add_space(6.0);
+                ui.label(tl!("Include:"));
+                if let Some((v, id)) = app.active_ids()
+                    && let (Some(doc), Some(view)) = (app.session.get(id), app.views.get_mut(v))
+                {
+                    let info = &doc.info;
+                    let total = info.annotations.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).count();
+                    widgets::radio_value(
+                        ui,
+                        &mut app.summary_only_shown,
+                        false,
+                        crate::i18n::fmt(tl!("All comments ({n})"), &[("n", &total.to_string())]),
+                    );
+                    let shown = crate::comments_panel::shown(info, &view.comments).len();
+                    widgets::radio_value(
+                        ui,
+                        &mut app.summary_only_shown,
+                        true,
+                        crate::i18n::fmt(tl!("Only the comments currently showing ({n})"), &[("n", &shown.to_string())]),
+                    );
+                    if app.summary_only_shown {
+                        ui.indent("summary-types", |ui| {
+                            ui.label(egui::RichText::new(tl!("Comment types")).small());
+                            let hidden = &mut view.comments.hidden_types;
+                            for ty in crate::comments_panel::types_of(info) {
+                                let mut on = !hidden.contains(&ty);
+                                if ui.add(widgets::checkbox(&mut on, tl!(&ty))).changed() {
+                                    if on {
+                                        hidden.retain(|x| *x != ty);
+                                    } else {
+                                        hidden.push(ty.clone());
+                                    }
+                                }
+                            }
+                            let cv = &view.comments;
+                            let others = !(cv.hidden_authors.is_empty()
+                                && cv.hidden_statuses.is_empty()
+                                && cv.hidden_colors.is_empty()
+                                && cv.hidden_checks.is_empty())
+                                || cv.search.as_deref().is_some_and(|q| !q.trim().is_empty());
+                            if others {
+                                ui.label(
+                                    egui::RichText::new(tl!(
+                                        "The Comments panel's search and its author, status, colour and checkmark filters apply too."
+                                    ))
+                                    .small(),
+                                );
+                            }
+                        });
+                    }
+                }
+                ui.add(widgets::checkbox(&mut app.summary_marked_text, tl!("Quote the text that highlights, underlines and strikethroughs mark")));
                 ui.add_space(12.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if widgets::pill_button(ui, tl!("Create PDF Comment Summary"), true).clicked() {

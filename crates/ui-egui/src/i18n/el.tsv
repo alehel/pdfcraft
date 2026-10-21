@@ -2440,3 +2440,9 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Include:	Συμπερίληψη:
+	All comments ({n})	Όλα τα σχόλια ({n})
+	Only the comments currently showing ({n})	Μόνο τα σχόλια που εμφανίζονται τώρα ({n})
+	Comment types	Τύποι σχολίων
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Ισχύουν επίσης η αναζήτηση του πίνακα Σχόλια και τα φίλτρα του κατά συντάκτη, κατάσταση, χρώμα και σημάδι ελέγχου.
+	Quote the text that highlights, underlines and strikethroughs mark	Παράθεση του κειμένου που επισημαίνουν οι επισημάνσεις, οι υπογραμμίσεις και οι διαγραφές

@@ -2433,3 +2433,9 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Include:	Belefoglalás:
+	All comments ({n})	Minden megjegyzés ({n})
+	Only the comments currently showing ({n})	Csak a most látható megjegyzések ({n})
+	Comment types	Megjegyzéstípusok
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	A Megjegyzések panel keresése, valamint a szerző, állapot, szín és pipa szerinti szűrői is érvényesek.
+	Quote the text that highlights, underlines and strikethroughs mark	A kiemelések, aláhúzások és áthúzások által jelölt szöveg idézése

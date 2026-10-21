@@ -99,6 +99,38 @@ fn any_contains<'a>(fields: impl IntoIterator<Item = &'a str>, q: &str) -> bool 
     fields.into_iter().any(|s| pdfcraft_render::text::fold_case(s).contains(&q))
 }
 
+/// The comments the panel lists (each thread's first comment, in document order) under its
+/// search and filter. Summarize Comments' "Only the comments currently showing" lists these.
+pub fn shown<'a>(info: &'a DocInfo, cv: &crate::comments::CommentView) -> Vec<&'a Annotation> {
+    let query = cv.search.as_deref().filter(|q| !q.trim().is_empty());
+    let replies_of = |a: &Annotation| -> Vec<&Annotation> {
+        match &a.name {
+            Some(nm) => info.annotations.iter().filter(|r| r.in_reply_to.as_deref() == Some(nm.as_str())).collect(),
+            None => Vec::new(),
+        }
+    };
+    let status_of =
+        |a: &Annotation| replies_of(a).iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()).unwrap_or_else(|| "None".into());
+    info.annotations
+        .iter()
+        .filter(|a| a.in_reply_to.is_none())
+        .filter(|a| query.is_none_or(|q| matches(a, q) || replies_of(a).iter().any(|r| matches(r, q))))
+        .filter(|a| !cv.hidden_types.iter().any(|t| t == kind_label(a)))
+        .filter(|a| !cv.hidden_authors.contains(&a.author.clone().unwrap_or_default()))
+        .filter(|a| !cv.hidden_statuses.contains(&status_of(a)))
+        .filter(|a| !cv.hidden_colors.contains(&color_key(a)))
+        .filter(|a| !cv.hidden_checks.contains(&check_label(is_marked(&replies_of(a))).to_string()))
+        .collect()
+}
+
+/// The comment types in the document (the panel's names, sorted), for the type filters.
+pub fn types_of(info: &DocInfo) -> Vec<String> {
+    let mut types: Vec<String> = info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| kind_label(a).to_string()).collect();
+    types.sort();
+    types.dedup();
+    types
+}
+
 /// Draw the panel body. Returns an edit to apply (posting, replying, deleting…).
 pub(crate) fn show(
     ui: &mut egui::Ui,
@@ -153,7 +185,6 @@ pub(crate) fn show(
         });
         return edit;
     }
-    let query = view.comments.search.clone().filter(|q| !q.trim().is_empty());
     let replies_of = |a: &Annotation| -> Vec<&Annotation> {
         match &a.name {
             Some(nm) => info.annotations.iter().filter(|r| r.in_reply_to.as_deref() == Some(nm.as_str())).collect(),
@@ -161,19 +192,7 @@ pub(crate) fn show(
         }
     };
     let cv = &view.comments;
-    let status_of =
-        |a: &Annotation| replies_of(a).iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()).unwrap_or_else(|| "None".into());
-    let mut roots: Vec<&Annotation> = info
-        .annotations
-        .iter()
-        .filter(|a| a.in_reply_to.is_none())
-        .filter(|a| query.as_deref().is_none_or(|q| matches(a, q) || replies_of(a).iter().any(|r| matches(r, q))))
-        .filter(|a| !cv.hidden_types.iter().any(|t| t == kind_label(a)))
-        .filter(|a| !cv.hidden_authors.contains(&a.author.clone().unwrap_or_default()))
-        .filter(|a| !cv.hidden_statuses.contains(&status_of(a)))
-        .filter(|a| !cv.hidden_colors.contains(&color_key(a)))
-        .filter(|a| !cv.hidden_checks.contains(&check_label(is_marked(&replies_of(a))).to_string()))
-        .collect();
+    let mut roots = shown(info, cv);
     let sort = cv.sort;
     match sort {
         SortBy::Page => {}
@@ -516,9 +535,7 @@ fn legible(c: Color32, t: &Tokens) -> Color32 {
 pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocView, hidden: bool) -> Option<&'static str> {
     let mut command = None;
     let cv = &mut view.comments;
-    let mut types: Vec<String> = info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| kind_label(a).to_string()).collect();
-    types.sort();
-    types.dedup();
+    let types = types_of(info);
     let mut authors: Vec<String> =
         info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| a.author.clone().unwrap_or_default()).collect();
     authors.sort();

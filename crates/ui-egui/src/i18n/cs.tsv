@@ -2508,3 +2508,9 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Include:	Zahrnout:
+	All comments ({n})	Všechny komentáře ({n})
+	Only the comments currently showing ({n})	Jen právě zobrazené komentáře ({n})
+	Comment types	Typy komentářů
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Platí také hledání v panelu Komentáře a jeho filtry podle autora, stavu, barvy a zaškrtnutí.
+	Quote the text that highlights, underlines and strikethroughs mark	Citovat text označený zvýrazněním, podtržením a přeškrtnutím

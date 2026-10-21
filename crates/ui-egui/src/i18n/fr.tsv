@@ -2434,3 +2434,9 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Include:	Inclure :
+	All comments ({n})	Tous les commentaires ({n})
+	Only the comments currently showing ({n})	Seulement les commentaires affichés ({n})
+	Comment types	Types de commentaire
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	La recherche du panneau Commentaires et ses filtres par auteur, état, couleur et coche s’appliquent aussi.
+	Quote the text that highlights, underlines and strikethroughs mark	Citer le texte marqué par les surlignages, soulignements et barrés

@@ -2858,15 +2858,18 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert!(s.set_hide_comments(id, false));
     assert!(pixel(&s, id, 1, 105, 100)[1] < 40);
 
-    let text = comment_summary("doc.pdf", &s.get(id).unwrap().info.annotations, SummarySort::Page);
+    let text = comment_summary("doc.pdf", &s.get(id).unwrap().info.annotations, &SummaryOptions::default(), &Default::default());
     assert!(text.starts_with("Summary of Comments on doc.pdf"));
     assert!(text.contains("Page: 2\nNumber: 1  Author: Reviewer  Subject: Rectangle"), "{text}");
     assert!(text.contains("Still editable") && text.contains("    Agreed"), "{text}");
     assert!(!text.contains("Marked"), "checkmarks aren't listed: {text}");
-    let pdf = s.summarize_comments(id, SummarySort::Author).unwrap();
+    let pdf = s.summarize_comments(id, &SummaryOptions { sort: SummarySort::Author, ..Default::default() }).unwrap();
     let n = s.open_new("summary.pdf", pdf).unwrap();
     assert!(!s.get(n).unwrap().info.pages.is_empty());
-    assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
+    assert_eq!(
+        comment_summary("x", &[], &SummaryOptions::default(), &Default::default()),
+        "Summary of Comments on x\n\nThis document has no comments.\n"
+    );
 }
 
 /// #820: the generated summary includes replies to replies, indented one level deeper.
@@ -2876,10 +2879,103 @@ fn comment_summary_includes_replies_to_replies() {
     s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
     s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "FIRST_REPLY".into(), author: "A".into() }).unwrap();
     s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 1, text: "NESTED_REPLY".into(), author: "B".into() }).unwrap();
-    let text = comment_summary("doc.pdf", &s.get(id).unwrap().info.annotations, SummarySort::Page);
+    let text = comment_summary("doc.pdf", &s.get(id).unwrap().info.annotations, &SummaryOptions::default(), &Default::default());
     assert!(text.contains("FIRST_REPLY"), "{text}");
     assert!(text.contains("NESTED_REPLY"), "replies to replies are summarized: {text}");
     assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
+}
+
+/// A text markup comment over the words `needle` on page 1, as selecting them and choosing the
+/// tool does: one quad per line, from the text layer.
+fn markup_over(s: &mut Session, id: DocId, kind: Markup, needle: &str, note: &str) {
+    let doc = s.get(id).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), pdfcraft_render::RenderConfig::default());
+    let text = r.render(RenderRequestFor::text(0)).text.expect("the page has text");
+    let range = text.find(needle).pop().expect("the page shows the text");
+    let info = &doc.info.pages[0];
+    let quads = text.line_rects(range).into_iter().map(|v| pdfcraft_annot::rect_quad(info.view_rect_to_user(v).map(f64::from))).collect();
+    let shape = Shape::TextMarkup { kind, quads };
+    s.apply(
+        id,
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: note.into(), author: "Ada".into() }),
+    )
+    .unwrap();
+}
+
+/// Summarize Comments can list only some comments, and quotes the words a highlight, underline
+/// or strikethrough marks (a highlight without a note used to be a bare header line).
+#[test]
+fn comment_summary_quotes_marked_text_and_lists_only_the_chosen_comments() {
+    let line = "The quick brown fox jumps over the lazy dog";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id =
+        s.open("fox.pdf", None, Arc::new(one_line_page("/Font << /F1 4 0 R >>", &format!("BT /F1 16 Tf 20 150 Td ({line}) Tj ET"))), None).unwrap();
+    markup_over(&mut s, id, Markup::Highlight, "quick brown", "");
+    markup_over(&mut s, id, Markup::StrikeOut, "lazy", "Cut this");
+    s.apply(id, rect_comment(0, [20.0, 20.0, 60.0, 60.0])).unwrap();
+    let all = s.get(id).unwrap().info.annotations.clone();
+    let summary = |opts: &SummaryOptions| {
+        let created = s.summarize_comments(id, opts).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(created, pdfcraft_render::RenderConfig::default());
+        r.render(RenderRequestFor::text(0)).text.map(|t| t.plain_text()).unwrap_or_default()
+    };
+
+    let text = summary(&SummaryOptions::default());
+    assert!(text.contains("Marked text: \u{201c}quick brown\u{201d}"), "{text}");
+    assert!(text.contains("Marked text: \u{201c}lazy\u{201d}") && text.contains("Cut this"), "{text}");
+    assert!(text.contains("Subject: Rectangle"), "{text}");
+    assert!(!summary(&SummaryOptions { marked_text: false, ..Default::default() }).contains("Marked text"));
+
+    // Highlights only: the strikethrough and the rectangle are left out, and the highlight keeps
+    // the number it has among all the page's comments.
+    let highlights = all.iter().filter(|a| a.subtype == "Highlight").map(|a| (a.page, a.index)).collect();
+    let opts = SummaryOptions { only: Some(highlights), ..Default::default() };
+    let text = comment_summary("fox.pdf", &all, &opts, &[((0, 0), "quick brown".to_string())].into());
+    assert!(text.contains("Number: 1  Author: Ada  Subject: Highlight"), "{text}");
+    assert!(text.contains("Marked text: \u{201c}quick brown\u{201d}"), "{text}");
+    assert!(!text.contains("Strikethrough") && !text.contains("Rectangle") && !text.contains("Cut this"), "{text}");
+    let none = SummaryOptions { only: Some(Default::default()), ..Default::default() };
+    assert!(comment_summary("fox.pdf", &all, &none, &Default::default()).ends_with("No comments match the summary options.\n"));
+}
+
+/// The words under a markup comment come out in reading order on one line, and nothing comes out
+/// for a comment over blank space or with quads that aren't numbers.
+#[test]
+fn marked_text_takes_the_glyphs_under_the_quads() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let body = "BT /F1 16 Tf 20 150 Td (first line ends) Tj 0 -20 Td (second line starts) Tj ET";
+    let id = s.open("two.pdf", None, Arc::new(one_line_page("/Font << /F1 4 0 R >>", body)), None).unwrap();
+    let doc = s.get(id).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), pdfcraft_render::RenderConfig::default());
+    let text = r.render(RenderRequestFor::text(0)).text.unwrap();
+    let info = &doc.info.pages[0];
+    let quads_of = |needle: &str| -> Vec<[f32; 8]> {
+        let range = text.find(needle).pop().unwrap();
+        text.line_rects(range).into_iter().map(|v| pdfcraft_annot::rect_quad(info.view_rect_to_user(v).map(f64::from)).map(|x| x as f32)).collect()
+    };
+    let mut a = pdfcraft_render::Annotation {
+        page: 0,
+        subtype: "Highlight".into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        rect: [0.0; 4],
+        color: None,
+        index: 0,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+    };
+    a.quads = quads_of("ends second");
+    assert_eq!(marked_text(&text, info, &a).as_deref(), Some("ends second"));
+    a.quads = vec![[300.0, 290.0, 400.0, 290.0, 300.0, 280.0, 400.0, 280.0]];
+    assert_eq!(marked_text(&text, info, &a), None, "blank space");
+    a.quads = vec![[f32::NAN; 8]];
+    assert_eq!(marked_text(&text, info, &a), None, "quads that aren't numbers");
 }
 
 #[test]

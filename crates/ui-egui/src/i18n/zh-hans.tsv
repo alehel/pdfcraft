@@ -2398,3 +2398,9 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Include:	包括：
+	All comments ({n})	所有注释 ({n})
+	Only the comments currently showing ({n})	仅当前显示的注释 ({n})
+	Comment types	注释类型
+	The Comments panel's search and its author, status, colour and checkmark filters apply too.	注释面板的搜索及其按作者、状态、颜色和复选标记的筛选也同样适用。
+	Quote the text that highlights, underlines and strikethroughs mark	引用高亮、下划线和删除线所标记的文本

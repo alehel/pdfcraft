@@ -1,0 +1,19 @@
+/* Simple: the plain look of the first comment summaries. One size of Helvetica in black, no
+   fills, rules or stripes, a blank line between comments, replies indented. */
+
+@page { margin: 72pt 72pt 72pt 72pt; }
+
+.title, .subtitle, .heading, .note, .number, .kind, .meta, .quote, .body, .reply-author, .reply-meta, .reply-body {
+  font-family: Helvetica, sans-serif; font-size: 11pt; font-weight: normal; font-style: normal; color: black; line-height: 13.75pt;
+}
+.header { padding: 0; border-bottom: none; margin-bottom: 13.75pt; }
+
+.heading { margin-top: 0; padding: 0; border-bottom: none; margin-bottom: 0; }
+
+.card { background: transparent; border-left: none; padding: 0; margin-bottom: 13.75pt; }
+.quote { background: transparent; border-left: none; padding: 0; margin: 0; }
+.body { margin: 0; }
+
+.reply { margin: 0 0 0 22pt; padding: 0; border-left: none; }
+
+.footer { display: none; }

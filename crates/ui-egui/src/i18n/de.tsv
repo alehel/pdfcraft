@@ -2435,9 +2435,20 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
-	Include:	Einbeziehen:
-	All comments ({n})	Alle Kommentare ({n})
-	Only the comments currently showing ({n})	Nur die aktuell angezeigten Kommentare ({n})
+	Include	Einbeziehen
 	Comment types	Kommentartypen
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Die Suche im Kommentarbereich und seine Filter nach Autor, Status, Farbe und Häkchen gelten ebenfalls.
 	Quote the text that highlights, underlines and strikethroughs mark	Text zitieren, den Hervorhebungen, Unterstreichungen und Durchstreichungen markieren
+	Theme	Design
+	Modern	Modern
+	Simple	Schlicht
+	Classic	Klassisch
+	Compact	Kompakt
+	Ink saver	Tintensparend
+	{n} parts of the stylesheet can't be used	{n} Teile des Stylesheets können nicht verwendet werden
+	{name} is too large for a stylesheet (at most 64 KB).	{name} ist für ein Stylesheet zu groß (höchstens 64 KB).
+	{name} is not a UTF-8 text file.	{name} ist keine UTF-8-Textdatei.
+	Only comments the Comments panel's filter shows	Nur Kommentare, die der Filter des Kommentarbereichs zeigt
+	Load CSS…	CSS laden…
+	Export CSS…	CSS exportieren…
+	Create Summary	Übersicht erstellen
+	{listed} of {total} comments	{listed} von {total} Kommentaren

@@ -2410,9 +2410,20 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
-	Include:	Uwzględnij:
-	All comments ({n})	Wszystkie komentarze ({n})
-	Only the comments currently showing ({n})	Tylko obecnie wyświetlane komentarze ({n})
+	Include	Uwzględnij
 	Comment types	Typy komentarzy
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Obowiązują też wyszukiwanie w panelu Komentarze i jego filtry według autora, stanu, koloru i znacznika.
 	Quote the text that highlights, underlines and strikethroughs mark	Cytuj tekst oznaczony wyróżnieniami, podkreśleniami i przekreśleniami
+	Theme	Motyw
+	Modern	Nowoczesny
+	Simple	Prosty
+	Classic	Klasyczny
+	Compact	Zwarty
+	Ink saver	Oszczędzanie tuszu
+	{n} parts of the stylesheet can't be used	Nie można użyć części arkusza stylów: {n}
+	{name} is too large for a stylesheet (at most 64 KB).	{name} jest zbyt duży na arkusz stylów (maksymalnie 64 KB).
+	{name} is not a UTF-8 text file.	{name} nie jest plikiem tekstowym UTF-8.
+	Only comments the Comments panel's filter shows	Tylko komentarze widoczne w filtrze panelu Komentarze
+	Load CSS…	Wczytaj CSS…
+	Export CSS…	Eksportuj CSS…
+	Create Summary	Utwórz podsumowanie
+	{listed} of {total} comments	Komentarze: {listed} z {total}

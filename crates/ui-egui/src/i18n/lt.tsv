@@ -2685,9 +2685,19 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
-	Include:	Įtraukti:
-	All comments ({n})	Visi komentarai ({n})
-	Only the comments currently showing ({n})	Tik dabar rodomi komentarai ({n})
+	Include	Įtraukti
 	Comment types	Komentarų tipai
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Taip pat taikoma komentarų skydelio paieška ir jo filtrai pagal autorių, būseną, spalvą ir varnelę.
 	Quote the text that highlights, underlines and strikethroughs mark	Cituoti tekstą, pažymėtą paryškinimais, pabraukimais ir perbraukimais
+	Modern	Moderni
+	Simple	Paprasta
+	Classic	Klasikinė
+	Compact	Kompaktiška
+	Ink saver	Rašalo taupymas
+	{n} parts of the stylesheet can't be used	Negalima naudoti stilių failo dalių: {n}
+	{name} is too large for a stylesheet (at most 64 KB).	{name} per didelis stilių failui (ne daugiau kaip 64 KB).
+	{name} is not a UTF-8 text file.	{name} nėra UTF-8 tekstinis failas.
+	Only comments the Comments panel's filter shows	Tik komentarai, kuriuos rodo komentarų skydelio filtras
+	Load CSS…	Įkelti CSS…
+	Export CSS…	Eksportuoti CSS…
+	Create Summary	Kurti santrauką
+	{listed} of {total} comments	Komentarų: {listed} iš {total}

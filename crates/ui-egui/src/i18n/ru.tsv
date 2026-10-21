@@ -2347,9 +2347,20 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
-	Include:	Включить:
-	All comments ({n})	Все комментарии ({n})
-	Only the comments currently showing ({n})	Только показанные сейчас комментарии ({n})
+	Include	Включить
 	Comment types	Типы комментариев
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Также действуют поиск на панели «Комментарии» и её фильтры по автору, статусу, цвету и отметке.
 	Quote the text that highlights, underlines and strikethroughs mark	Цитировать текст, отмеченный выделениями, подчёркиваниями и зачёркиваниями
+	Theme	Тема
+	Modern	Современная
+	Simple	Простая
+	Classic	Классическая
+	Compact	Компактная
+	Ink saver	Экономия чернил
+	{n} parts of the stylesheet can't be used	Части таблицы стилей, которые нельзя использовать: {n}
+	{name} is too large for a stylesheet (at most 64 KB).	{name} слишком велик для таблицы стилей (не более 64 КБ).
+	{name} is not a UTF-8 text file.	{name} не является текстовым файлом в UTF-8.
+	Only comments the Comments panel's filter shows	Только комментарии, которые показывает фильтр панели «Комментарии»
+	Load CSS…	Загрузить CSS…
+	Export CSS…	Экспортировать CSS…
+	Create Summary	Создать сводку
+	{listed} of {total} comments	Комментарии: {listed} из {total}

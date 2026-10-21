@@ -2433,9 +2433,20 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
-	Include:	Belefoglalás:
-	All comments ({n})	Minden megjegyzés ({n})
-	Only the comments currently showing ({n})	Csak a most látható megjegyzések ({n})
+	Include	Belefoglalás
 	Comment types	Megjegyzéstípusok
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	A Megjegyzések panel keresése, valamint a szerző, állapot, szín és pipa szerinti szűrői is érvényesek.
 	Quote the text that highlights, underlines and strikethroughs mark	A kiemelések, aláhúzások és áthúzások által jelölt szöveg idézése
+	Theme	Téma
+	Modern	Modern
+	Simple	Egyszerű
+	Classic	Klasszikus
+	Compact	Tömör
+	Ink saver	Tintatakarékos
+	{n} parts of the stylesheet can't be used	A stíluslap {n} része nem használható
+	{name} is too large for a stylesheet (at most 64 KB).	A(z) {name} túl nagy egy stíluslaphoz (legfeljebb 64 KB).
+	{name} is not a UTF-8 text file.	A(z) {name} nem UTF-8 szövegfájl.
+	Only comments the Comments panel's filter shows	Csak a Megjegyzések panel szűrője által mutatott megjegyzések
+	Load CSS…	CSS betöltése…
+	Export CSS…	CSS exportálása…
+	Create Summary	Összefoglaló létrehozása
+	{listed} of {total} comments	{listed} / {total} megjegyzés

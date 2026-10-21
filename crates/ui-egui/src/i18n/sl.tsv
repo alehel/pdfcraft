@@ -2439,9 +2439,20 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
-	Include:	Vključi:
-	All comments ({n})	Vsi komentarji ({n})
-	Only the comments currently showing ({n})	Samo trenutno prikazani komentarji ({n})
+	Include	Vključi
 	Comment types	Vrste komentarjev
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Veljajo tudi iskanje v podoknu Komentarji in njegovi filtri po avtorju, stanju, barvi in kljukici.
 	Quote the text that highlights, underlines and strikethroughs mark	Navedi besedilo, ki ga označujejo poudarki, podčrtave in prečrtave
+	Theme	Tema
+	Modern	Sodobna
+	Simple	Preprosta
+	Classic	Klasična
+	Compact	Strnjena
+	Ink saver	Varčevanje s črnilom
+	{n} parts of the stylesheet can't be used	Delov slogovne predloge, ki jih ni mogoče uporabiti: {n}
+	{name} is too large for a stylesheet (at most 64 KB).	{name} je prevelik za slogovno predlogo (največ 64 KB).
+	{name} is not a UTF-8 text file.	{name} ni besedilna datoteka UTF-8.
+	Only comments the Comments panel's filter shows	Samo komentarji, ki jih prikazuje filter podokna Komentarji
+	Load CSS…	Naloži CSS …
+	Export CSS…	Izvozi CSS …
+	Create Summary	Ustvari povzetek
+	{listed} of {total} comments	Komentarji: {listed} od {total}

@@ -622,9 +622,32 @@ impl Automation {
                 })
                 .unwrap_or_default()
         });
-        let opts = SummaryOptions { sort, only, marked_text: a.opt_bool("marked_text")?.unwrap_or(true) };
-        let bytes = self.session.summarize_comments(id, &opts).map_err(failed)?;
-        self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
+        // The look: a built-in theme, and a stylesheet over it from a file or given inline.
+        let stylesheet = match (a.opt_str("stylesheet")?, a.opt_str("css")?) {
+            (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass stylesheet (a file) or css (the text), not both".into())),
+            (Some(path), None) => {
+                use std::io::Read;
+                let file = std::fs::File::open(self.resolve(path, false)?).map_err(failed)?;
+                let mut bytes = Vec::new();
+                file.take(pdfcraft_engine::MAX_STYLESHEET_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(failed)?;
+                Some(String::from_utf8(bytes).map_err(|_| ToolError::InvalidArgs(format!("{path} is not UTF-8 text")))?)
+            }
+            (None, css) => css.map(str::to_string),
+        };
+        let theme = a.opt_str("theme")?.unwrap_or("modern").to_string();
+        let opts = SummaryOptions { sort, theme, stylesheet, only, marked_text: a.opt_bool("marked_text")?.unwrap_or(true) };
+        let (bytes, warnings) = self.session.summarize_comments(id, &opts).map_err(failed)?;
+        let mut out = self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)?;
+        if !warnings.is_empty() {
+            out["warnings"] = json!(warnings);
+        }
+        Ok(out)
+    }
+
+    pub(crate) fn comments_summary_themes(&self) -> Result<Value> {
+        let themes: Vec<Value> =
+            pdfcraft_engine::SUMMARY_THEMES.iter().map(|(id, name, css)| json!({ "id": id, "name": name, "css": css })).collect();
+        Ok(json!({ "themes": themes }))
     }
 
     pub(crate) fn comment_edit(&mut self, a: &Args) -> Result<Value> {

@@ -1,6 +1,7 @@
 //! Formatted reports PdfCraft makes from documents (a comment summary): a title, group headings
-//! and one card per entry, set in the standard Helvetica faces with weight, colour and rules, so
-//! a reader can scan it. [`from_text_escaped`](crate::from_text_escaped) remains for plain text.
+//! and one card per entry, laid out in the standard fonts with the weights, colours, rules and
+//! spacing a [`ReportStyle`] gives them (a built-in theme or a user's stylesheet, see
+//! [`crate::report_style`]). [`from_text_escaped`](crate::from_text_escaped) remains for plain text.
 //!
 //! Every string is written in WinAnsiEncoding; a character Helvetica can't draw is written as
 //! `[U+XXXX]` and the subtitle says so, as [`crate::from_text_escaped`] does.
@@ -8,6 +9,7 @@
 use pdfcraft_cos::{Dict, Document, Object};
 use pdfcraft_fonts::{Std14, literal, win_ansi, wrap_with};
 
+use crate::report_style::{Part, PartStyle, ReportStyle};
 use crate::{CreateError, ESCAPED_NOTE, add_page, set_title};
 
 /// A report: what [`report`] lays out.
@@ -106,45 +108,13 @@ fn header_text(e: &Entry) -> String {
 /// Replies deeper than this are drawn at this depth (the page has to keep some width).
 const MAX_DEPTH: usize = 6;
 
-const INK: [f32; 3] = [0.11, 0.12, 0.15];
-const BODY: [f32; 3] = [0.2, 0.22, 0.26];
-const MUTED: [f32; 3] = [0.42, 0.45, 0.5];
-const RULE: [f32; 3] = [0.84, 0.85, 0.88];
-const CARD: [f32; 3] = [0.968, 0.972, 0.98];
-const STRIPE: [f32; 3] = [0.72, 0.74, 0.78];
-const THREAD: [f32; 3] = [0.8, 0.82, 0.86];
-
-#[derive(Clone, Copy, PartialEq)]
-enum Face {
-    Regular,
-    Bold,
-    Oblique,
-}
-
-impl Face {
-    fn std14(self) -> Std14 {
-        match self {
-            Face::Regular => Std14::Helvetica,
-            Face::Bold => Std14::HelveticaBold,
-            Face::Oblique => Std14::HelveticaOblique,
-        }
-    }
-    fn resource(self) -> &'static str {
-        match self {
-            Face::Regular => "F1",
-            Face::Bold => "F2",
-            Face::Oblique => "F3",
-        }
-    }
-    fn width(self, s: &str, size: f64) -> f64 {
-        self.std14().text_width(s, size)
-    }
-}
+/// The colour `var(--comment)` stands for when a comment has none.
+const NO_COLOR: [f32; 3] = [0.72, 0.74, 0.78];
 
 /// Something drawn, with `y` measured down from the top of the row it belongs to.
 #[derive(Clone)]
 enum Op {
-    Text { face: Face, size: f64, color: [f32; 3], x: f64, y: f64, text: String },
+    Text { font: Std14, size: f64, color: [f32; 3], x: f64, y: f64, text: String },
     Fill { color: [f32; 3], x: f64, y: f64, w: f64, h: f64 },
 }
 
@@ -156,13 +126,50 @@ struct Row {
 }
 
 impl Row {
-    fn text(face: Face, size: f64, color: [f32; 3], x: f64, text: &str, leading: f64) -> Row {
-        // The baseline sits so that the cap height is centred in the row.
-        let y = leading / 2.0 + size * 0.35;
-        Row { h: leading, ops: vec![Op::Text { face, size, color, x, y, text: text.to_string() }] }
-    }
     fn gap(h: f64) -> Row {
-        Row { h, ops: Vec::new() }
+        Row { h: h.max(0.0), ops: Vec::new() }
+    }
+    /// A filled band (a rule), `h` high, with `above` and `below` points around it.
+    fn rule(above: f64, h: f64, below: f64, color: Option<[f32; 3]>, x: f64, w: f64) -> Row {
+        let (above, h, below) = (above.max(0.0), h.max(0.0), below.max(0.0));
+        let ops = match color {
+            Some(color) if h > 0.0 => vec![Op::Fill { color, x, y: above, w, h }],
+            _ => Vec::new(),
+        };
+        Row { h: above + h + below, ops }
+    }
+}
+
+/// One part's text as it is drawn: its font, size, colour and line spacing.
+struct Ink<'a> {
+    part: &'a PartStyle,
+    color: [f32; 3],
+}
+
+impl<'a> Ink<'a> {
+    fn new(part: &'a PartStyle, comment: [f32; 3]) -> Ink<'a> {
+        Ink { part, color: part.color.resolve(comment).unwrap_or([0.0; 3]) }
+    }
+    fn width(&self, s: &str) -> f64 {
+        self.part.font().text_width(s, self.part.size)
+    }
+    fn text(&self, s: &str) -> String {
+        if self.part.uppercase { s.to_uppercase() } else { s.to_string() }
+    }
+    /// `s` wrapped to `width` points.
+    fn lines(&self, width: f64, s: &str) -> Vec<String> {
+        let size = self.part.size;
+        let font = self.part.font();
+        wrap_with(&self.text(s).replace("\r\n", "\n").replace('\t', "    "), size, width.max(size * 2.0), |t, z| font.text_width(t, z))
+    }
+    /// A text op on a row of this part's leading, at `x`.
+    fn op(&self, x: f64, s: &str, leading: f64) -> Op {
+        // The baseline sits so that the cap height is centred in the line.
+        Op::Text { font: self.part.font(), size: self.part.size, color: self.color, x, y: leading / 2.0 + self.part.size * 0.35, text: s.to_string() }
+    }
+    fn rows(&self, x: f64, width: f64, s: &str) -> Vec<Row> {
+        let lead = self.part.leading();
+        self.lines(width, s).into_iter().map(|l| Row { h: lead, ops: vec![self.op(x, &l, lead)] }).collect()
     }
 }
 
@@ -172,13 +179,14 @@ struct Pages {
     top: f64,
     bottom: f64,
     pages: Vec<(Vec<u8>, Vec<u8>)>,
+    fonts: Vec<Std14>,
     /// Distance down from the top edge of the current page.
     y: f64,
 }
 
 impl Pages {
-    fn new(height: f64) -> Pages {
-        let mut p = Pages { height, top: 54.0, bottom: 60.0, pages: Vec::new(), y: 0.0 };
+    fn new(height: f64, top: f64, bottom: f64) -> Pages {
+        let mut p = Pages { height, top, bottom, pages: Vec::new(), fonts: Vec::new(), y: 0.0 };
         p.new_page();
         p
     }
@@ -198,12 +206,17 @@ impl Pages {
     /// Draw `op` with its row's top at `row_top` (down from the page top).
     fn draw(&mut self, op: &Op, row_top: f64, dx: f64) {
         let height = self.height;
+        if let Op::Text { font, .. } = op
+            && !self.fonts.contains(font)
+        {
+            self.fonts.push(*font);
+        }
         let Some((back, front)) = self.pages.last_mut() else { return };
         match op {
-            Op::Text { face, size, color, x, y, text } => {
+            Op::Text { font, size, color, x, y, text } => {
                 let [r, g, b] = color.map(f64::from);
                 front.extend(
-                    format!("BT /{} {size:.2} Tf {r:.3} {g:.3} {b:.3} rg {:.2} {:.2} Td ", face.resource(), dx + x, height - row_top - y)
+                    format!("BT /F{} {size:.2} Tf {r:.3} {g:.3} {b:.3} rg {:.2} {:.2} Td ", *font as usize, dx + x, height - row_top - y)
                         .into_bytes(),
                 );
                 front.extend(literal(&win_ansi(text)));
@@ -223,6 +236,15 @@ impl Pages {
         }
         self.y += row.h;
     }
+    /// Place rows that may run onto a new page, one at a time.
+    fn flow(&mut self, rows: &[Row], dx: f64) {
+        for row in rows {
+            if row.h > self.room() && !self.at_top() {
+                self.new_page();
+            }
+            self.place(row, dx);
+        }
+    }
 }
 
 /// `color`, finite and within 0–1, or `fallback`.
@@ -231,11 +253,6 @@ fn clean(color: Option<[f32; 3]>, fallback: [f32; 3]) -> [f32; 3] {
         Some(c) if c.iter().all(|v| v.is_finite()) => c.map(|v| v.clamp(0.0, 1.0)),
         _ => fallback,
     }
-}
-
-/// `c` mixed towards white, keeping `keep` of it.
-fn tint(c: [f32; 3], keep: f32) -> [f32; 3] {
-    c.map(|v| 1.0 - (1.0 - v) * keep)
 }
 
 /// Each character Helvetica can't draw as `[U+XXXX]`, counting them.
@@ -252,83 +269,150 @@ fn escape(s: &str, count: &mut usize) -> String {
     out
 }
 
-fn wrapped(face: Face, size: f64, width: f64, text: &str) -> Vec<String> {
-    wrap_with(&text.replace("\r\n", "\n").replace('\t', "    "), size, width.max(size * 2.0), |s, z| face.width(s, z))
+/// A band of rows with a background and a left border (a quote, a reply): `rows` are laid out
+/// inside the part's padding and border, and the band starts `x` points in, `w` wide.
+fn banded(part: &PartStyle, comment: [f32; 3], x: f64, w: f64, rows: Vec<Row>) -> Vec<Row> {
+    let fill = part.background.resolve(comment);
+    let (bw, bc) = (part.border_left.0, part.border_left.1.resolve(comment));
+    let [pt, _, pb, _] = part.padding;
+    let mut out = Vec::with_capacity(rows.len() + 2);
+    let band = |mut row: Row, out: &mut Vec<Row>| {
+        let h = row.h;
+        let mut under = Vec::new();
+        if let Some(color) = fill {
+            under.push(Op::Fill { color, x, y: 0.0, w, h });
+        }
+        if let Some(color) = bc.filter(|_| bw > 0.0) {
+            under.push(Op::Fill { color, x, y: 0.0, w: bw, h });
+        }
+        under.append(&mut row.ops);
+        row.ops = under;
+        out.push(row);
+    };
+    if pt > 0.0 {
+        band(Row::gap(pt), &mut out);
+    }
+    for r in rows {
+        band(r, &mut out);
+    }
+    if pb > 0.0 {
+        band(Row::gap(pb), &mut out);
+    }
+    out
 }
 
 /// The rows of one entry's card, inside its padding, `inner` points wide.
-fn entry_rows(e: &Entry, inner: f64) -> Vec<Row> {
+fn entry_rows(e: &Entry, inner: f64, style: &ReportStyle) -> Vec<Row> {
+    let comment = clean(e.color, NO_COLOR);
+    let (number, kind, meta) = (style.part(Part::Number), style.part(Part::Kind), style.part(Part::Meta));
+    let (ni, ki, mi) = (Ink::new(number, comment), Ink::new(kind, comment), Ink::new(meta, comment));
     let mut rows = Vec::new();
-    // Header: "#2" in grey, the kind in bold, then the details in grey; the details move to lines
-    // of their own when the header would run past the card.
-    let (num, kind_size, meta_size, lead) = (9.5, 10.5, 9.5, 16.0);
-    let number = e.number.map(|n| format!("#{n}")).unwrap_or_default();
+    // Header: the number, the kind and then the details on one baseline; the details move to
+    // lines of their own when the header would run past the card.
+    let lead = [(number, !number.hidden), (kind, !kind.hidden), (meta, !meta.hidden)]
+        .iter()
+        .filter(|(_, shown)| *shown)
+        .map(|(p, _)| p.leading())
+        .fold(0.0, f64::max);
+    let big = [number, kind, meta].iter().filter(|p| !p.hidden).map(|p| p.size).fold(0.0, f64::max);
+    let base = lead / 2.0 + big * 0.35;
+    let mut header = Row { h: lead, ops: Vec::new() };
     let mut x = 0.0;
-    let mut header = Row::text(Face::Bold, num, MUTED, 0.0, &number, lead);
-    if !number.is_empty() {
-        x += Face::Bold.width(&number, num) + 6.0;
-    }
-    let base = lead / 2.0 + kind_size * 0.35;
-    header.ops.push(Op::Text { face: Face::Bold, size: kind_size, color: INK, x, y: base, text: e.kind.clone() });
-    x += Face::Bold.width(&e.kind, kind_size) + 8.0;
-    let meta_fits = x + Face::Regular.width(&e.meta, meta_size) <= inner;
-    if meta_fits && !e.meta.is_empty() {
-        header.ops.push(Op::Text { face: Face::Regular, size: meta_size, color: MUTED, x, y: base, text: e.meta.clone() });
-    }
-    rows.push(header);
-    if !meta_fits {
-        for l in wrapped(Face::Regular, meta_size, inner, &e.meta) {
-            rows.push(Row::text(Face::Regular, meta_size, MUTED, 0.0, &l, 13.0));
+    let put = |ink: &Ink, text: &str, header: &mut Row, x: &mut f64, gap: f64| {
+        if ink.part.hidden || text.is_empty() {
+            return;
         }
+        let t = ink.text(text);
+        let mut op = ink.op(*x, &t, lead);
+        if let Op::Text { y, .. } = &mut op {
+            *y = base;
+        }
+        header.ops.push(op);
+        *x += ink.width(&t) + gap;
+    };
+    let number_text = e.number.map(|n| format!("#{n}")).unwrap_or_default();
+    put(&ni, &number_text, &mut header, &mut x, 6.0);
+    put(&ki, &e.kind, &mut header, &mut x, 8.0);
+    let meta_fits = x + mi.width(&mi.text(&e.meta)) <= inner;
+    if meta_fits {
+        put(&mi, &e.meta, &mut header, &mut x, 0.0);
     }
-    let color = clean(e.color, [1.0, 0.85, 0.2]);
-    if let Some(q) = e.quote.as_deref().filter(|q| !q.is_empty()) {
-        rows.push(Row::gap(4.0));
-        let (size, lead, pad) = (10.5, 15.0, 6.0);
-        let lines = wrapped(Face::Oblique, size, inner - 2.0 * pad, &format!("\u{201c}{q}\u{201d}"));
-        let n = lines.len();
-        for (i, l) in lines.into_iter().enumerate() {
-            let mut row = Row::text(Face::Oblique, size, BODY, pad, &l, lead);
-            // The tint runs under the whole quote, with a little air above and below it.
-            let (top, extra) = (if i == 0 { -2.0 } else { 0.0 }, if i + 1 == n { 2.0 } else { 0.0 });
-            row.ops.insert(0, Op::Fill { color: tint(color, 0.25), x: 0.0, y: top, w: inner, h: lead - top + extra });
-            rows.push(row);
-        }
-        rows.push(Row::gap(2.0));
+    if !header.ops.is_empty() {
+        rows.push(header);
     }
-    if let Some(b) = e.body.as_deref().filter(|b| !b.is_empty()) {
-        rows.push(Row::gap(4.0));
-        for l in wrapped(Face::Regular, 10.5, inner, b) {
-            rows.push(Row::text(Face::Regular, 10.5, INK, 0.0, &l, 14.5));
-        }
+    if !meta_fits && !meta.hidden {
+        rows.extend(mi.rows(0.0, inner, &e.meta));
     }
-    for r in &e.replies {
-        let indent = 14.0 * r.depth.saturating_add(1).min(MAX_DEPTH) as f64;
-        let width = inner - indent;
-        let mut reply = vec![Row::gap(6.0)];
-        let mut head = Row::text(Face::Bold, 9.5, INK, indent + 8.0, &r.author, 14.0);
-        let meta_x = indent + 8.0 + Face::Bold.width(&r.author, 9.5) + 6.0;
-        head.ops.push(Op::Text { face: Face::Regular, size: 9.0, color: MUTED, x: meta_x, y: 7.0 + 9.0 * 0.35, text: r.meta.clone() });
-        reply.push(head);
-        for l in wrapped(Face::Regular, 10.0, width - 8.0, &r.body) {
-            reply.push(Row::text(Face::Regular, 10.0, BODY, indent + 8.0, &l, 13.5));
+    let quote = style.part(Part::Quote);
+    if let Some(q) = e.quote.as_deref().filter(|q| !q.is_empty() && !quote.hidden) {
+        let qi = Ink::new(quote, comment);
+        let [_, mr, _, ml] = quote.margin;
+        let (w, bw) = ((inner - ml - mr).max(36.0), quote.border_left.0.max(0.0));
+        let text_x = ml + bw + quote.padding[3];
+        let text_w = w - bw - quote.padding[3] - quote.padding[1];
+        rows.push(Row::gap(quote.margin[0]));
+        rows.extend(banded(quote, comment, ml, w, qi.rows(text_x, text_w, &format!("\u{201c}{q}\u{201d}"))));
+        rows.push(Row::gap(quote.margin[2]));
+    }
+    let body = style.part(Part::Body);
+    if let Some(b) = e.body.as_deref().filter(|b| !b.is_empty() && !body.hidden) {
+        rows.push(Row::gap(body.margin[0]));
+        rows.extend(Ink::new(body, comment).rows(body.margin[3], inner - body.margin[3] - body.margin[1], b));
+        rows.push(Row::gap(body.margin[2]));
+    }
+    let reply = style.part(Part::Reply);
+    if !reply.hidden {
+        let (ra, rm, rb) = (style.part(Part::ReplyAuthor), style.part(Part::ReplyMeta), style.part(Part::ReplyBody));
+        let (ai, mi, bi) = (Ink::new(ra, comment), Ink::new(rm, comment), Ink::new(rb, comment));
+        for r in &e.replies {
+            let indent = (reply.margin[3] * r.depth.saturating_add(1).min(MAX_DEPTH) as f64).clamp(0.0, inner / 2.0);
+            let w = (inner - indent - reply.margin[1]).max(36.0);
+            let text_x = indent + reply.border_left.0.max(0.0) + reply.padding[3];
+            let text_w = (w - reply.border_left.0.max(0.0) - reply.padding[3] - reply.padding[1]).max(36.0);
+            let mut inside = Vec::new();
+            let lead = if ra.hidden { rm.leading() } else { ra.leading().max(if rm.hidden { 0.0 } else { rm.leading() }) };
+            let mut head = Row { h: lead, ops: Vec::new() };
+            let mut x = text_x;
+            let base = lead / 2.0 + ra.size.max(rm.size) * 0.35;
+            for (ink, text, gap) in [(&ai, r.author.as_str(), 6.0), (&mi, r.meta.as_str(), 0.0)] {
+                if ink.part.hidden || text.is_empty() {
+                    continue;
+                }
+                let t = ink.text(text);
+                let mut op = ink.op(x, &t, lead);
+                if let Op::Text { y, .. } = &mut op {
+                    *y = base;
+                }
+                head.ops.push(op);
+                x += ink.width(&t) + gap;
+            }
+            if !head.ops.is_empty() {
+                inside.push(head);
+            }
+            if !rb.hidden {
+                inside.extend(bi.rows(text_x, text_w, &r.body));
+            }
+            rows.push(Row::gap(reply.margin[0]));
+            // The band starts at the indent; its rows are already placed relative to the card.
+            let mut band = banded(reply, comment, indent, w, inside);
+            rows.append(&mut band);
+            rows.push(Row::gap(reply.margin[2]));
         }
-        // A thread line down the reply's left edge.
-        for row in reply.iter_mut().skip(1) {
-            let h = row.h;
-            row.ops.insert(0, Op::Fill { color: THREAD, x: indent, y: 0.0, w: 1.5, h });
-        }
-        rows.extend(reply);
     }
     rows
 }
 
-/// Lay out `r` on pages of `page` size. Returns the document and how many characters were written
-/// as `[U+XXXX]`.
-pub fn report(r: &Report, page: (f64, f64)) -> Result<(Document, usize), CreateError> {
-    let (w, h) = page;
+/// Lay out `r` on pages of `page` size (unless the style's `@page` sets one) in `style`.
+/// Returns the document and how many characters were written as `[U+XXXX]`.
+pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Document, usize), CreateError> {
+    let (w, h) = style.page_size.unwrap_or(page);
     if !(w.is_finite() && h.is_finite() && (144.0..=crate::MAX_SIDE).contains(&w) && (144.0..=crate::MAX_SIDE).contains(&h)) {
         return Err(CreateError::Invalid(format!("a report page of {w} × {h} points")));
+    }
+    let [mt, mr, mb, ml] = style.margin.map(|m| if m.is_finite() { m.max(0.0) } else { 54.0 });
+    let width = w - ml - mr;
+    if width < 108.0 || h - mt - mb < 108.0 {
+        return Err(CreateError::Invalid("the page margins leave less than 1½ inches for the report".into()));
     }
     // Escape everything first, so the subtitle can say whether anything was.
     let mut escaped = 0usize;
@@ -357,63 +441,74 @@ pub fn report(r: &Report, page: (f64, f64)) -> Result<(Document, usize), CreateE
         subtitle.push(ESCAPED_NOTE.to_string());
     }
 
-    let margin = 54.0;
-    let width = w - 2.0 * margin;
-    let mut p = Pages::new(h);
-    for l in wrapped(Face::Bold, 20.0, width, &title) {
-        p.place(&Row::text(Face::Bold, 20.0, INK, 0.0, &l, 26.0), margin);
+    let none = NO_COLOR;
+    let rule = |p: &PartStyle, side: (f64, &crate::report_style::Paint)| (side.0, side.1.resolve(none).filter(|_| !p.hidden));
+    let mut p = Pages::new(h, mt, mb);
+    let (title_s, sub_s, header_s) = (style.part(Part::Title), style.part(Part::Subtitle), style.part(Part::Header));
+    if !title_s.hidden {
+        p.flow(&Ink::new(title_s, none).rows(0.0, width, &title), ml);
     }
-    p.place(&Row::gap(2.0), margin);
-    for s in &subtitle {
-        for l in wrapped(Face::Regular, 10.0, width, s) {
-            p.place(&Row::text(Face::Regular, 10.0, MUTED, 0.0, &l, 14.0), margin);
+    if !sub_s.hidden {
+        for s in &subtitle {
+            p.flow(&Ink::new(sub_s, none).rows(0.0, width, s), ml);
         }
     }
-    p.place(&Row { h: 14.0, ops: vec![Op::Fill { color: RULE, x: 0.0, y: 12.0, w: width, h: 0.75 }] }, margin);
+    if !header_s.hidden {
+        let (bw, bc) = rule(header_s, (header_s.border_bottom.0, &header_s.border_bottom.1));
+        p.place(&Row::rule(header_s.padding[2], bw, header_s.margin[2], bc, 0.0, width), ml);
+    }
 
-    let (stripe, pad_l, pad_r, pad_v) = (3.0, 14.0, 12.0, 10.0);
-    let inner = width - stripe - pad_l - pad_r;
+    let card = style.part(Part::Card);
+    let (stripe, [pad_t, pad_r, pad_b, pad_l]) = (card.border_left.0.max(0.0), card.padding);
+    let inner = (width - stripe - pad_l - pad_r).max(72.0);
     for (i, b) in blocks.iter().enumerate() {
         match b {
             Block::Heading(text) => {
-                let lines = wrapped(Face::Bold, 12.5, width, text);
-                let needed = 14.0 + lines.len() as f64 * 18.0 + 8.0 + 60.0;
+                let hs = style.part(Part::Heading);
+                if hs.hidden {
+                    continue;
+                }
+                let mut rows = Ink::new(hs, none).rows(0.0, width, text);
+                let (bw, bc) = rule(hs, (hs.border_bottom.0, &hs.border_bottom.1));
+                rows.push(Row::rule(hs.padding[2], bw, hs.margin[2], bc, 0.0, width));
+                // A heading stays with the start of what follows it.
+                let needed = hs.margin[0] + rows.iter().map(|r| r.h).sum::<f64>() + 60.0;
                 if p.room() < needed && !p.at_top() {
                     p.new_page();
                 }
                 if !p.at_top() && i > 0 {
-                    p.place(&Row::gap(10.0), margin);
+                    p.place(&Row::gap(hs.margin[0]), ml);
                 }
-                for l in lines {
-                    p.place(&Row::text(Face::Bold, 12.5, INK, 0.0, &l, 18.0), margin);
-                }
-                p.place(&Row { h: 9.0, ops: vec![Op::Fill { color: RULE, x: 0.0, y: 2.0, w: width, h: 0.75 }] }, margin);
+                p.flow(&rows, ml);
             }
             Block::Note(text) => {
-                for l in wrapped(Face::Oblique, 10.5, width, text) {
-                    if p.room() < 15.0 {
-                        p.new_page();
-                    }
-                    p.place(&Row::text(Face::Oblique, 10.5, MUTED, 0.0, &l, 15.0), margin);
+                let ns = style.part(Part::Note);
+                if !ns.hidden {
+                    p.flow(&Ink::new(ns, none).rows(0.0, width, text), ml);
                 }
             }
             Block::Entry(e) => {
-                let rows = entry_rows(e, inner);
-                let total: f64 = rows.iter().map(|r| r.h).sum::<f64>() + 2.0 * pad_v;
+                if card.hidden {
+                    continue;
+                }
+                let comment = clean(e.color, NO_COLOR);
+                let rows = entry_rows(e, inner, style);
+                let total: f64 = rows.iter().map(|r| r.h).sum::<f64>() + pad_t + pad_b;
                 // A card that fits on a page is not split; a longer one is, row by row.
                 if total > p.room() && total <= p.body_height() {
                     p.new_page();
                 }
-                let stripe_color = clean(e.color, STRIPE);
+                let (fill, stripe_color) = (card.background.resolve(comment), card.border_left.1.resolve(comment));
+                let (bottom_w, bottom_c) = (card.border_bottom.0.max(0.0), card.border_bottom.1.resolve(comment));
                 let mut rows = rows.into_iter().peekable();
-                while rows.peek().is_some() {
-                    if p.room() < pad_v + 20.0 + pad_v {
+                loop {
+                    if p.room() < pad_t + 20.0 + pad_b && !p.at_top() {
                         p.new_page();
                     }
                     // One segment of the card: as many rows as fit on this page (at least one).
-                    // Its background goes down first, so the quote's tint shows on top of it.
+                    // Its background goes down first, so tints inside show on top of it.
                     let mut segment = Vec::new();
-                    let mut used = 2.0 * pad_v;
+                    let mut used = pad_t + pad_b;
                     while let Some(row) = rows.peek() {
                         if !segment.is_empty() && used + row.h > p.room() {
                             break;
@@ -421,50 +516,75 @@ pub fn report(r: &Report, page: (f64, f64)) -> Result<(Document, usize), CreateE
                         used += row.h;
                         segment.push(rows.next().unwrap_or_default());
                     }
+                    let last = rows.peek().is_none();
                     let top = p.y;
-                    p.draw(&Op::Fill { color: CARD, x: 0.0, y: 0.0, w: width, h: used }, top, margin);
-                    p.draw(&Op::Fill { color: stripe_color, x: 0.0, y: 0.0, w: stripe, h: used }, top, margin);
-                    p.y += pad_v;
+                    if let Some(color) = fill {
+                        p.draw(&Op::Fill { color, x: 0.0, y: 0.0, w: width, h: used }, top, ml);
+                    }
+                    if let Some(color) = stripe_color.filter(|_| stripe > 0.0) {
+                        p.draw(&Op::Fill { color, x: 0.0, y: 0.0, w: stripe, h: used }, top, ml);
+                    }
+                    if let Some(color) = bottom_c.filter(|_| last && bottom_w > 0.0) {
+                        p.draw(&Op::Fill { color, x: 0.0, y: used - bottom_w, w: width, h: bottom_w }, top, ml);
+                    }
+                    p.y += pad_t;
                     for row in &segment {
-                        p.place(row, margin + stripe + pad_l);
+                        p.place(row, ml + stripe + pad_l);
                     }
-                    p.y += pad_v;
-                    if rows.peek().is_some() {
-                        p.new_page();
+                    p.y += pad_b;
+                    if last {
+                        break;
                     }
+                    p.new_page();
                 }
-                p.place(&Row::gap(10.0), margin);
+                p.place(&Row::gap(card.margin[2]), ml);
             }
         }
     }
 
+    // The footer: the report's name on the left, the page number on the right, a rule above.
+    let fs = style.part(Part::Footer);
+    let fi = Ink::new(fs, none);
+    let (rule_w, rule_c) = rule(fs, (fs.border_top.0, &fs.border_top.1));
+    let count = p.pages.len();
+    let baseline = (mb * 0.53).max(fs.size);
+    let mut footers = Vec::with_capacity(count);
+    for n in 0..count {
+        let label = fi.text(&format!("Page {} of {count}", n + 1));
+        let right = w - mr - fi.width(&label);
+        let left = fi.lines((right - ml - 12.0).max(36.0), &footer).into_iter().next().unwrap_or_default();
+        footers.push((left, label, right));
+    }
+    if !fs.hidden && !p.fonts.contains(&fs.font()) {
+        p.fonts.push(fs.font());
+    }
+
     let mut doc = Document::new_empty();
     let mut fonts = Dict::new();
-    for face in [Face::Regular, Face::Bold, Face::Oblique] {
+    for face in &p.fonts {
         let mut font = Dict::new();
         font.set(b"Type".to_vec(), Object::name("Font"));
         font.set(b"Subtype".to_vec(), Object::name("Type1"));
-        font.set(b"BaseFont".to_vec(), Object::name(face.std14().base_font()));
+        font.set(b"BaseFont".to_vec(), Object::name(face.base_font()));
         font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
         let r = doc.add(font);
-        fonts.set(face.resource().as_bytes().to_vec(), Object::Ref(r));
+        fonts.set(format!("F{}", *face as usize).into_bytes(), Object::Ref(r));
     }
-    let count = p.pages.len();
-    let footer_size = 8.0;
-    for (n, (back, front)) in p.pages.into_iter().enumerate() {
+    for ((back, front), (left, label, right)) in p.pages.into_iter().zip(footers) {
         let mut c = back;
         c.extend(front);
-        let [r, g, b] = MUTED.map(f64::from);
-        let label = format!("Page {} of {count}", n + 1);
-        let right = w - margin - Face::Regular.width(&label, footer_size);
-        let footer_text = wrapped(Face::Regular, footer_size, (right - margin - 12.0).max(36.0), &footer).into_iter().next().unwrap_or_default();
-        for (x, text) in [(margin, footer_text.as_str()), (right, label.as_str())] {
-            c.extend(format!("BT /F1 {footer_size} Tf {r:.3} {g:.3} {b:.3} rg {x:.2} 32 Td ").into_bytes());
-            c.extend(literal(&win_ansi(text)));
-            c.extend_from_slice(b" Tj ET\n");
+        if !fs.hidden {
+            let [r, g, b] = fi.color.map(f64::from);
+            let font = fs.font() as usize;
+            for (x, text) in [(ml, left.as_str()), (right, label.as_str())] {
+                c.extend(format!("BT /F{font} {:.2} Tf {r:.3} {g:.3} {b:.3} rg {x:.2} {baseline:.2} Td ", fs.size).into_bytes());
+                c.extend(literal(&win_ansi(text)));
+                c.extend_from_slice(b" Tj ET\n");
+            }
+            if let Some([r, g, b]) = rule_c.filter(|_| rule_w > 0.0).map(|c| c.map(f64::from)) {
+                c.extend(format!("{r:.3} {g:.3} {b:.3} rg {ml:.2} {:.2} {width:.2} {rule_w:.2} re f\n", baseline + fs.size + 4.0).into_bytes());
+            }
         }
-        let [r, g, b] = RULE.map(f64::from);
-        c.extend(format!("{r:.3} {g:.3} {b:.3} rg {margin:.2} 44 {width:.2} 0.6 re f\n").into_bytes());
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(fonts.clone()));
         add_page(&mut doc, w, h, res, Some(c))?;

@@ -2456,9 +2456,20 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
-	Include:	Включити:
-	All comments ({n})	Усі коментарі ({n})
-	Only the comments currently showing ({n})	Лише коментарі, показані зараз ({n})
+	Include	Включити
 	Comment types	Типи коментарів
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Також діють пошук на панелі «Коментарі» та її фільтри за автором, станом, кольором і позначкою.
 	Quote the text that highlights, underlines and strikethroughs mark	Цитувати текст, позначений виділеннями, підкресленнями й закресленнями
+	Theme	Тема
+	Modern	Сучасна
+	Simple	Проста
+	Classic	Класична
+	Compact	Компактна
+	Ink saver	Економія чорнила
+	{n} parts of the stylesheet can't be used	Частини таблиці стилів, які не можна використати: {n}
+	{name} is too large for a stylesheet (at most 64 KB).	{name} завеликий для таблиці стилів (не більше 64 КБ).
+	{name} is not a UTF-8 text file.	{name} не є текстовим файлом у UTF-8.
+	Only comments the Comments panel's filter shows	Лише коментарі, які показує фільтр панелі «Коментарі»
+	Load CSS…	Завантажити CSS…
+	Export CSS…	Експортувати CSS…
+	Create Summary	Створити зведення
+	{listed} of {total} comments	Коментарі: {listed} із {total}

@@ -2440,9 +2440,20 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
-	Include:	Συμπερίληψη:
-	All comments ({n})	Όλα τα σχόλια ({n})
-	Only the comments currently showing ({n})	Μόνο τα σχόλια που εμφανίζονται τώρα ({n})
+	Include	Συμπερίληψη
 	Comment types	Τύποι σχολίων
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Ισχύουν επίσης η αναζήτηση του πίνακα Σχόλια και τα φίλτρα του κατά συντάκτη, κατάσταση, χρώμα και σημάδι ελέγχου.
 	Quote the text that highlights, underlines and strikethroughs mark	Παράθεση του κειμένου που επισημαίνουν οι επισημάνσεις, οι υπογραμμίσεις και οι διαγραφές
+	Theme	Θέμα
+	Modern	Σύγχρονο
+	Simple	Απλό
+	Classic	Κλασικό
+	Compact	Συμπαγές
+	Ink saver	Εξοικονόμηση μελανιού
+	{n} parts of the stylesheet can't be used	{n} τμήματα του φύλλου στυλ δεν μπορούν να χρησιμοποιηθούν
+	{name} is too large for a stylesheet (at most 64 KB).	Το {name} είναι πολύ μεγάλο για φύλλο στυλ (έως 64 KB).
+	{name} is not a UTF-8 text file.	Το {name} δεν είναι αρχείο κειμένου UTF-8.
+	Only comments the Comments panel's filter shows	Μόνο τα σχόλια που δείχνει το φίλτρο του πίνακα Σχόλια
+	Load CSS…	Φόρτωση CSS…
+	Export CSS…	Εξαγωγή CSS…
+	Create Summary	Δημιουργία σύνοψης
+	{listed} of {total} comments	{listed} από {total} σχόλια

@@ -2434,9 +2434,20 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
-	Include:	Inclure :
-	All comments ({n})	Tous les commentaires ({n})
-	Only the comments currently showing ({n})	Seulement les commentaires affichés ({n})
+	Include	Inclure
 	Comment types	Types de commentaire
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	La recherche du panneau Commentaires et ses filtres par auteur, état, couleur et coche s’appliquent aussi.
 	Quote the text that highlights, underlines and strikethroughs mark	Citer le texte marqué par les surlignages, soulignements et barrés
+	Theme	Thème
+	Modern	Moderne
+	Simple	Simple
+	Classic	Classique
+	Compact	Compact
+	Ink saver	Économie d’encre
+	{n} parts of the stylesheet can't be used	{n} parties de la feuille de style ne peuvent pas être utilisées
+	{name} is too large for a stylesheet (at most 64 KB).	{name} est trop volumineux pour une feuille de style (64 Ko au maximum).
+	{name} is not a UTF-8 text file.	{name} n’est pas un fichier texte UTF-8.
+	Only comments the Comments panel's filter shows	Seulement les commentaires qu’affiche le filtre du panneau Commentaires
+	Load CSS…	Charger un CSS…
+	Export CSS…	Exporter le CSS…
+	Create Summary	Créer le résumé
+	{listed} of {total} comments	{listed} commentaires sur {total}

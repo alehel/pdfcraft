@@ -1,0 +1,24 @@
+/* Compact: Modern, smaller and tighter, for long reviews. */
+
+@page { margin: 36pt 36pt 48pt 36pt; }
+
+.title { font-family: Helvetica, sans-serif; font-size: 15pt; font-weight: bold; color: #1c1f26; line-height: 19pt; }
+.subtitle { font-size: 8.5pt; color: #6b7380; line-height: 11pt; }
+.header { padding-bottom: 6pt; border-bottom: 0.6pt solid #d6d9e0; margin-bottom: 2pt; }
+
+.heading { font-size: 10pt; font-weight: bold; color: #1c1f26; line-height: 14pt; margin-top: 6pt; padding-bottom: 1pt; border-bottom: 0.6pt solid #d6d9e0; margin-bottom: 4pt; }
+.note { font-size: 9pt; font-style: italic; color: #6b7380; line-height: 12pt; }
+
+.card { background-color: #f7f8fa; border-left: 2pt solid var(--comment); padding: 5pt 8pt 5pt 9pt; margin-bottom: 5pt; }
+.number { font-size: 8pt; font-weight: bold; color: #6b7380; }
+.kind { font-size: 8.5pt; font-weight: bold; color: #1c1f26; line-height: 12pt; }
+.meta { font-size: 8pt; color: #6b7380; line-height: 11pt; }
+.quote { font-size: 8.5pt; font-style: italic; color: #333842; line-height: 11.5pt; background-color: color-mix(in srgb, var(--comment) 25%, white); padding: 1pt 4pt; margin-top: 2pt; margin-bottom: 1pt; }
+.body { font-size: 8.5pt; color: #1c1f26; line-height: 11.5pt; margin-top: 2pt; }
+
+.reply { margin: 3pt 0 0 10pt; padding-left: 6pt; border-left: 1pt solid #ccd1db; }
+.reply-author { font-size: 8pt; font-weight: bold; color: #1c1f26; line-height: 11pt; }
+.reply-meta { font-size: 7.5pt; color: #6b7380; }
+.reply-body { font-size: 8pt; color: #333842; line-height: 11pt; }
+
+.footer { font-size: 7pt; color: #6b7380; border-top: 0.5pt solid #d6d9e0; }

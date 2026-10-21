@@ -2646,9 +2646,20 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
-	Include:	Includi:
-	All comments ({n})	Tutti i commenti ({n})
-	Only the comments currently showing ({n})	Solo i commenti visualizzati ora ({n})
+	Include	Includi
 	Comment types	Tipi di commento
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Valgono anche la ricerca del pannello Commenti e i suoi filtri per autore, stato, colore e segno di spunta.
 	Quote the text that highlights, underlines and strikethroughs mark	Cita il testo segnato da evidenziazioni, sottolineature e barrature
+	Theme	Tema
+	Modern	Moderno
+	Simple	Semplice
+	Classic	Classico
+	Compact	Compatto
+	Ink saver	Risparmio inchiostro
+	{n} parts of the stylesheet can't be used	{n} parti del foglio di stile non possono essere usate
+	{name} is too large for a stylesheet (at most 64 KB).	{name} è troppo grande per un foglio di stile (al massimo 64 KB).
+	{name} is not a UTF-8 text file.	{name} non è un file di testo UTF-8.
+	Only comments the Comments panel's filter shows	Solo i commenti mostrati dal filtro del pannello Commenti
+	Load CSS…	Carica CSS…
+	Export CSS…	Esporta CSS…
+	Create Summary	Crea riepilogo
+	{listed} of {total} comments	{listed} di {total} commenti

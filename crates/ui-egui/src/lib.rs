@@ -35,6 +35,7 @@ pub mod canvas;
 mod chrome;
 mod combine_grid;
 mod image_pick;
+pub mod summary_ui;
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
@@ -645,13 +646,8 @@ pub struct PdfCraftApp {
     pub split_draft: SplitDraft,
     pub extract_draft: ExtractDraft,
     pub rotate_draft: RotateDraft,
-    /// Summarize Comments: sort order.
-    pub summary_sort: pdfcraft_engine::SummarySort,
-    /// Summarize Comments: list only the comments the Comments panel shows (its search and
-    /// filter), not every comment.
-    pub summary_only_shown: bool,
-    /// Summarize Comments: quote the text highlights, underlines and strikethroughs mark.
-    pub summary_marked_text: bool,
+    /// Summarize Comments: the dialog's choices.
+    pub summary: summary_ui::SummaryDraft,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
     /// Digital ID files the user has created or added.
@@ -987,9 +983,7 @@ impl PdfCraftApp {
             split_draft: SplitDraft::default(),
             extract_draft: ExtractDraft::default(),
             rotate_draft: RotateDraft::default(),
-            summary_sort: Default::default(),
-            summary_only_shown: false,
-            summary_marked_text: true,
+            summary: summary_ui::SummaryDraft::new(),
             sign_draft: None,
             digital_ids: Vec::new(),
             sig_expanded: Vec::new(),
@@ -2316,6 +2310,11 @@ impl PdfCraftApp {
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        // The stylesheet's text is kept, not its path: it works on the web too, and after the
+        // file moves.
+        v["summary_theme"] = serde_json::Value::String(self.summary.theme.clone());
+        v["summary_stylesheet"] =
+            self.summary.stylesheet.as_ref().map_or(serde_json::Value::Null, |(name, css)| serde_json::json!({ "name": name, "css": css }));
         v.to_string()
     }
 
@@ -2393,6 +2392,15 @@ impl PdfCraftApp {
         }
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
+        }
+        if let (Some(name), Some(css)) = (v["summary_stylesheet"]["name"].as_str(), v["summary_stylesheet"]["css"].as_str()) {
+            self.set_summary_stylesheet(name.to_string(), css.to_string());
+        }
+        // The loaded stylesheet's entry only when there is one.
+        if let Some(theme) = v["summary_theme"].as_str().filter(|t| {
+            pdfcraft_engine::SUMMARY_THEMES.iter().any(|(id, _, _)| id == t) || (*t == summary_ui::CUSTOM && self.summary.stylesheet.is_some())
+        }) {
+            self.summary.theme = theme.to_string();
         }
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();

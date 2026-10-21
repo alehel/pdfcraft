@@ -2434,9 +2434,20 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
-	Include:	含める:
-	All comments ({n})	すべての注釈 ({n})
-	Only the comments currently showing ({n})	現在表示されている注釈のみ ({n})
+	Include	含める
 	Comment types	注釈の種類
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	注釈パネルの検索と、作成者・ステータス・色・チェックマークのフィルターも適用されます。
 	Quote the text that highlights, underlines and strikethroughs mark	ハイライト、下線、取り消し線で示されたテキストを引用する
+	Theme	テーマ
+	Modern	モダン
+	Simple	シンプル
+	Classic	クラシック
+	Compact	コンパクト
+	Ink saver	インク節約
+	{n} parts of the stylesheet can't be used	スタイルシートのうち {n} 箇所は使用できません
+	{name} is too large for a stylesheet (at most 64 KB).	{name} はスタイルシートとしては大きすぎます (最大 64 KB)。
+	{name} is not a UTF-8 text file.	{name} は UTF-8 のテキストファイルではありません。
+	Only comments the Comments panel's filter shows	注釈パネルのフィルターで表示されている注釈のみ
+	Load CSS…	CSS を読み込む…
+	Export CSS…	CSS を書き出す…
+	Create Summary	概要を作成
+	{listed} of {total} comments	{total} 件中 {listed} 件の注釈

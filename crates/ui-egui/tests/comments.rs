@@ -939,7 +939,7 @@ fn summary_of_only_the_highlights_quotes_their_text() {
         .text
         .map(|t| t.plain_text())
         .unwrap_or_default();
-    assert!(text.contains("Subject: Highlight") && text.contains("Marked text: \u{201c}quick\u{201d}"), "{text}");
+    assert!(text.contains("Highlight") && text.contains("\u{201c}quick\u{201d}"), "{text}");
     assert!(!text.contains("Rectangle") && !text.contains("BOX_NOTE"), "{text}");
 }
 

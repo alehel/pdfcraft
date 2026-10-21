@@ -4271,8 +4271,8 @@ impl Session {
         self.write_new(&pdfcraft_create::from_text(title, text, pdfcraft_create::LETTER, 11.0)?)
     }
 
-    /// [`Self::create_from_text`] for a report PdfCraft writes from documents (comment summaries,
-    /// compare reports), which can quote any language: characters Helvetica can't draw are written
+    /// [`Self::create_from_text`] for a plain-text report PdfCraft writes from documents (compare
+    /// reports; comment summaries are laid out by [`pdfcraft_create::report`]), which can quote any language: characters Helvetica can't draw are written
     /// as `[U+XXXX]`, and the report's first line says so, rather than the report being refused.
     fn create_report(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         let (doc, _escaped) = pdfcraft_create::from_text_escaped(title, text, pdfcraft_create::LETTER, 11.0)?;
@@ -4824,8 +4824,9 @@ impl Session {
     pub fn summarize_comments(&self, id: DocId, opts: &SummaryOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let marked = if opts.marked_text { self.marked_texts(id, opts) } else { Default::default() };
-        let text = comment_summary(&doc.name, &doc.info.annotations, opts, &marked);
-        self.create_report(&format!("Summary of Comments on {}", doc.name), &text)
+        let report = comment_report(&doc.name, &doc.info.annotations, opts, &marked);
+        let (created, _escaped) = pdfcraft_create::report(&report, pdfcraft_create::LETTER)?;
+        self.write_new(&created)
     }
 
     /// The page text under each text-markup comment `opts` includes, keyed by (page, index).
@@ -5150,86 +5151,117 @@ pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
     }
 }
 
-/// The text of a comment summary: one block per comment `opts` includes (replies indented under
-/// it), with a "Page N" heading when sorted by page. Checkmarks and status replies are left out,
-/// as are pop-ups; the number is the comment's position on its page among all its comments, so
-/// it stays the same whatever the summary leaves out. `marked` holds the text markup comments'
-/// marked text by (page, index).
-pub fn comment_summary(
+/// A comment summary as a formatted report: one card per comment `opts` includes, with what it
+/// marks and its replies, grouped under the sort's headings (page, author or type; none by date).
+/// Checkmarks and status replies are left out, as are pop-ups. The number is the comment's
+/// position on its page among all its comments, so it stays the same whatever the summary leaves
+/// out. `marked` holds the text markup comments' marked text by (page, index).
+pub fn comment_report(
     name: &str,
     all: &[pdfcraft_render::Annotation],
     opts: &SummaryOptions,
     marked: &std::collections::HashMap<(usize, usize), String>,
-) -> String {
+) -> pdfcraft_create::Report {
+    use pdfcraft_create::{Block, Entry, Reply};
     let sort = opts.sort;
-    use std::fmt::Write;
     let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
-    // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
-    // direct parent, so following one level would leave the deeper replies out of the summary.
-    fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {
-        use std::fmt::Write;
+    // A comment's replies at every depth, in document order. A reply to a reply keeps its `/IRT`
+    // on the direct parent, so following one level would leave the deeper replies out.
+    fn replies(out: &mut Vec<Reply>, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {
         if depth > 64 {
             return;
         }
         for r in all.iter().filter(|r| r.state.is_none() && r.in_reply_to.as_deref() == Some(parent)) {
-            let indent = "    ".repeat(depth + 1);
-            let _ =
-                writeln!(out, "{indent}Author: {}  Subject: Reply  Date: {}", r.author.as_deref().unwrap_or(""), r.modified.as_deref().unwrap_or(""));
-            for line in r.contents.as_deref().unwrap_or("").lines() {
-                let _ = writeln!(out, "{indent}{line}");
-            }
+            out.push(Reply {
+                depth,
+                author: r.author.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown author".into()),
+                meta: r.modified.clone().unwrap_or_default(),
+                body: r.contents.clone().unwrap_or_default(),
+            });
             if let Some(nm) = r.name.as_deref() {
-                write_replies(out, all, nm, depth + 1);
+                replies(out, all, nm, depth + 1);
             }
         }
     }
     let mut numbered: Vec<(usize, &pdfcraft_render::Annotation)> = Vec::new();
     let mut last = usize::MAX;
-    let mut n = 0;
+    let mut n = 0usize;
     for a in &top {
         if a.page != last {
             last = a.page;
             n = 0;
         }
-        n += 1;
+        n = n.saturating_add(1);
         if opts.includes(a) {
             numbered.push((n, a));
         }
     }
+    let author = |a: &pdfcraft_render::Annotation| a.author.clone().filter(|s| !s.is_empty());
     match sort {
         SummarySort::Page => {}
         SummarySort::Author => numbered.sort_by(|x, y| x.1.author.cmp(&y.1.author)),
         SummarySort::Date => numbered.sort_by(|x, y| x.1.modified.cmp(&y.1.modified)),
         SummarySort::Type => numbered.sort_by(|x, y| comment_kind(x.1).cmp(comment_kind(y.1))),
     }
-    let mut out = format!("Summary of Comments on {name}\n\n");
+    let plural = |n: usize| if n == 1 { "1 comment".to_string() } else { format!("{n} comments") };
+    let count = if numbered.len() == top.len() { plural(top.len()) } else { format!("{} of {}", numbered.len(), plural(top.len())) };
+    let mut report = pdfcraft_create::Report {
+        title: "Summary of Comments".into(),
+        subtitle: vec![name.to_string(), format!("{count} \u{b7} sorted by {}", sort.name().to_lowercase())],
+        blocks: Vec::new(),
+        footer: format!("Summary of Comments on {name}"),
+    };
     if numbered.is_empty() {
-        out.push_str(if top.is_empty() { "This document has no comments.\n" } else { "No comments match the summary options.\n" });
-        return out;
+        report.subtitle.truncate(1);
+        let note = if top.is_empty() { "This document has no comments." } else { "No comments match the summary options." };
+        report.blocks.push(Block::Note(note.into()));
+        return report;
     }
-    let mut heading = usize::MAX;
+    let mut heading: Option<String> = None;
     for (n, a) in numbered {
-        if sort == SummarySort::Page && a.page != heading {
-            heading = a.page;
-            let _ = writeln!(out, "Page: {}", a.page + 1);
+        let group = match sort {
+            SummarySort::Page => Some(format!("Page {}", a.page + 1)),
+            SummarySort::Author => Some(author(a).unwrap_or_else(|| "Unknown author".into())),
+            SummarySort::Type => Some(comment_kind(a).to_string()),
+            SummarySort::Date => None,
+        };
+        if group.is_some() && group != heading {
+            heading = group.clone();
+            report.blocks.extend(group.map(Block::Heading));
         }
-        let _ = write!(out, "Number: {n}  Author: {}  Subject: {}", a.author.as_deref().unwrap_or(""), comment_kind(a));
+        let mut meta: Vec<String> = Vec::new();
+        if sort != SummarySort::Author {
+            meta.extend(author(a));
+        }
+        meta.extend(a.modified.clone().filter(|m| !m.is_empty()));
         if sort != SummarySort::Page {
-            let _ = write!(out, "  Page: {}", a.page + 1);
+            meta.push(format!("Page {}", a.page + 1));
         }
-        let _ = writeln!(out, "  Date: {}", a.modified.as_deref().unwrap_or(""));
-        if let Some(m) = marked.get(&(a.page, a.index)) {
-            let _ = writeln!(out, "Marked text: \u{201c}{m}\u{201d}");
-        }
-        if let Some(c) = a.contents.as_deref().filter(|c| !c.is_empty()) {
-            let _ = writeln!(out, "{c}");
-        }
+        let mut thread = Vec::new();
         if let Some(nm) = a.name.as_deref() {
-            write_replies(&mut out, all, nm, 0);
+            replies(&mut thread, all, nm, 0);
         }
-        out.push('\n');
+        report.blocks.push(Block::Entry(Entry {
+            number: Some(n),
+            kind: comment_kind(a).to_string(),
+            meta: meta.join(" \u{b7} "),
+            color: a.color,
+            quote: marked.get(&(a.page, a.index)).cloned(),
+            body: a.contents.clone().filter(|c| !c.trim().is_empty()),
+            replies: thread,
+        }));
     }
-    out
+    report
+}
+
+/// [`comment_report`] as plain text.
+pub fn comment_summary(
+    name: &str,
+    all: &[pdfcraft_render::Annotation],
+    opts: &SummaryOptions,
+    marked: &std::collections::HashMap<(usize, usize), String>,
+) -> String {
+    comment_report(name, all, opts, marked).plain_text()
 }
 
 #[cfg(test)]

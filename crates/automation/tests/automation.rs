@@ -4369,7 +4369,7 @@ fn comment_summary_of_highlights_through_tools() {
         text
     };
     let text = summary_text(&mut a, json!({ "doc": doc, "types": ["highlight"], "out": "summary.pdf" }));
-    assert!(text.contains("Subject: Highlight") && text.contains("Marked text: \u{201c}Page 2\u{201d}"), "{text}");
+    assert!(text.contains("Highlight") && text.contains("\u{201c}Page 2\u{201d}"), "{text}");
     assert!(!text.contains("STICKY_NOTE"), "only the highlights: {text}");
     let text = summary_text(&mut a, json!({ "doc": doc, "authors": ["Bo"], "marked_text": false, "out": "summary.pdf" }));
     assert!(text.contains("STICKY_NOTE") && !text.contains("Highlight"), "{text}");

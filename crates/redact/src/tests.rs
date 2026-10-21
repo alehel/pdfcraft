@@ -399,6 +399,25 @@ fn named_image(doc: &Document, page: usize, name: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+#[test]
+fn redaction_clears_pixels_intersected_without_covering_their_centres() {
+    for (content, rect) in
+        [(&b"q 200 0 0 100 0 0 cm /Im Do Q"[..], [10.0, 10.0, 20.0, 90.0]), (&b"q 0 100 -200 0 200 0 cm /Im Do Q"[..], [10.0, 5.0, 190.0, 10.0])]
+    {
+        let mut doc = one_page(
+            content,
+            "/XObject << /Im 7 0 R >>",
+            vec![stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", [123, 234])],
+        );
+        mark(&mut doc, 0, &[rect], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.images_cleared, 1);
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(named_image(&saved, 0, b"Im"), None);
+        assert_eq!(named_image(&saved, 0, b"PCRedacted1"), Some(vec![0, 234]));
+    }
+}
+
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through
 /// before (inherited from the /Pages node, or shared with another page) still named the removed
 /// image and form, so a full-rewrite save kept them.
@@ -471,6 +490,420 @@ fn a_hidden_layers_image_does_not_survive_through_inherited_resources() {
     assert!(done.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0), "{done:?}");
     let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(!bytes.windows(16).any(|w| w == b"HIDDENLAYERIMAGE"), "the off layer's image survived the save");
+}
+
+#[test]
+fn hidden_ocmd_all_on_content_is_removed_before_its_off_group_is_unlinked() {
+    use crate::sanitize::{Hidden, remove_hidden};
+
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 10 200 Td (PUBLIC) Tj ET /OC /M BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC",
+        "/Properties << /M 9 0 R >>",
+        vec![
+            b"<< /Type /OCG /Name (On) >>".to_vec(),
+            b"<< /Type /OCG /Name (Off) >>".to_vec(),
+            b"<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOn >>".to_vec(),
+        ],
+    );
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        d.set(
+            b"OCProperties".to_vec(),
+            Object::Dict(pdfcraft_cos::Dict::from_iter([
+                (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+                (
+                    b"D".to_vec(),
+                    Object::Dict(pdfcraft_cos::Dict::from_iter([
+                        (b"Order".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+                        (b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0))])),
+                    ])),
+                ),
+            ])),
+        );
+    })
+    .unwrap();
+
+    let before = pdfcraft_edit::text_lines(&doc, 0).unwrap();
+    assert!(before.iter().any(|line| line.text.contains("PUBLIC")));
+    assert!(before.iter().any(|line| line.text.contains("SECRET")), "extractor sees source text before sanitization");
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let lines = pdfcraft_edit::text_lines(&saved, 0).unwrap();
+    assert!(lines.iter().any(|line| line.text.contains("PUBLIC")), "visible content remains: {lines:?}");
+    assert!(!lines.iter().any(|line| line.text.contains("SECRET")), "hidden text is extractable: {lines:?}");
+    assert!(!write_full(&saved, &SaveOptions::default()).unwrap().windows(6).any(|w| w == b"SECRET"));
+}
+
+#[test]
+fn hidden_ocmd_content_in_a_form_and_nested_marked_blocks_is_removed() {
+    use crate::sanitize::{Hidden, remove_hidden};
+
+    let mut doc = one_page(
+        b"/Fm Do",
+        "/Properties << /M 9 0 R >> /XObject << /Fm 10 0 R >>",
+        vec![
+            b"<< /Type /OCG /Name (On) >>".to_vec(),
+            b"<< /Type /OCG /Name (Off) >>".to_vec(),
+            b"<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOn >>".to_vec(),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /Properties << /M 9 0 R >> >>",
+                b"/OC /M BDC /OC /M BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC EMC",
+            ),
+        ],
+    );
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        d.set(
+            b"OCProperties".to_vec(),
+            Object::Dict(Dict::from_iter([
+                (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+                (b"D".to_vec(), Object::Dict(Dict::from_iter([(b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0))]))]))),
+            ])),
+        );
+    })
+    .unwrap();
+
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(!pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("SECRET")));
+}
+
+#[test]
+fn hidden_ocmd_alloff_is_sanitized_when_every_group_is_on() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+
+    let mut doc = one_page(
+        b"/OC /M BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC",
+        "/Properties << /M 9 0 R >>",
+        vec![
+            b"<< /Type /OCG /Name (On) >>".to_vec(),
+            b"<< /Type /OCG /Name (Unused) >>".to_vec(),
+            b"<< /Type /OCMD /OCGs [7 0 R] /P /AllOff >>".to_vec(),
+        ],
+    );
+    let counts = scan(&doc);
+    assert!(counts.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0), "{counts:?}");
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(!pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("SECRET")));
+}
+
+#[test]
+fn hidden_ve_not_is_sanitized_when_its_group_is_on() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+
+    let mut doc = one_page(
+        b"/OC /M BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC",
+        "/Properties << /M 9 0 R >>",
+        vec![b"<< /Type /OCG /Name (On) >>".to_vec(), b"<< /Type /OCG /Name (Unused) >>".to_vec(), b"<< /Type /OCMD /VE [/Not 7 0 R] >>".to_vec()],
+    );
+    let counts = scan(&doc);
+    assert!(counts.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0), "{counts:?}");
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(!pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("SECRET")));
+}
+
+fn all_on_ocmd_xobject(subtype: &str, policy: &str) -> Document {
+    let membership = match policy {
+        "AllOff" => "<< /Type /OCMD /OCGs [7 0 R] /P /AllOff >>",
+        "Not" => "<< /Type /OCMD /VE [/Not 7 0 R] >>",
+        _ => "<< /Type /OCMD /OCGs [7 0 R] /P /AllOff >>",
+    };
+    let (object_number, oc) = if policy == "DirectAllOff" { (8, membership) } else { (9, "8 0 R") };
+    let xobject = match subtype {
+        "Image" => stream(
+            &format!("/Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /OC {oc}"),
+            b"PRIVATE_HIDDEN_XOBJECT_IMAGE",
+        ),
+        _ => stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /OC {oc}"),
+            b"BT /F1 10 Tf 10 100 Td (PRIVATE_HIDDEN_XOBJECT_FORM) Tj ET",
+        ),
+    };
+    let mut extras = vec![b"<< /Type /OCG /Name (On) >>".to_vec()];
+    if object_number == 9 {
+        extras.push(membership.as_bytes().to_vec());
+    }
+    extras.push(xobject);
+    let mut doc = one_page(b"/X Do", &format!("/XObject << /X {object_number} 0 R >>"), extras);
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        d.set(
+            b"OCProperties".to_vec(),
+            Object::Dict(Dict::from_iter([
+                (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])),
+                (b"D".to_vec(), Object::Dict(Dict::from_iter([(b"BaseState".to_vec(), Object::name("ON"))]))),
+            ])),
+        );
+    })
+    .unwrap();
+    doc
+}
+
+#[test]
+fn hidden_all_on_ocmd_image_and_form_xobjects_are_counted_and_removed() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+
+    let mut failures = Vec::new();
+    for subtype in ["Image", "Form"] {
+        for policy in ["AllOff", "Not"] {
+            let mut doc = all_on_ocmd_xobject(subtype, policy);
+            let before = scan(&doc);
+            let hidden_count = before.iter().find(|(h, _)| *h == Hidden::HiddenLayers).map_or(0, |(_, n)| *n);
+            if hidden_count == 0 {
+                failures.push(format!("{subtype} /{policy} was not counted: {before:?}"));
+            }
+
+            match remove_hidden(&mut doc, &[Hidden::HiddenLayers]) {
+                Ok(removed) if removed.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0) => {}
+                Ok(removed) => failures.push(format!("{subtype} /{policy} remove report is empty: {removed:?}")),
+                Err(error) => failures.push(format!("{subtype} /{policy} remove failed: {error}")),
+            }
+            let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+            if bytes.windows(b"PRIVATE_HIDDEN_XOBJECT_IMAGE".len()).any(|w| w == b"PRIVATE_HIDDEN_XOBJECT_IMAGE") {
+                failures.push(format!("{subtype} /{policy} image payload remains in full save"));
+            }
+            if bytes.windows(b"PRIVATE_HIDDEN_XOBJECT_FORM".len()).any(|w| w == b"PRIVATE_HIDDEN_XOBJECT_FORM") {
+                failures.push(format!("{subtype} /{policy} Form payload remains in full save"));
+            }
+            let saved = Document::open(Arc::new(bytes)).unwrap();
+            if pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("PRIVATE_HIDDEN_XOBJECT_FORM")) {
+                failures.push(format!("{subtype} /{policy} Form text remains extractable"));
+            }
+            if !pdfcraft_edit::page_images(&saved, 0).unwrap().is_empty() {
+                failures.push(format!("{subtype} /{policy} image remains on the page"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn repeated_image_with_direct_alloff_membership_is_counted_per_draw() {
+    use crate::sanitize::{Hidden, scan};
+
+    let mut doc = all_on_ocmd_xobject("Image", "DirectAllOff");
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let contents = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), b"/X Do /X Do /X Do")));
+    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(contents))).unwrap();
+
+    let original = write_full(&doc, &SaveOptions::default()).unwrap();
+    let counts = scan(&doc);
+    assert_eq!(counts.iter().find(|(h, _)| *h == Hidden::HiddenLayers).map(|(_, n)| *n), Some(3), "{counts:?}");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), original, "Verify scan must not mutate the document");
+}
+
+#[test]
+fn undecodable_form_is_counted_and_removed_by_hidden_layer_sanitization() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+
+    let mut doc = one_page(
+        b"/Bad Do",
+        "/XObject << /Bad 7 0 R >>",
+        vec![stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /UnknownFilter", b"PRIVATE_UNDECODABLE_FORM")],
+    );
+    let counts = scan(&doc);
+    assert!(counts.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0), "{counts:?}");
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(b"PRIVATE_UNDECODABLE_FORM".len()).any(|w| w == b"PRIVATE_UNDECODABLE_FORM"));
+}
+
+#[test]
+fn form_chain_at_max_depth_is_counted_and_removed_by_hidden_layer_sanitization() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+
+    const PRIVATE: &[u8] = b"PRIVATE_FORM_BEYOND_MAX_DEPTH";
+    // MAX_DEPTH is 12. The final Form is encountered at that depth and is removed
+    // conservatively without being entered. Verify must count that removal or sanitize
+    // can skip the HiddenLayers pass entirely.
+    let mut forms = Vec::new();
+    for depth in 0..=12 {
+        let content = if depth == 12 {
+            b"BT /F1 10 Tf 10 100 Td (PRIVATE_FORM_BEYOND_MAX_DEPTH) Tj ET".to_vec()
+        } else {
+            format!("/F{} Do", depth + 1).into_bytes()
+        };
+        forms.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", &content));
+    }
+    let xobjects = (0..=12).map(|depth| format!("/F{depth} {} 0 R", 7 + depth)).collect::<Vec<_>>().join(" ");
+    let mut doc = one_page(b"/F0 Do", &format!("/XObject << {xobjects} >>"), forms);
+    assert!(
+        write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE),
+        "fixture lacked nested payload before sanitization"
+    );
+
+    let counts = scan(&doc);
+    assert!(counts.iter().any(|(hidden, count)| *hidden == Hidden::HiddenLayers && *count > 0), "depth-limited Form was not counted: {counts:?}");
+    let removed = remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    assert!(
+        removed.iter().any(|(hidden, count)| *hidden == Hidden::HiddenLayers && *count > 0),
+        "depth-limited Form was not reported removed: {removed:?}"
+    );
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(PRIVATE.len()).any(|w| w == PRIVATE), "depth-limited Form payload remains in full save");
+}
+
+#[test]
+fn hidden_ocmd_resolves_an_indirect_policy_name() {
+    use crate::sanitize::{Hidden, remove_hidden};
+
+    let mut doc = one_page(
+        b"/OC /M BDC BT /F1 10 Tf 10 100 Td (VISIBLE) Tj ET EMC",
+        "/Properties << /M 9 0 R >>",
+        vec![
+            b"<< /Type /OCG /Name (On) >>".to_vec(),
+            b"<< /Type /OCG /Name (Off) >>".to_vec(),
+            b"<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P 12 0 R >>".to_vec(),
+        ],
+    );
+    doc.set(ObjRef::new(12, 0), Object::name("AnyOn"));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        d.set(
+            b"OCProperties".to_vec(),
+            Object::Dict(Dict::from_iter([
+                (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+                (b"D".to_vec(), Object::Dict(Dict::from_iter([(b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0))]))]))),
+            ])),
+        );
+    })
+    .unwrap();
+
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("VISIBLE")));
+}
+
+#[test]
+fn surviving_anyoff_and_not_content_keeps_its_off_group_state() {
+    use crate::sanitize::{Hidden, remove_hidden};
+
+    for use_not in [false, true] {
+        let mut doc = one_page(
+            b"/OC /M BDC BT /F1 10 Tf 10 100 Td (VISIBLE) Tj ET EMC",
+            "/Properties << /M 9 0 R >>",
+            vec![
+                b"<< /Type /OCG /Name (On) >>".to_vec(),
+                b"<< /Type /OCG /Name (Off) >>".to_vec(),
+                if use_not { b"<< /Type /OCMD /VE [/Not 8 0 R] >>".to_vec() } else { b"<< /Type /OCMD /OCGs [8 0 R] /P /AnyOff >>".to_vec() },
+            ],
+        );
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |d| {
+            d.set(
+                b"OCProperties".to_vec(),
+                Object::Dict(Dict::from_iter([
+                    (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+                    (b"D".to_vec(), Object::Dict(Dict::from_iter([(b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0))]))]))),
+                ])),
+            );
+        })
+        .unwrap();
+
+        remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+        let root = doc.root().unwrap();
+        let catalog = doc.get(root);
+        let oc = catalog.as_dict().and_then(|d| d.get(b"OCProperties")).map(|o| doc.resolve(o));
+        let default = oc.as_deref().and_then(|o| o.as_dict()).and_then(|d| d.get(b"D")).map(|o| doc.resolve(o));
+        let off = default.as_deref().and_then(|o| o.as_dict()).and_then(|d| d.get(b"OFF")).map(|o| doc.resolve(o));
+        assert!(
+            off.as_deref().and_then(Object::as_array).is_some_and(|a| a.iter().any(|o| o.as_ref() == Some(ObjRef::new(8, 0)))),
+            "off group lost for /VE Not={use_not}"
+        );
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("VISIBLE")));
+    }
+}
+
+#[test]
+fn hidden_ocmd_policy_matches_the_default_configuration() {
+    use crate::sanitize::{Hidden, remove_hidden};
+
+    let cases = [
+        (None, false, None, false),
+        (Some("AnyOn"), false, None, false),
+        (Some("AllOn"), false, None, true),
+        (Some("AnyOff"), false, None, false),
+        (Some("AllOff"), false, None, true),
+        (Some("UnknownPolicy"), false, None, true),
+        (None, true, None, true),
+        (None, false, Some("and"), true),
+        (None, false, Some("and_single_not"), true),
+        (None, false, Some("and_single_off"), true),
+        (None, false, Some("or_single_on"), false),
+        (None, false, Some("or_single_off"), true),
+        (Some("AllOn"), false, Some("not_off"), false),
+        (None, false, Some("malformed_not"), true),
+        (None, false, Some("malformed_without_ocgs"), true),
+    ];
+    for (policy, malformed_policy, visibility, should_remove) in cases {
+        let mut doc = one_page(
+            b"/OC /M BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC",
+            "/Properties << /M 9 0 R >>",
+            vec![
+                b"<< /Type /OCG /Name (On) >>".to_vec(),
+                b"<< /Type /OCG /Name (Off) >>".to_vec(),
+                b"<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOn >>".to_vec(),
+            ],
+        );
+        let mut membership = Dict::new();
+        membership.set(b"Type".to_vec(), Object::name("OCMD"));
+        if visibility != Some("malformed_without_ocgs") {
+            membership.set(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))]));
+        }
+        if let Some(policy) = policy {
+            membership.set(b"P".to_vec(), Object::name(policy));
+        } else if malformed_policy {
+            membership.set(b"P".to_vec(), Object::Int(17));
+        }
+        match visibility {
+            Some("and") => membership
+                .set(b"VE".to_vec(), Object::Array(vec![Object::name("And"), Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+            Some("and_single_not") => membership.set(
+                b"VE".to_vec(),
+                Object::Array(vec![Object::name("Not"), Object::Array(vec![Object::name("And"), Object::Ref(ObjRef::new(7, 0))])]),
+            ),
+            Some("and_single_off") => membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("And"), Object::Ref(ObjRef::new(8, 0))])),
+            Some("or_single_on") => membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("Or"), Object::Ref(ObjRef::new(7, 0))])),
+            Some("or_single_off") => membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("Or"), Object::Ref(ObjRef::new(8, 0))])),
+            Some("not_off") => membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("Not"), Object::Ref(ObjRef::new(8, 0))])),
+            Some("malformed_not") => membership
+                .set(b"VE".to_vec(), Object::Array(vec![Object::name("Not"), Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+            Some("malformed_without_ocgs") => {
+                membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("UnknownOperator"), Object::Ref(ObjRef::new(8, 0))]))
+            }
+            _ => {}
+        }
+        doc.set(ObjRef::new(9, 0), Object::Dict(membership));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |d| {
+            d.set(
+                b"OCProperties".to_vec(),
+                Object::Dict(Dict::from_iter([
+                    (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+                    (
+                        b"D".to_vec(),
+                        Object::Dict(Dict::from_iter([
+                            (b"Order".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+                            (b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0))])),
+                        ])),
+                    ),
+                ])),
+            );
+        })
+        .unwrap();
+
+        remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let has_secret = pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("SECRET"));
+        assert_eq!(has_secret, !should_remove, "policy {policy:?}, malformed={malformed_policy}, VE={visibility:?}");
+    }
 }
 
 #[test]
@@ -810,11 +1243,12 @@ fn flattened_widgets_and_far_pop_ups_leave_the_structure_tree() {
 }
 
 /// #2532 review: a structure tree larger than the walk's limit can't be searched in full, so a
-/// reference the walk never reached could keep a removed annotation. Then the whole tree goes
-/// (with `/MarkInfo`), rather than reporting success with references left behind; under the
-/// limit only the reference goes.
+/// reference the walk never reached could keep a removed annotation. Then it is an error, and
+/// nothing is changed, rather than success with references left behind (removing only the tree
+/// would leave an outline's `/SE` reaching them, review on #3285); under the limit only the
+/// reference goes.
 #[test]
-fn a_structure_tree_too_large_to_walk_is_removed_whole() {
+fn a_structure_tree_too_large_to_walk_is_refused() {
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
@@ -835,11 +1269,219 @@ fn a_structure_tree_too_large_to_walk_is_removed_whole() {
     assert!(catalog(&doc).contains(b"StructTreeRoot") && catalog(&doc).contains(b"MarkInfo"), "under the limit the tree stays");
 
     let mut doc = pdf(objs);
-    crate::tags::drop_object_refs_within(&mut doc, &gone, 2).unwrap();
-    assert!(!catalog(&doc).contains(b"StructTreeRoot"), "a tree the walk couldn't finish goes whole");
-    assert!(!catalog(&doc).contains(b"MarkInfo"));
+    assert!(matches!(crate::tags::drop_object_refs_within(&mut doc, &gone, 2), Err(RedactError::Tags)), "a tree the walk couldn't finish is refused");
+    assert!(catalog(&doc).contains(b"StructTreeRoot"), "nothing changed");
+}
+
+/// #3302: an element listed only in the parent tree (not under the root's /K) still owns the
+/// marked content redaction changed, so its /ActualText and /Alt, which repeat the redacted
+/// words, go as they do for an element under /K.
+#[test]
+fn an_element_listed_only_in_the_parent_tree_loses_its_redacted_text() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R /MarkInfo << /Marked true >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 9 0 R >> >> >>".to_vec(),
+        stream("", b"/P <</MCID 0>> BDC BT /F1 14 Tf 20 150 Td (Codename Bluefin) Tj ET EMC"),
+        // The root's /K reaches only the empty document element 6; the paragraph 7 is in the
+        // parent tree only.
+        b"<< /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [0 [7 0 R]] >> /ParentTreeNextKey 1 >>".to_vec(),
+        b"<< /Type /StructElem /S /Document /P 5 0 R >>".to_vec(),
+        b"<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K 0 /ActualText (Codename Bluefin) /Alt (Codename Bluefin) >>".to_vec(),
+        b"<< /Type /StructElem /S /Note /P 6 0 R >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert!(r.glyphs > 0 && r.tags >= 1, "{r:?}");
+    let element = doc.get(ObjRef::new(7, 0)).as_dict().cloned().unwrap();
+    assert!(!element.contains(b"ActualText") && !element.contains(b"Alt"), "{element:?}");
+}
+
+/// #3302: a structure tree too large to walk in full fails closed: an error, so the redaction
+/// isn't made, instead of the walk stopping and reporting success with elements never checked.
+#[test]
+fn a_tag_walk_cut_short_is_refused() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /StructParents 0 >>".to_vec(),
+        b"<< >>".to_vec(),
+        b"<< /Type /StructTreeRoot /K 6 0 R >>".to_vec(),
+        b"<< /Type /StructElem /S /Document /P 5 0 R /K [7 0 R 8 0 R] >>".to_vec(),
+        b"<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K 0 /ActualText (Codename Bluefin) >>".to_vec(),
+        b"<< /Type /StructElem /S /Figure /P 6 0 R /Alt (A chart) /E (chart) >>".to_vec(),
+    ];
+    let page = ObjRef::new(3, 0);
+    let changed: std::collections::HashSet<i64> = [0].into();
+    let mut doc = pdf(objs.clone());
+    assert_eq!(crate::tags::clean_within(&mut doc, page, None, &changed, &Default::default(), 100).unwrap(), 1);
+    let figure = doc.get(ObjRef::new(8, 0)).as_dict().cloned().unwrap();
+    assert!(figure.contains(b"Alt"), "a walk that finishes keeps an unrelated element's text");
+
+    let mut doc = pdf(objs);
+    assert!(matches!(crate::tags::clean_within(&mut doc, page, None, &changed, &Default::default(), 1), Err(RedactError::Tags)));
+}
+
+/// #2532 follow-up: an element reached only through the parent tree or the ID tree, not from
+/// the root's /K, still points at a removed annotation, and the root keeps it reachable in a full
+/// rewrite. Both trees are walked too, written in place or as their own objects.
+#[test]
+fn elements_listed_only_in_the_parent_tree_or_the_id_tree_lose_their_references() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>".to_vec(),
+        // 4: the removed link; 8: the removed comment
+        b"<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://secret.example) >> >>".to_vec(),
+        // 5: the root; its /K reaches only the empty document element 6. The parent tree is
+        // written in place, the ID tree's kid (9) as its own object.
+        b"<< /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [0 7 0 R] >> /IDTree << /Kids [9 0 R] >> >>".to_vec(),
+        b"<< /Type /StructElem /S /Document /P 5 0 R >>".to_vec(),
+        // 7: a link element only the parent tree lists
+        b"<< /Type /StructElem /S /Link /P 6 0 R /K << /Type /OBJR /Obj 4 0 R >> /Alt (secret.example link) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /Contents (hushhush note) >>".to_vec(),
+        b"<< /Names [(note1) 10 0 R] >>".to_vec(),
+        // 10: an annotation element only the ID tree lists
+        b"<< /Type /StructElem /S /Annot /P 6 0 R /ID (note1) /K [<< /Type /OBJR /Obj 8 0 R >>] >>".to_vec(),
+    ];
+    let gone: std::collections::HashSet<ObjRef> = [ObjRef::new(4, 0), ObjRef::new(8, 0)].into();
+    let mut doc = pdf(objs);
+    assert_eq!(crate::tags::drop_object_refs(&mut doc, &gone).unwrap(), 2, "both references go");
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
-    assert!(!bytes.windows(14).any(|w| w == b"secret.example"), "the removed link can't be reached any more");
+    for secret in [&b"secret.example"[..], b"hushhush"] {
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret), "{} survived the rewrite", String::from_utf8_lossy(secret));
+    }
+}
+
+/// #3285 review: an element without its own /Pg takes its ancestor's page, also when the parent
+/// tree lists it. One under /K must not be reached first through the parent tree without that
+/// page, and one only the parent tree lists finds it through /P.
+#[test]
+fn an_element_inheriting_its_page_loses_its_redacted_text_when_the_parent_tree_lists_it() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R /MarkInfo << /Marked true >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 9 0 R >> >> >>".to_vec(),
+        stream("", b"/P <</MCID 0>> BDC BT /F1 14 Tf 20 150 Td (Codename Bluefin) Tj ET EMC /P <</MCID 1>> BDC BT /F1 14 Tf 20 100 Td (Codename Bluefin) Tj ET EMC"),
+        // The document element 6 carries the page; 7 sits under it, 8 only points at it.
+        b"<< /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [0 [7 0 R 8 0 R]] >> /ParentTreeNextKey 1 >>".to_vec(),
+        b"<< /Type /StructElem /S /Document /P 5 0 R /Pg 3 0 R /K [7 0 R] >>".to_vec(),
+        b"<< /Type /StructElem /S /P /P 6 0 R /K 0 /ActualText (Codename Bluefin) >>".to_vec(),
+        b"<< /Type /StructElem /S /P /P 6 0 R /K 1 /Alt (Codename Bluefin) >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 90.0, 290.0, 170.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert!(r.glyphs > 0, "{r:?}");
+    for n in [7, 8] {
+        let element = doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+        assert!(!element.contains(b"ActualText") && !element.contains(b"Alt"), "{n}: {element:?}");
+    }
+}
+
+/// #3285 review: a structure element written in place, here as an ID tree value, can't be
+/// edited without rewriting what holds it; when it tags a removed annotation, removing hidden
+/// information is refused instead of keeping the annotation reachable in a full rewrite.
+/// Direct callers discard the failed working copy to preserve the original document.
+#[test]
+fn an_element_written_in_place_that_tags_a_removed_annotation_is_refused() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /Contents (hushhush note) >>".to_vec(),
+        b"<< /Type /StructTreeRoot /K 6 0 R /IDTree << /Names [(note1) << /Type /StructElem /S /Annot /P 6 0 R /K [<< /Type /OBJR /Obj 4 0 R >>] >>] >> >>".to_vec(),
+        b"<< /Type /StructElem /S /Document /P 5 0 R >>".to_vec(),
+    ];
+    let original = pdf(objs);
+    let before = write_full(&original, &SaveOptions::default()).unwrap();
+    let mut working = original.clone();
+    assert!(matches!(sanitize::remove_hidden(&mut working, &[sanitize::Hidden::Comments]), Err(RedactError::Tags)));
+    assert!(!working.get(ObjRef::new(3, 0)).as_dict().unwrap().contains(b"Annots"), "the failed working copy was partially changed");
+    drop(working);
+    assert_eq!(write_full(&original, &SaveOptions::default()).unwrap(), before, "discarding the working copy preserves the original");
+}
+
+/// Whether a full rewrite of `doc` still holds the redacted word.
+fn bluefin_survives(doc: &Document) -> bool {
+    let bytes = write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    bytes.windows(7).any(|w| w == b"Bluefin")
+}
+
+/// #3285 review (the maintainer's probes): an element written in place in the parent tree that
+/// owns the redacted text can't be changed, so applying is refused; the same element as an object
+/// of its own is cleaned, and nothing of the word is left in a full rewrite.
+/// Refusal does not promise rollback: direct callers discard the failed working copy.
+#[test]
+fn an_element_written_in_place_owning_redacted_text_is_refused() {
+    let objs = |element: &str| -> Vec<Vec<u8>> {
+        vec![
+            b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R /MarkInfo << /Marked true >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 9 0 R >> >> >>"
+                .to_vec(),
+            stream("", b"/P <</MCID 0>> BDC BT /F1 14 Tf 20 150 Td (Codename Bluefin) Tj ET EMC"),
+            format!("<< /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [0 [{element}]] >> /ParentTreeNextKey 1 >>").into_bytes(),
+            b"<< /Type /StructElem /S /Document /P 5 0 R >>".to_vec(),
+            b"<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K 0 /ActualText (Codename Bluefin) >>".to_vec(),
+            b"<< >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+        ]
+    };
+    let mut doc = pdf(objs("<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K 0 /ActualText (Codename Bluefin) >>"));
+    mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let mut working = doc.clone();
+    let error = apply(&mut working, None).unwrap_err();
+    assert!(matches!(error, RedactError::Tags));
+    assert_eq!(
+        error.to_string(),
+        "the document's tags can't be cleaned completely (an element written in place, or a structure tree too large or too deep to follow); the operation was refused"
+    );
+    assert!(!content(&working, 0).contains("Bluefin"), "the failed working copy was partially changed");
+    assert!(bluefin_survives(&working), "the failed working copy still holds the word in its tags");
+    drop(working);
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "discarding the working copy preserves the original");
+    let mut doc = pdf(objs("7 0 R"));
+    mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert!(r.glyphs > 0 && !bluefin_survives(&doc), "{r:?}");
+}
+
+/// #3285 review: an element whose inherited page can't be found (more ancestors than the lookup
+/// follows) isn't taken for one with no page: applying is refused. Within the limit the page is
+/// found and the text goes.
+#[test]
+fn an_element_whose_inherited_page_is_out_of_reach_is_refused() {
+    let objs = |depth: u32| -> Vec<Vec<u8>> {
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R /MarkInfo << /Marked true >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 9 0 R >> >> >>"
+                .to_vec(),
+            stream("", b"/P <</MCID 0>> BDC BT /F1 14 Tf 20 150 Td (Codename Bluefin) Tj ET EMC"),
+            b"<< /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [0 [7 0 R]] >> /ParentTreeNextKey 1 >>".to_vec(),
+            b"<< /Type /StructElem /S /Document /P 5 0 R /Pg 3 0 R >>".to_vec(),
+            format!("<< /Type /StructElem /S /P /P {} 0 R /K 0 /ActualText (Codename Bluefin) >>", 10 + depth - 1).into_bytes(),
+            b"<< >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+        ];
+        for i in 0..depth {
+            let parent = if i == 0 { 6 } else { 10 + i - 1 };
+            objs.push(format!("<< /Type /StructElem /S /Div /P {parent} 0 R >>").into_bytes());
+        }
+        objs
+    };
+    let mut doc = pdf(objs(300));
+    mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Tags)));
+    let mut doc = pdf(objs(100));
+    mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(!bluefin_survives(&doc));
 }
 
 /// Issue #1325: removing comments keeps the annotations that are not comments: the multimedia

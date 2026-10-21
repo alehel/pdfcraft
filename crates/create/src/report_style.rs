@@ -152,6 +152,56 @@ impl PartStyle {
     }
 }
 
+/// The comment types a selector can name (`.card.highlight`), as classes: the names the summary
+/// prints, lower case with hyphens.
+pub const TYPE_CLASSES: [&str; 20] = [
+    "sticky-note",
+    "text-box",
+    "callout",
+    "typewriter",
+    "highlight",
+    "underline",
+    "strikethrough",
+    "squiggly",
+    "rectangle",
+    "oval",
+    "line",
+    "pencil",
+    "polygon",
+    "cloud",
+    "polygonal-line",
+    "stamp",
+    "inserted-text",
+    "file-attachment",
+    "sound",
+    "redaction",
+];
+
+/// The type class of a comment type as the summary names it ("Sticky Note" → `sticky-note`).
+pub fn type_class(kind: &str) -> String {
+    kind.trim().to_ascii_lowercase().split_whitespace().collect::<Vec<_>>().join("-")
+}
+
+/// The type class a selector's type names: a class from [`TYPE_CLASSES`], or a PDF subtype
+/// (`strikeout`, `freetext`…) for one.
+fn selector_type(name: &str) -> Option<&'static str> {
+    let n = name.to_ascii_lowercase();
+    let alias = match n.as_str() {
+        "text" | "note" => "sticky-note",
+        "freetext" => "text-box",
+        "strikeout" => "strikethrough",
+        "square" => "rectangle",
+        "circle" => "oval",
+        "ink" => "pencil",
+        "polyline" => "polygonal-line",
+        "caret" => "inserted-text",
+        "fileattachment" => "file-attachment",
+        "redact" => "redaction",
+        other => other,
+    };
+    TYPE_CLASSES.iter().find(|c| **c == alias).copied()
+}
+
 /// The parts of a report a stylesheet can style, by class name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Part {
@@ -174,6 +224,82 @@ pub enum Part {
 }
 
 impl Part {
+    /// Whether this part belongs to one comment, so a selector can name its type.
+    pub fn in_comment(self) -> bool {
+        matches!(
+            self,
+            Part::Card
+                | Part::Number
+                | Part::Kind
+                | Part::Meta
+                | Part::Quote
+                | Part::Body
+                | Part::Reply
+                | Part::ReplyAuthor
+                | Part::ReplyMeta
+                | Part::ReplyBody
+        )
+    }
+
+    /// Whether the report draws `prop` (a property this subset reads) on this part. Text
+    /// properties apply to the parts that hold text; box properties to the ones that draw them.
+    pub fn uses(self, prop: &str) -> bool {
+        const TEXT: [&str; 7] = ["color", "font-family", "font-size", "font-weight", "font-style", "line-height", "text-transform"];
+        if prop == "display" {
+            return true;
+        }
+        let text = !matches!(self, Part::Header | Part::Card | Part::Reply);
+        if TEXT.contains(&prop) {
+            return text;
+        }
+        // The box properties each part draws.
+        let sides: &[&str] = match self {
+            Part::Header => &["padding-bottom", "border-bottom", "margin-bottom"],
+            Part::Heading => &["margin-top", "margin-bottom", "padding-bottom", "border-bottom"],
+            Part::Card => {
+                &["background", "border-left", "border-bottom", "padding-top", "padding-right", "padding-bottom", "padding-left", "margin-bottom"]
+            }
+            Part::Quote | Part::Reply => &[
+                "background",
+                "border-left",
+                "padding-top",
+                "padding-right",
+                "padding-bottom",
+                "padding-left",
+                "margin-top",
+                "margin-right",
+                "margin-bottom",
+                "margin-left",
+            ],
+            Part::Body => &["margin-top", "margin-right", "margin-bottom", "margin-left"],
+            Part::Footer => &["border-top"],
+            _ => &[],
+        };
+        let canonical = match prop {
+            "background-color" => "background",
+            p => p.strip_suffix("-width").or_else(|| p.strip_suffix("-color")).unwrap_or(p),
+        };
+        // A shorthand counts when the part draws any side of it.
+        if matches!(canonical, "padding" | "margin") {
+            return sides.iter().any(|s| s.starts_with(canonical));
+        }
+        sides.contains(&canonical)
+    }
+
+    /// What this part draws, for a warning about a property it doesn't.
+    fn takes(self) -> &'static str {
+        match self {
+            Part::Header => "padding-bottom, border-bottom and margin-bottom",
+            Part::Heading => "text properties, margin-top, margin-bottom, padding-bottom and border-bottom",
+            Part::Card => "background, border-left, border-bottom, padding and margin-bottom",
+            Part::Quote => "text properties, background, border-left, padding and margin",
+            Part::Reply => "background, border-left, padding and margin (margin-left is the indent per level)",
+            Part::Body => "text properties and margin",
+            Part::Footer => "text properties and border-top",
+            _ => "text properties (font, colour, size, line-height, text-transform)",
+        }
+    }
+
     pub const ALL: [Part; 16] = [
         Part::Title,
         Part::Subtitle,
@@ -223,6 +349,10 @@ pub struct ReportStyle {
     /// `@page { margin }`: top, right, bottom, left, in points.
     pub margin: [f64; 4],
     parts: Vec<PartStyle>,
+    /// Rules for one comment type (`.card.highlight { … }`): part, type class, property, value,
+    /// in stylesheet order. They outrank the part's untyped rules, as the more specific selector
+    /// does in CSS.
+    typed: Vec<(Part, String, String, String)>,
 }
 
 impl Default for ReportStyle {
@@ -237,13 +367,37 @@ impl Default for ReportStyle {
 
 impl ReportStyle {
     fn plain() -> ReportStyle {
-        ReportStyle { page_size: None, margin: [54.0, 54.0, 60.0, 54.0], parts: Part::ALL.iter().map(|_| PartStyle::plain()).collect() }
+        ReportStyle {
+            page_size: None,
+            margin: [54.0, 54.0, 60.0, 54.0],
+            parts: Part::ALL.iter().map(|_| PartStyle::plain()).collect(),
+            typed: Vec::new(),
+        }
     }
 
     pub fn part(&self, p: Part) -> &PartStyle {
         // `parts` holds one entry per `Part::ALL`, in order; `plain()` is the fallback.
         static PLAIN: std::sync::OnceLock<PartStyle> = std::sync::OnceLock::new();
         self.parts.get(p as usize).unwrap_or_else(|| PLAIN.get_or_init(PartStyle::plain))
+    }
+
+    /// The style for a comment of the type class `class` ([`type_class`]): this style with that
+    /// type's rules applied, or this style itself when it has none.
+    pub fn for_type(&self, class: &str) -> std::borrow::Cow<'_, ReportStyle> {
+        if !self.typed.iter().any(|(_, c, _, _)| c == class) {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut s = self.clone();
+        for (part, c, prop, value) in &self.typed {
+            if c == class
+                && let Some(p) = s.part_mut(*part)
+            {
+                // Checked when the stylesheet was read.
+                let _ = property(p, prop, value);
+            }
+        }
+        s.typed.clear();
+        std::borrow::Cow::Owned(s)
     }
 
     fn part_mut(&mut self, p: Part) -> Option<&mut PartStyle> {
@@ -405,11 +559,30 @@ fn apply(s: &mut ReportStyle, css: &str, warnings: &mut Vec<String>, builtin: bo
                 warn(warnings, line, format!("@{} is not read", short(at)));
             }
         } else {
-            let mut parts = Vec::new();
+            // Each selector: `.part`, or `.part.type` for one comment type.
+            let mut parts: Vec<(Part, Option<&'static str>)> = Vec::new();
             for sel in prelude.split(',').map(str::trim) {
-                match Part::ALL.iter().find(|p| sel.strip_prefix('.').is_some_and(|c| c.eq_ignore_ascii_case(p.class()))) {
-                    Some(p) => parts.push(*p),
-                    None => warn(
+                let classes: Vec<&str> = sel.strip_prefix('.').map(|c| c.split('.').collect()).unwrap_or_default();
+                let part = classes.first().and_then(|c| Part::ALL.iter().find(|p| c.eq_ignore_ascii_case(p.class())).copied());
+                match (part, classes.get(1..).unwrap_or_default()) {
+                    (Some(p), []) => parts.push((p, None)),
+                    (Some(p), [ty]) if p.in_comment() => match selector_type(ty) {
+                        Some(class) => parts.push((p, Some(class))),
+                        None => warn(
+                            warnings,
+                            line,
+                            format!("selector \"{}\": \"{}\" is not a comment type ({})", short(sel), short(ty), TYPE_CLASSES.join(", ")),
+                        ),
+                    },
+                    (Some(p), [_]) => warn(
+                        warnings,
+                        line,
+                        format!("selector \"{}\": only a comment's parts can be styled per type, not .{}", short(sel), p.class()),
+                    ),
+                    (Some(_), _) => {
+                        warn(warnings, line, format!("selector \"{}\": name a part and at most one comment type, as in .card.highlight", short(sel)))
+                    }
+                    (None, _) => warn(
                         warnings,
                         line,
                         format!("selector \"{}\" is not a part of the report (use classes such as .title, .card, .quote)", short(sel)),
@@ -417,12 +590,22 @@ fn apply(s: &mut ReportStyle, css: &str, warnings: &mut Vec<String>, builtin: bo
                 }
             }
             for (decl_line, prop, value) in declarations(block, &text, pos + body_start) {
-                for p in &parts {
-                    if let Some(part) = s.part_mut(*p)
-                        && let Err(e) = property(part, &prop, &value)
-                    {
+                for (p, ty) in &parts {
+                    let Some(part) = s.part_mut(*p) else { continue };
+                    // A typed rule is checked on a copy and kept for `for_type`.
+                    let result = match ty {
+                        None => property(part, &prop, &value),
+                        Some(_) => property(&mut part.clone(), &prop, &value),
+                    };
+                    if let Err(e) = result {
                         warn(warnings, decl_line, e);
                         break;
+                    }
+                    if !p.uses(&prop) {
+                        warn(warnings, decl_line, format!(".{} doesn't draw {prop}; it takes {}", p.class(), p.takes()));
+                    }
+                    if let Some(class) = ty {
+                        s.typed.push((*p, class.to_string(), prop.clone(), value.clone()));
                     }
                 }
             }

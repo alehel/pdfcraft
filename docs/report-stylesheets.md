@@ -1,6 +1,6 @@
 # Comment summary stylesheets
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** new (themes and stylesheets for the comment summary)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (comment-type selectors; warnings for properties a part doesn't draw)
 
 The comment summary (Comments ▸ "…" ▸ Create PDF comment summary, or the `comments_summarize`
 tool) is drawn in a **theme**. Five are built in, and a **stylesheet** can restyle any of them.
@@ -55,6 +55,24 @@ Each part of the report is a class. A rule may name several, separated by commas
 | `.reply-author`, `.reply-meta`, `.reply-body` | A reply's author, date and text |
 | `.footer` | The report's name and "Page N of M" at the bottom of each page; `border-top` is the rule above |
 
+## One comment type
+
+Add a comment type to a comment's part to style only that type. Such a rule outranks the part's
+plain rules wherever it stands, as the more specific selector does in CSS:
+
+```css
+.card.strikethrough { background: #fde8e8; }
+.quote.highlight { font-weight: bold; }
+.kind.sticky-note { color: #8a6d00; }
+```
+
+The parts that take a type are `.card`, `.number`, `.kind`, `.meta`, `.quote`, `.body`, `.reply`,
+`.reply-author`, `.reply-meta` and `.reply-body`. The types are the names the summary prints, in
+lower case with hyphens: `sticky-note`, `text-box`, `callout`, `typewriter`, `highlight`,
+`underline`, `strikethrough`, `squiggly`, `rectangle`, `oval`, `line`, `pencil`, `polygon`,
+`cloud`, `polygonal-line`, `stamp`, `inserted-text`, `file-attachment`, `sound`, `redaction`. The
+PDF names work too (`strikeout`, `freetext`, `square`, `circle`, `ink`, `caret`, `redact`…).
+
 ## Properties
 
 | Property | Values |
@@ -86,12 +104,16 @@ names, `transparent`/`none`, and:
 
 Anything else (other selectors, nesting, `@media`, other properties, other `var()` names) is
 skipped with a warning naming its line, the way a browser skips CSS it doesn't know, and the rest
-still applies. The dialog lists the warnings when a stylesheet is loaded; the tool returns them in
-`warnings`. A stylesheet over 64 KB is refused.
+still applies. So is a property a part doesn't draw (`background` on `.title`, `padding` on
+`.footer`): the warning says what that part takes. The Parts table above lists the box properties
+each part draws; every part that holds text takes the text properties. The dialog lists the
+warnings when a stylesheet is loaded; the tool returns them in `warnings`. A stylesheet over 64 KB
+is refused.
 
 Text is set in the standard PDF fonts, which hold Western European characters; others are written
 as `[U+XXXX]` and the summary says so. Fonts can't be embedded from a stylesheet.
 
 ## Revision history
 
+- 2026-10-21: Comment-type selectors (`.card.highlight`); a warning for a property a part doesn't draw.
 - 2026-10-21: First version: five built-in themes, stylesheets, `@import`, `var(--comment)`, `color-mix()`.

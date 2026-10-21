@@ -3,7 +3,7 @@ use std::sync::Arc;
 use pdfcraft_cos::{SaveOptions, write_full};
 
 use super::*;
-use crate::report_style::ReportStyle;
+use crate::report_style::{ReportStyle, type_class};
 
 fn reopen(doc: &Document) -> Document {
     let bytes = write_full(doc, &SaveOptions::default()).unwrap();
@@ -1368,4 +1368,57 @@ fn report_stylesheets_never_panic() {
             let _ = report(&sample(), LETTER, &style);
         }
     }
+}
+
+/// `.part.type` rules style one comment type and outrank the part's plain rules wherever they
+/// stand, as the more specific selector does in CSS; PDF subtype names work as type names.
+#[test]
+fn report_stylesheet_styles_comment_types() {
+    use crate::report_style::{Paint, Part};
+    let css = ".card.strikethrough { background: #fde0e0 }\n.quote.strikeout { font-weight: bold }\n.card { background: #eeeeee }\n.kind.sticky-note { display: none }";
+    let (style, warnings) = ReportStyle::parse(css).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let grey = Paint::Rgb([238.0 / 255.0; 3]);
+    assert_eq!(style.part(Part::Card).background, grey);
+    let strike = style.for_type("strikethrough");
+    assert_eq!(strike.part(Part::Card).background, Paint::Rgb([253.0 / 255.0, 224.0 / 255.0, 224.0 / 255.0]), "the typed rule wins");
+    assert!(strike.part(Part::Quote).bold);
+    assert_eq!(style.for_type("highlight").part(Part::Card).background, grey);
+    assert!(!style.for_type("highlight").part(Part::Quote).bold);
+    assert!(style.for_type("sticky-note").part(Part::Kind).hidden);
+    assert!(matches!(style.for_type("highlight"), std::borrow::Cow::Borrowed(_)), "no copy without typed rules");
+
+    let mut struck = entry(2, "Typo");
+    struck.kind = "Strikethrough".into();
+    let r = Report { blocks: vec![Block::Entry(entry(1, "Note")), Block::Entry(struck)], ..sample() };
+    let content = contents(&reopen(&report(&r, LETTER, &style).unwrap().0));
+    assert!(content.contains("0.992 0.878 0.878 rg"), "the strikethrough's card: {content}");
+    assert!(content.contains("0.933 0.933 0.933 rg"), "the highlight's card: {content}");
+    assert_eq!(type_class("Sticky Note"), "sticky-note");
+    assert_eq!(type_class(" Polygonal  Line "), "polygonal-line");
+}
+
+/// A property this subset reads on a part that doesn't draw it is named, with what the part
+/// takes; shorthands count when the part draws any side; type selectors are checked.
+#[test]
+fn report_stylesheet_warns_about_properties_a_part_ignores() {
+    let css = ".title { background: red }\n.header { padding: 4pt; border-left: 1pt solid red }\n.heading { margin-left: 3pt; margin: 4pt }\n.card { color: red }\n.title.highlight { color: red }\n.card.bogus { color: red }\n.card.highlight.underline { color: red }\n.footer { border-top-color: red; padding: 2pt }";
+    let (_, warnings) = ReportStyle::parse(css).unwrap();
+    let joined = warnings.join("\n");
+    for expected in [
+        "line 1: .title doesn't draw background; it takes text properties",
+        "line 2: .header doesn't draw border-left",
+        "line 3: .heading doesn't draw margin-left",
+        "line 4: .card doesn't draw color",
+        "line 5: selector \".title.highlight\": only a comment's parts",
+        "line 6: selector \".card.bogus\": \"bogus\" is not a comment type",
+        "line 7: selector \".card.highlight.underline\": name a part and at most one comment type",
+        "line 8: .footer doesn't draw padding",
+    ] {
+        assert!(joined.contains(expected), "{expected:?} in\n{joined}");
+    }
+    assert!(!joined.contains("line 2: .header doesn't draw padding"), "the header draws padding-bottom: {joined}");
+    assert!(!joined.contains("line 3: .heading doesn't draw margin;"), "the heading draws margin-top: {joined}");
+    assert!(!joined.contains("border-top-color"), "{joined}");
+    assert_eq!(warnings.len(), 8, "{joined}");
 }

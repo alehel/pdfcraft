@@ -9,7 +9,7 @@
 use pdfcraft_cos::{Dict, Document, Object};
 use pdfcraft_fonts::{Std14, literal, win_ansi, wrap_with};
 
-use crate::report_style::{Part, PartStyle, ReportStyle};
+use crate::report_style::{Part, PartStyle, ReportStyle, type_class};
 use crate::{CreateError, ESCAPED_NOTE, add_page, set_title};
 
 /// A report: what [`report`] lays out.
@@ -458,9 +458,6 @@ pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Docu
         p.place(&Row::rule(header_s.padding[2], bw, header_s.margin[2], bc, 0.0, width), ml);
     }
 
-    let card = style.part(Part::Card);
-    let (stripe, [pad_t, pad_r, pad_b, pad_l]) = (card.border_left.0.max(0.0), card.padding);
-    let inner = (width - stripe - pad_l - pad_r).max(72.0);
     for (i, b) in blocks.iter().enumerate() {
         match b {
             Block::Heading(text) => {
@@ -488,9 +485,15 @@ pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Docu
                 }
             }
             Block::Entry(e) => {
+                // The style for this comment's type (`.card.highlight` and the like).
+                let style = style.for_type(&type_class(&e.kind));
+                let style: &ReportStyle = &style;
+                let card = style.part(Part::Card);
                 if card.hidden {
                     continue;
                 }
+                let (stripe, [pad_t, pad_r, pad_b, pad_l]) = (card.border_left.0.max(0.0), card.padding);
+                let inner = (width - stripe - pad_l - pad_r).max(72.0);
                 let comment = clean(e.color, NO_COLOR);
                 let rows = entry_rows(e, inner, style);
                 let total: f64 = rows.iter().map(|r| r.h).sum::<f64>() + pad_t + pad_b;

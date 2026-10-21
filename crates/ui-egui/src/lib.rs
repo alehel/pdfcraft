@@ -2315,6 +2315,7 @@ impl PdfCraftApp {
         v["summary_theme"] = serde_json::Value::String(self.summary.theme.clone());
         v["summary_stylesheet"] =
             self.summary.stylesheet.as_ref().map_or(serde_json::Value::Null, |(name, css)| serde_json::json!({ "name": name, "css": css }));
+        v["summary_iso_dates"] = serde_json::Value::Bool(self.summary.iso_dates);
         v["summary_author_colors"] = self
             .summary
             .author_colors
@@ -2402,6 +2403,9 @@ impl PdfCraftApp {
         }
         if let (Some(name), Some(css)) = (v["summary_stylesheet"]["name"].as_str(), v["summary_stylesheet"]["css"].as_str()) {
             self.set_summary_stylesheet(name.to_string(), css.to_string());
+        }
+        if let Some(iso) = v["summary_iso_dates"].as_bool() {
+            self.summary.iso_dates = iso;
         }
         // Authors' colours: at most `MAX_SAVED_AUTHOR_COLORS`, each "#rrggbb" by a name of at most
         // 512 bytes; anything else is left out.

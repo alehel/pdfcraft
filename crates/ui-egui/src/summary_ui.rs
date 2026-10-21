@@ -16,6 +16,9 @@ use crate::{PdfCraftApp, widgets};
 
 /// The theme menu's entry for the loaded stylesheet (`SummaryDraft::theme`).
 pub const CUSTOM: &str = "custom";
+/// The date the Date format menu shows its choices with.
+const SAMPLE_DATE: &str = "2026-10-21 15:28";
+
 /// The most authors' colours kept between sessions.
 pub const MAX_SAVED_AUTHOR_COLORS: usize = 500;
 
@@ -45,6 +48,8 @@ pub struct SummaryDraft {
     pub warnings: Vec<String>,
     /// Colours chosen for authors, by name as the summary prints it; the others are automatic.
     pub author_colors: BTreeMap<String, [u8; 3]>,
+    /// Write dates as ISO 8601 does rather than the way the interface language does.
+    pub iso_dates: bool,
     preview: Option<(String, egui::TextureHandle)>,
     /// Whether the chosen look draws authors' colours, for the look it was worked out for.
     shows_author_colors: Option<(u64, bool)>,
@@ -66,6 +71,7 @@ impl SummaryDraft {
             only,
             marked_text: self.marked_text,
             author_colors: self.author_colors.clone(),
+            dates: (!self.iso_dates).then(|| crate::i18n::current().code().to_string()),
         }
     }
 
@@ -351,6 +357,15 @@ fn appearance_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, out:
             if ui.button(tl!("Export CSS…")).clicked() {
                 out.export_css = true;
             }
+        });
+        ui.end_row();
+        ui.label(tl!("Date format"));
+        let local = format!("{} \u{2014} {}", pdfcraft_engine::summary_date(SAMPLE_DATE, crate::i18n::current().code()), tl!("Interface language"));
+        let iso = format!("{SAMPLE_DATE} \u{2014} ISO 8601");
+        let selected = if d.iso_dates { iso.clone() } else { local.clone() };
+        egui::ComboBox::from_id_salt("summary-dates").width(260.0).selected_text(selected).show_ui(ui, |ui| {
+            ui.selectable_value(&mut d.iso_dates, false, local);
+            ui.selectable_value(&mut d.iso_dates, true, iso);
         });
         ui.end_row();
     });

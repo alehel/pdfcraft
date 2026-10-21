@@ -1071,6 +1071,53 @@ fn summary_authors_get_colours_that_can_be_picked_and_reset() {
     assert_eq!(odd.summary.author_colors.into_iter().collect::<Vec<_>>(), [("Bo".to_string(), [0, 255, 0])]);
 }
 
+/// Summarize Options ▸ Date format: the summary writes dates the way the interface language does
+/// (English here), or as ISO 8601; the choice is remembered.
+#[test]
+fn summary_dates_follow_the_interface_language_or_iso() {
+    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    let rect = pdfcraft_engine::Shape::Rectangle { rect: [150.0, 20.0, 200.0, 60.0] };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&rect),
+        shape: rect,
+        contents: "Dated".into(),
+        author: "Ada".into(),
+    }));
+    h.run_steps(3);
+    let written = comments(&h)[0].modified.clone().expect("a date");
+    let summary_text = |h: &mut Harness<'static, PdfCraftApp>| -> String {
+        h.get_by_label("More options").click();
+        h.run_steps(2);
+        h.get_by_label("Create PDF comment summary…").click();
+        h.run_steps(2);
+        h.get_by_label("Create Summary").click();
+        h.run_steps(3);
+        let s = h.state();
+        let summary = s.session.get(s.views.last().unwrap().id).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(summary.bytes.clone(), Default::default());
+        let text = r
+            .render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() })
+            .text
+            .map(|t| t.plain_text())
+            .unwrap_or_default();
+        // Back to the document, for the next summary.
+        h.state_mut().active = Some(0);
+        h.run_steps(2);
+        text
+    };
+    let english = summary_text(&mut h);
+    assert!(english.contains(&pdfcraft_engine::summary_date(&written, "en")), "{english}");
+    h.state_mut().summary.iso_dates = true;
+    let iso = summary_text(&mut h);
+    assert!(iso.contains(&written), "{iso}");
+
+    let saved = h.state().persist();
+    let mut again = PdfCraftApp::new();
+    again.restore(&saved);
+    assert!(again.summary.iso_dates);
+}
+
 #[test]
 fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());

@@ -790,6 +790,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "theme": { "type": "string", "enum": ["modern", "simple", "classic", "compact", "ink-saver"], "description": "The built-in look. Default modern." },
                     "stylesheet": path_arg(),
                     "css": { "type": "string", "description": "A stylesheet's text, instead of `stylesheet`." },
+                    "dates": { "type": "string", "enum": std::iter::once("iso").chain(pdfcraft_engine::SUMMARY_DATE_LANGUAGES).collect::<Vec<_>>(), "description": "How dates are written: iso (2026-10-21 15:28, the default) or the way an interface language writes them (de: 21.10.2026, 15:28; en: 10/21/2026, 3:28 PM)." },
                     "author_colors": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Colours for some authors, by name as the summary prints it (\"Unknown author\" for none): #RRGGBB or a colour name. The others get an automatic colour each; the result lists every author with the colour used. The built-in modern, compact and ink-saver themes set authors' names in them; a stylesheet uses them as var(--author)." },
                     "out": save_out,
                     "open": open

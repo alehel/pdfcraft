@@ -6949,3 +6949,26 @@ fn comment_summary_author_colours_through_tools() {
         assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "author_colors": bad })), Err(ToolError::InvalidArgs(_))), "{bad}");
     }
 }
+
+/// `dates` writes the summary's dates the way an interface language does, or as ISO 8601.
+#[test]
+fn comment_summary_dates_through_tools() {
+    let dir = workdir("summary-dates");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "Hi", "author": "Ada" }));
+    let written = ok(&mut a, "comment_list", json!({ "doc": doc }))["comments"][0]["modified"].as_str().unwrap_or_default().to_string();
+    assert!(!written.is_empty());
+    let mut summary_text = |args: Value| -> String {
+        ok(&mut a, "comments_summarize", args);
+        let s = ok(&mut a, "doc_open", json!({ "path": "dated.pdf" }))["doc"].as_u64().unwrap();
+        let pages = ok(&mut a, "text_extract", json!({ "doc": s }))["pages"].as_array().cloned().unwrap_or_default();
+        ok(&mut a, "doc_close", json!({ "doc": s }));
+        pages.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n")
+    };
+    let german = summary_text(json!({ "doc": doc, "dates": "de", "out": "dated.pdf" }));
+    assert!(german.contains(&pdfcraft_engine::summary_date(&written, "de")), "{german}");
+    let iso = summary_text(json!({ "doc": doc, "dates": "iso", "out": "dated.pdf" }));
+    assert!(iso.contains(&written), "{iso}");
+    assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "dates": "tlh" })), Err(ToolError::InvalidArgs(m)) if m.contains("pt-br")));
+}

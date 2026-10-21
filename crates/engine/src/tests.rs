@@ -2925,6 +2925,61 @@ fn comment_summary_gives_each_author_a_colour() {
     assert!(by_author.blocks.iter().all(|b| !matches!(b, pdfcraft_create::Block::Entry(e) if !e.author.is_empty())));
 }
 
+/// Summary dates the way an interface language writes them, in digits the standard fonts can draw;
+/// ISO 8601 when no language is asked for. A date the file wrote in another form, an impossible
+/// one, and every date for a language not in the list come back unchanged.
+#[test]
+fn summary_dates_follow_the_interface_language() {
+    for (lang, expected) in [
+        ("en", "10/21/2026, 3:28 PM"),
+        ("de", "21.10.2026, 15:28"),
+        ("fr", "21/10/2026 15:28"),
+        ("ja", "2026/10/21 15:28"),
+        ("hu", "2026. 10. 21. 15:28"),
+        ("cs", "21. 10. 2026 15:28"),
+        ("vi", "15:28, 21/10/2026"),
+        ("zh-hant", "2026/10/21 15:28"),
+    ] {
+        assert_eq!(summary_date("2026-10-21 15:28", lang), expected, "{lang}");
+    }
+    assert_eq!(summary_date("2026-01-05 00:07", "en"), "1/5/2026, 12:07 AM");
+    assert_eq!(summary_date("2026-01-05 12:07", "en"), "1/5/2026, 12:07 PM");
+    assert_eq!(summary_date("2026-01-05 09:07", "de"), "05.01.2026, 09:07");
+    for odd in [
+        "",
+        "D:20261021",
+        "2026-13-01 10:00",
+        "2026-10-00 10:00",
+        "2026-10-21 24:00",
+        "2026-10-21T15:28",
+        "2026-10-21 15:28:00",
+        "２０２６-10-21 15:28",
+        "+026-10-21 15:28",
+    ] {
+        assert_eq!(summary_date(odd, "de"), odd, "{odd:?}");
+    }
+    assert_eq!(summary_date("2026-10-21 15:28", "xx"), "2026-10-21 15:28");
+    for lang in SUMMARY_DATE_LANGUAGES {
+        let d = summary_date("2026-10-21 15:28", lang);
+        assert!(d.is_ascii() && d.contains("2026") && d.contains("21"), "{lang}: {d}");
+    }
+
+    // In a summary: the comment's date and its reply's.
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "Agreed".into(), author: "Bo".into() }).unwrap();
+    let all = s.get(id).unwrap().info.annotations.clone();
+    let opts = SummaryOptions { dates: Some("de".into()), ..Default::default() };
+    let report = comment_report("doc.pdf", &all, &opts, &Default::default());
+    let Some(pdfcraft_create::Block::Entry(e)) = report.blocks.iter().find(|b| matches!(b, pdfcraft_create::Block::Entry(_))) else { panic!() };
+    let written = |i: usize| all[i].modified.clone().unwrap();
+    assert_eq!(e.meta, summary_date(&written(0), "de"));
+    assert_ne!(e.meta, written(0), "{}", e.meta);
+    assert_eq!(e.replies.first().map(|r| r.meta.clone()), Some(summary_date(&written(1), "de")));
+    let iso = comment_report("doc.pdf", &all, &SummaryOptions::default(), &Default::default());
+    assert!(iso.plain_text().contains(&written(0)));
+}
+
 /// A text markup comment over the words `needle` on page 1, as selecting them and choosing the
 /// tool does: one quad per line, from the text layer.
 fn markup_over(s: &mut Session, id: DocId, kind: Markup, needle: &str, note: &str) {

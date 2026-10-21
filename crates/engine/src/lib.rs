@@ -5042,6 +5042,10 @@ pub struct SummaryOptions {
     /// Colours chosen for authors (sRGB), by name as the summary prints it. The others get their
     /// automatic colour ([`summary_author_colors`]).
     pub author_colors: std::collections::BTreeMap<String, [u8; 3]>,
+    /// The interface language whose way of writing dates the summary uses (one of
+    /// [`SUMMARY_DATE_LANGUAGES`], see [`summary_date`]); `None` writes them as ISO 8601 does,
+    /// "2026-10-21 15:28".
+    pub dates: Option<String>,
 }
 
 impl Default for SummaryOptions {
@@ -5053,7 +5057,52 @@ impl Default for SummaryOptions {
             only: None,
             marked_text: true,
             author_colors: Default::default(),
+            dates: None,
         }
+    }
+}
+
+/// The languages whose way of writing dates a comment summary can use: the interface languages.
+pub const SUMMARY_DATE_LANGUAGES: [&str; 23] = [
+    "en", "ar", "bg", "cs", "de", "el", "es", "fr", "hu", "it", "ja", "kk", "lt", "pl", "pt-br", "ru", "sl", "te", "tr", "uk", "vi", "zh-hans",
+    "zh-hant",
+];
+
+/// A comment's date as the annotation list gives it ("2026-10-21 15:28") written the way `lang`
+/// (one of [`SUMMARY_DATE_LANGUAGES`]) writes dates and times, in digits so that the summary's
+/// standard fonts can draw it in every language: "21.10.2026, 15:28" in German, "10/21/2026,
+/// 3:28 PM" in English, "2026/10/21 15:28" in Japanese. Anything else (a date the file wrote in
+/// another form, or an impossible one) comes back unchanged, and so does every date for a
+/// language not in the list.
+pub fn summary_date(date: &str, lang: &str) -> String {
+    let b = date.as_bytes();
+    let shape = b.len() == 16 && b.get(4) == Some(&b'-') && b.get(7) == Some(&b'-') && b.get(10) == Some(&b' ') && b.get(13) == Some(&b':');
+    let num = |r: std::ops::Range<usize>| date.get(r).filter(|d| d.bytes().all(|c| c.is_ascii_digit())).and_then(|d| d.parse::<u32>().ok());
+    let (Some(y), Some(mo), Some(d), Some(h), Some(mi)) = (num(0..4), num(5..7), num(8..10), num(11..13), num(14..16)) else {
+        return date.to_string();
+    };
+    if !shape || !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 {
+        return date.to_string();
+    }
+    let twelve = format!("{}:{mi:02} {}", if h % 12 == 0 { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" });
+    match lang {
+        "en" => format!("{mo}/{d}/{y}, {twelve}"),
+        "te" => format!("{d}/{mo}/{y}, {twelve}"),
+        "de" | "kk" | "pl" | "ru" | "uk" => format!("{d:02}.{mo:02}.{y}, {h:02}:{mi:02}"),
+        "bg" => format!("{d}.{mo:02}.{y}, {h}:{mi:02}"),
+        "tr" => format!("{d:02}.{mo:02}.{y} {h:02}:{mi:02}"),
+        "cs" => format!("{d}. {mo}. {y} {h}:{mi:02}"),
+        "sl" => format!("{d}. {mo}. {y}, {h:02}:{mi:02}"),
+        "es" => format!("{d}/{mo}/{y}, {h}:{mi:02}"),
+        "fr" => format!("{d:02}/{mo:02}/{y} {h:02}:{mi:02}"),
+        "it" | "pt-br" => format!("{d:02}/{mo:02}/{y}, {h:02}:{mi:02}"),
+        "el" | "ar" => format!("{d}/{mo}/{y} {h:02}:{mi:02}"),
+        "vi" => format!("{h:02}:{mi:02}, {d:02}/{mo:02}/{y}"),
+        "hu" => format!("{y}. {mo:02}. {d:02}. {h}:{mi:02}"),
+        "lt" => format!("{y}-{mo:02}-{d:02} {h:02}:{mi:02}"),
+        "ja" => format!("{y}/{mo:02}/{d:02} {h}:{mi:02}"),
+        "zh-hans" | "zh-hant" => format!("{y}/{mo}/{d} {h:02}:{mi:02}"),
+        _ => date.to_string(),
     }
 }
 
@@ -5242,7 +5291,16 @@ pub fn comment_report(
         summary_author_colors(all, &opts.author_colors).into_iter().map(|(name, c)| (name, c.map(|v| f32::from(v) / 255.0))).collect();
     // A comment's replies at every depth, in document order. A reply to a reply keeps its `/IRT`
     // on the direct parent, so following one level would leave the deeper replies out.
-    fn replies(out: &mut Vec<Reply>, all: &[pdfcraft_render::Annotation], colors: &Colors, parent: &str, depth: usize) {
+    // A date written the way the summary's language writes it.
+    let dated = |m: &str| opts.dates.as_deref().map_or_else(|| m.to_string(), |lang| summary_date(m, lang));
+    fn replies(
+        out: &mut Vec<Reply>,
+        all: &[pdfcraft_render::Annotation],
+        colors: &Colors,
+        dated: &dyn Fn(&str) -> String,
+        parent: &str,
+        depth: usize,
+    ) {
         if depth > 64 {
             return;
         }
@@ -5252,11 +5310,11 @@ pub fn comment_report(
                 depth,
                 color: colors.get(&author).copied(),
                 author,
-                meta: r.modified.clone().unwrap_or_default(),
+                meta: r.modified.as_deref().map(dated).unwrap_or_default(),
                 body: r.contents.clone().unwrap_or_default(),
             });
             if let Some(nm) = r.name.as_deref() {
-                replies(out, all, colors, nm, depth + 1);
+                replies(out, all, colors, dated, nm, depth + 1);
             }
         }
     }
@@ -5306,13 +5364,13 @@ pub fn comment_report(
             report.blocks.extend(group.map(Block::Heading));
         }
         let mut meta: Vec<String> = Vec::new();
-        meta.extend(a.modified.clone().filter(|m| !m.is_empty()));
+        meta.extend(a.modified.as_deref().filter(|m| !m.is_empty()).map(dated));
         if sort != SummarySort::Page {
             meta.push(format!("Page {}", a.page + 1));
         }
         let mut thread = Vec::new();
         if let Some(nm) = a.name.as_deref() {
-            replies(&mut thread, all, &colors, nm, 0);
+            replies(&mut thread, all, &colors, &dated, nm, 0);
         }
         let who = summary_author(a);
         report.blocks.push(Block::Entry(Entry {

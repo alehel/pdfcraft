@@ -645,7 +645,18 @@ impl Automation {
                 author_colors.insert(name.clone(), parse_color(c)?.map(byte));
             }
         }
-        let opts = SummaryOptions { sort, theme, stylesheet, only, marked_text: a.opt_bool("marked_text")?.unwrap_or(true), author_colors };
+        // Dates as ISO 8601 writes them, or as an interface language does.
+        let dates = match a.opt_str("dates")? {
+            None | Some("iso") => None,
+            Some(lang) if pdfcraft_engine::SUMMARY_DATE_LANGUAGES.contains(&lang) => Some(lang.to_string()),
+            Some(other) => {
+                return Err(ToolError::InvalidArgs(format!(
+                    "dates {other:?}: use iso or a language ({})",
+                    pdfcraft_engine::SUMMARY_DATE_LANGUAGES.join(", ")
+                )));
+            }
+        };
+        let opts = SummaryOptions { sort, theme, stylesheet, only, marked_text: a.opt_bool("marked_text")?.unwrap_or(true), author_colors, dates };
         let (bytes, warnings) = self.session.summarize_comments(id, &opts).map_err(failed)?;
         let authors: Vec<Value> = self
             .session

@@ -18,7 +18,8 @@ fn main() {
 
         // Native displays.
         x11_platform: { all(feature = "x11", free_unix, not(redox)) },
-        wayland_platform: { all(feature = "wayland", free_unix, not(redox)) },
+        // PdfCraft patch: no Wayland backend on illumos and Solaris (X11 only); see Cargo.toml.
+        wayland_platform: { all(feature = "wayland", free_unix, not(redox), not(any(target_os = "illumos", target_os = "solaris"))) },
         orbital_platform: { redox },
     }
 

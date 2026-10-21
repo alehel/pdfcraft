@@ -115,5 +115,6 @@ hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
 winit = { path = "vendor/winit" }
+rfd = { path = "vendor/rfd" }
 egui-wgpu = { path = "vendor/egui-wgpu" }
 vello_common = { path = "vendor/vello_common" }

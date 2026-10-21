@@ -172,6 +172,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-21 (platforms):** PdfCraft builds for illumos (OpenIndiana, OmniOS) and Oracle Solaris on x86_64, X11 only: the vendored winit and a newly vendored rfd leave their Wayland support out there, where it didn't build, and OpenGL (glutin) is left out of the app there. Checked with `cargo check --target x86_64-unknown-illumos` and `x86_64-pc-solaris`; not yet run on a real system, and there is no CI job or package. Estimates unchanged.
 - **2026-10-19 (M14, #3373):** The main menu and its long submenus scroll in short windows, keeping their commands reachable. Estimates unchanged.
 
 - **2026-10-19 (M3, #3387):** Save-prompt shortcuts yield to later consent and utility dialogs; a synthetic UI regression checks that an edited document stays open. Estimates unchanged.

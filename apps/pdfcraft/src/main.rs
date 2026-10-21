@@ -247,7 +247,10 @@ fn main() -> eframe::Result {
     let apple_events = apple_events::AppleEvents::install();
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
-    let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    let first = match (choice, GL) {
+        (RendererChoice::Gl, Some(gl)) => gl,
+        _ => eframe::Renderer::Wgpu,
+    };
     let result = eframe::run_native(
         "PdfCraft",
         native_options(launch.integrated, launch.window_controls.is_some(), first),
@@ -259,16 +262,16 @@ fn main() -> eframe::Result {
             &apple_events,
         ),
     );
-    match result {
+    match (result, GL) {
         // Only a renderer that couldn't start: without a window or display at all, OpenGL can't
         // help either, and winit's own error says more.
-        Err(e @ eframe::Error::Wgpu(_)) if retry_with_gl(choice, started.get()) => {
+        (Err(e @ eframe::Error::Wgpu(_)), Some(gl)) if retry_with_gl(choice, started.get()) => {
             // Old or unusual GPUs and drivers (#461, #435, #392) can't give wgpu a device; OpenGL
             // usually still works there, so that's better than quitting.
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
             eframe::run_native(
                 "PdfCraft",
-                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow),
+                native_options(launch.integrated, launch.window_controls.is_some(), gl),
                 app_creator(
                     launch,
                     started,
@@ -278,9 +281,17 @@ fn main() -> eframe::Result {
                 ),
             )
         }
-        other => other,
+        (other, _) => other,
     }
 }
+
+/// The OpenGL renderer, where it is built: not on illumos or Solaris, where glutin, which it
+/// creates its context through, doesn't build (Cargo.toml). There `PDFCRAFT_RENDERER=gl` starts
+/// wgpu, and a wgpu that can't start is reported, not retried.
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+const GL: Option<eframe::Renderer> = Some(eframe::Renderer::Glow);
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+const GL: Option<eframe::Renderer> = None;
 
 /// Which renderer to start with, from `PDFCRAFT_RENDERER`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -836,6 +847,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
         use super::{RendererChoice, native_options, renderer_choice, retry_with_gl};
         assert_eq!(renderer_choice(None), RendererChoice::Auto);
@@ -853,9 +865,11 @@ mod tests {
         // Each run states its renderer rather than relying on eframe's default.
         assert_eq!(native_options(false, false, eframe::Renderer::Wgpu).renderer, eframe::Renderer::Wgpu);
         assert_eq!(native_options(false, false, eframe::Renderer::Glow).renderer, eframe::Renderer::Glow);
+        assert_eq!(super::GL, Some(eframe::Renderer::Glow));
     }
 
     #[test]
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn the_desktop_frame_is_turned_off_only_when_the_app_draws_one() {
         use super::native_options;
         assert_eq!(native_options(false, false, eframe::Renderer::Glow).viewport.decorations, None);

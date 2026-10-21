@@ -2859,8 +2859,8 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert!(pixel(&s, id, 1, 105, 100)[1] < 40);
 
     let text = comment_summary("doc.pdf", &s.get(id).unwrap().info.annotations, &SummaryOptions::default(), &Default::default());
-    assert!(text.starts_with("Summary of Comments on doc.pdf"));
-    assert!(text.contains("Page: 2\nNumber: 1  Author: Reviewer  Subject: Rectangle"), "{text}");
+    assert!(text.starts_with("Summary of Comments\ndoc.pdf\n"), "{text}");
+    assert!(text.contains("Page 2\n\n#1  Rectangle  Reviewer"), "{text}");
     assert!(text.contains("Still editable") && text.contains("    Agreed"), "{text}");
     assert!(!text.contains("Marked"), "checkmarks aren't listed: {text}");
     let pdf = s.summarize_comments(id, &SummaryOptions { sort: SummarySort::Author, ..Default::default() }).unwrap();
@@ -2868,7 +2868,7 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert!(!s.get(n).unwrap().info.pages.is_empty());
     assert_eq!(
         comment_summary("x", &[], &SummaryOptions::default(), &Default::default()),
-        "Summary of Comments on x\n\nThis document has no comments.\n"
+        "Summary of Comments\nx\n\nThis document has no comments.\n"
     );
 }
 
@@ -2921,18 +2921,19 @@ fn comment_summary_quotes_marked_text_and_lists_only_the_chosen_comments() {
     };
 
     let text = summary(&SummaryOptions::default());
-    assert!(text.contains("Marked text: \u{201c}quick brown\u{201d}"), "{text}");
-    assert!(text.contains("Marked text: \u{201c}lazy\u{201d}") && text.contains("Cut this"), "{text}");
-    assert!(text.contains("Subject: Rectangle"), "{text}");
-    assert!(!summary(&SummaryOptions { marked_text: false, ..Default::default() }).contains("Marked text"));
+    assert!(text.contains("\u{201c}quick brown\u{201d}"), "{text}");
+    assert!(text.contains("\u{201c}lazy\u{201d}") && text.contains("Cut this"), "{text}");
+    assert!(text.contains("Rectangle") && text.contains("3 comments"), "{text}");
+    assert!(!summary(&SummaryOptions { marked_text: false, ..Default::default() }).contains('\u{201c}'));
 
     // Highlights only: the strikethrough and the rectangle are left out, and the highlight keeps
     // the number it has among all the page's comments.
     let highlights = all.iter().filter(|a| a.subtype == "Highlight").map(|a| (a.page, a.index)).collect();
     let opts = SummaryOptions { only: Some(highlights), ..Default::default() };
     let text = comment_summary("fox.pdf", &all, &opts, &[((0, 0), "quick brown".to_string())].into());
-    assert!(text.contains("Number: 1  Author: Ada  Subject: Highlight"), "{text}");
-    assert!(text.contains("Marked text: \u{201c}quick brown\u{201d}"), "{text}");
+    assert!(text.contains("#1  Highlight  Ada"), "{text}");
+    assert!(text.contains("1 of 3 comments"), "{text}");
+    assert!(text.contains("\u{201c}quick brown\u{201d}"), "{text}");
     assert!(!text.contains("Strikethrough") && !text.contains("Rectangle") && !text.contains("Cut this"), "{text}");
     let none = SummaryOptions { only: Some(Default::default()), ..Default::default() };
     assert!(comment_summary("fox.pdf", &all, &none, &Default::default()).ends_with("No comments match the summary options.\n"));

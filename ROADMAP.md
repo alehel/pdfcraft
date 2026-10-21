@@ -172,6 +172,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-21 (M5, formatted comment summary):** The comment summary is laid out as a report rather than plain text: a title and what it covers, headings by page, author or type, one card per comment with a stripe in the comment's colour, the marked text in italics on a tint of it, threaded replies, and page numbers (`pdfcraft_create::report`, standard Helvetica faces only). Estimates unchanged.
+
 - **2026-10-21 (M5, comment summary options):** Summarize Comments chooses what it includes: every comment, or only the ones the Comments panel shows, with the panel's type filter in the dialog (a summary of only the highlights is two clicks). It quotes the words each highlight, underline, strikethrough and squiggly marks, which a highlight without a note used to leave out. `comments_summarize` takes `types`, `authors` and `marked_text`. Estimates unchanged.
 
 - **2026-10-19 (M14, #3373):** The main menu and its long submenus scroll in short windows, keeping their commands reachable. Estimates unchanged.

@@ -1181,3 +1181,63 @@ fn a_jpeg_with_an_exif_orientation_becomes_an_upright_page() {
     let img = image_of(&doc, 1);
     assert_eq!((img.int(b"Width"), img.int(b"Height")), (Some(60), Some(20)));
 }
+
+fn entry(n: usize, body: &str) -> Entry {
+    Entry {
+        number: Some(n),
+        kind: "Highlight".into(),
+        meta: "Ada · 2026-10-21 15:28".into(),
+        color: Some([1.0, 0.9, 0.0]),
+        quote: Some("marked words".into()),
+        body: Some(body.into()),
+        replies: vec![Reply { depth: 0, author: "Bo".into(), meta: "2026-10-21".into(), body: "Agreed".into() }],
+    }
+}
+
+/// A report lays out on as many pages as it needs, each with the three Helvetica faces, a card
+/// longer than a page is split instead of lost, and the plain text holds the same content.
+#[test]
+fn report_lays_out_headings_cards_and_page_breaks() {
+    let mut r = Report { title: "Summary of Comments".into(), subtitle: vec!["notes.pdf".into()], blocks: Vec::new(), footer: "notes.pdf".into() };
+    r.blocks.push(Block::Heading("Page 1".into()));
+    for n in 1..=40 {
+        r.blocks.push(Block::Entry(entry(n, "A short note.")));
+    }
+    let long = "word ".repeat(3000);
+    r.blocks.push(Block::Entry(entry(41, &long)));
+    let (doc, escaped) = report(&r, LETTER).unwrap();
+    assert_eq!(escaped, 0);
+    let doc = reopen(&doc);
+    let pages = pages(&doc);
+    assert!(pages.len() > 6, "{} pages", pages.len());
+    let fonts = pages[0].get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap().clone();
+    let names: Vec<String> = [b"F1".as_slice(), b"F2", b"F3"]
+        .iter()
+        .map(|k| String::from_utf8_lossy(doc.resolve(fonts.get(k).unwrap()).as_dict().unwrap().name(b"BaseFont").unwrap()).into_owned())
+        .collect();
+    assert_eq!(names, ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique"]);
+    let text = r.plain_text();
+    assert!(text.starts_with("Summary of Comments\nnotes.pdf\n\nPage 1\n\n#1  Highlight  Ada"), "{}", &text[..120]);
+    assert!(text.contains("\u{201c}marked words\u{201d}\nA short note.\n    Bo  2026-10-21\n    Agreed\n"));
+}
+
+/// Untrusted comment text can't break the layout: characters Helvetica can't draw are escaped and
+/// counted, colours that aren't numbers fall back, very deep replies and unbroken words still fit,
+/// and a page size that isn't a page is refused.
+#[test]
+fn report_survives_hostile_entries() {
+    let mut e = entry(1, &"x".repeat(20_000));
+    e.kind = "批注".into();
+    e.color = Some([f32::NAN, f32::INFINITY, -3.0]);
+    e.quote = Some(String::new());
+    e.replies = (0..200).map(|d| Reply { depth: d, author: String::new(), meta: String::new(), body: "\u{0}\t\r\n".into() }).collect();
+    let r = Report { title: "T".into(), subtitle: Vec::new(), blocks: vec![Block::Entry(e), Block::Note("none".into())], footer: "f".repeat(5000) };
+    let (doc, escaped) = report(&r, LETTER).unwrap();
+    assert_eq!(escaped, 2 + 200, "the two ideographs and each reply's NUL");
+    reopen(&doc);
+    for bad in [(0.0, 0.0), (f64::NAN, 792.0), (612.0, f64::INFINITY), (1e9, 792.0)] {
+        assert!(matches!(report(&r, bad), Err(CreateError::Invalid(_))), "{bad:?}");
+    }
+    let (empty, _) = report(&Report::default(), LETTER).unwrap();
+    assert_eq!(pages(&reopen(&empty)).len(), 1);
+}

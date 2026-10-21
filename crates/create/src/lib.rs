@@ -5,9 +5,11 @@
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 mod extract;
+mod report;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
+pub use report::{Block, Entry, Reply, Report, report};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CreateError {

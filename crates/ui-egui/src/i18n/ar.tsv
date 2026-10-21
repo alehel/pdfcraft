@@ -2717,15 +2717,15 @@ certificate	Version	الإصدار
 	Modern	حديث
 	Simple	بسيط
 	Classic	كلاسيكي
-	Compact	مضغوط
+	Compact	مدمج
 	Ink saver	موفّر الحبر
-	{n} parts of the stylesheet can't be used	{n} من أجزاء ورقة الأنماط لا يمكن استخدامها
-	{name} is too large for a stylesheet (at most 64 KB).	{name} أكبر من أن تكون ورقة أنماط (64 كيلوبايت على الأكثر).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} أكبر من أن تكون ورقة أنماط ({kb} كيلوبايت على الأكثر).
 	{name} is not a UTF-8 text file.	{name} ليس ملفًا نصيًا بترميز UTF-8.
 	Only comments the Comments panel's filter shows	التعليقات التي يعرضها عامل تصفية لوحة التعليقات فقط
 	Load CSS…	تحميل CSS…
 	Export CSS…	تصدير CSS…
 	Create Summary	إنشاء الملخص
-	{listed} of {total} comments	{listed} من {total} تعليقات
 	Author colours	ألوان المؤلفين
 	This theme doesn't colour authors' names.	لا تلوّن هذه السمة أسماء المؤلفين.
+	Comments: {listed} of {total}	التعليقات: {listed} من {total}
+	Stylesheet warnings: {n}	تحذيرات ورقة الأنماط: {n}

@@ -2436,20 +2436,20 @@ animation effects	Off	Désactivés
 	Page properties	Propriétés de la page
 	Include	Inclure
 	Comment types	Types de commentaire
-	Quote the text that highlights, underlines and strikethroughs mark	Citer le texte marqué par les surlignages, soulignements et barrés
+	Quote the text that highlights, underlines and strikethroughs mark	Citer le texte surligné, souligné ou barré
 	Theme	Thème
 	Modern	Moderne
 	Simple	Simple
 	Classic	Classique
 	Compact	Compact
-	Ink saver	Économie d’encre
-	{n} parts of the stylesheet can't be used	{n} parties de la feuille de style ne peuvent pas être utilisées
-	{name} is too large for a stylesheet (at most 64 KB).	{name} est trop volumineux pour une feuille de style (64 Ko au maximum).
-	{name} is not a UTF-8 text file.	{name} n’est pas un fichier texte UTF-8.
-	Only comments the Comments panel's filter shows	Seulement les commentaires qu’affiche le filtre du panneau Commentaires
-	Load CSS…	Charger un CSS…
+	Ink saver	Économie d'encre
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} est trop volumineux pour une feuille de style ({kb} Ko au maximum).
+	{name} is not a UTF-8 text file.	{name} n'est pas un fichier texte UTF-8.
+	Only comments the Comments panel's filter shows	Seuls les commentaires affichés par le filtre du panneau des commentaires
+	Load CSS…	Charger le CSS…
 	Export CSS…	Exporter le CSS…
 	Create Summary	Créer le résumé
-	{listed} of {total} comments	{listed} commentaires sur {total}
 	Author colours	Couleurs des auteurs
 	This theme doesn't colour authors' names.	Ce thème ne colore pas les noms des auteurs.
+	Comments: {listed} of {total}	Commentaires : {listed} sur {total}
+	Stylesheet warnings: {n}	Avertissements de la feuille de style : {n}

@@ -6,12 +6,12 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 mod extract;
 mod report;
-pub mod report_style;
+mod report_style;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
 pub use report::{Block, Entry, Reply, Report, report};
-pub use report_style::{BUILTIN_THEMES, MAX_STYLESHEET_BYTES, ReportStyle, TYPE_CLASSES, builtin_theme, type_class};
+pub use report_style::{BUILTIN_THEMES, DEFAULT_THEME, MAX_STYLESHEET_BYTES, ReportStyle, TYPE_CLASSES, builtin_theme, type_class};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CreateError {

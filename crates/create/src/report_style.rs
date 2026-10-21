@@ -18,6 +18,14 @@ pub const MAX_STYLESHEET_BYTES: usize = 64 * 1024;
 const MAX_WARNINGS: usize = 50;
 /// `color-mix()` inside `color-mix()` deeper than this is not read.
 const MAX_PAINT_DEPTH: usize = 8;
+/// The selectors of one rule that are read; a rule's declarations apply to each of them.
+const MAX_SELECTORS: usize = 64;
+/// The rules for one comment type kept (`.card.highlight { … }`, one per part, type and
+/// property), so a stylesheet can't make the style, which is copied per comment, huge.
+const MAX_TYPED_RULES: usize = 4096;
+
+/// The theme a summary is drawn in unless another is chosen.
+pub const DEFAULT_THEME: &str = "modern";
 
 /// The built-in themes: (id, display name, stylesheet).
 pub const BUILTIN_THEMES: [(&str, &str, &str); 5] = [
@@ -380,11 +388,10 @@ pub struct ReportStyle {
 }
 
 impl Default for ReportStyle {
-    /// The Modern theme.
+    /// The default theme ([`DEFAULT_THEME`]).
     fn default() -> Self {
         let mut s = ReportStyle::plain();
-        let mut warnings = Vec::new();
-        apply(&mut s, BUILTIN_THEMES[0].2, &mut warnings, true);
+        apply(&mut s, builtin_theme(DEFAULT_THEME).unwrap_or(BUILTIN_THEMES[0].2), &mut Vec::new(), true);
         s
     }
 }
@@ -402,7 +409,8 @@ impl ReportStyle {
     /// Whether the report draws anything in an author's colour (`var(--author)`), so that the
     /// colours chosen for authors show.
     pub fn uses_author_color(&self) -> bool {
-        let drawn = |part: Part, prop: &str, paint: &Paint| part.uses(prop) && paint.uses_author();
+        // Only a comment's parts draw `var(--author)` in an author's colour.
+        let drawn = |part: Part, prop: &str, paint: &Paint| part.in_comment() && part.uses(prop) && paint.uses_author();
         Part::ALL.iter().any(|&part| {
             let p = self.part(part);
             !p.hidden
@@ -411,7 +419,7 @@ impl ReportStyle {
                     || (p.border_left.0 > 0.0 && drawn(part, "border-left", &p.border_left.1))
                     || (p.border_top.0 > 0.0 && drawn(part, "border-top", &p.border_top.1))
                     || (p.border_bottom.0 > 0.0 && drawn(part, "border-bottom", &p.border_bottom.1)))
-        }) || self.typed.iter().any(|(_, _, _, value)| value.contains("--author"))
+        }) || self.typed.iter().any(|(part, _, prop, value)| part.uses(prop) && value.contains("--author"))
     }
 
     pub fn part(&self, p: Part) -> &PartStyle {
@@ -439,6 +447,12 @@ impl ReportStyle {
         std::borrow::Cow::Owned(s)
     }
 
+    /// How many rules for one comment type the style keeps.
+    #[cfg(test)]
+    pub(crate) fn typed_rules(&self) -> usize {
+        self.typed.len()
+    }
+
     fn part_mut(&mut self, p: Part) -> Option<&mut PartStyle> {
         self.parts.get_mut(p as usize)
     }
@@ -446,7 +460,7 @@ impl ReportStyle {
     /// Read `css` over the theme it imports (`@import "classic";`, Modern when it imports none).
     /// Returns the style and a warning for each thing it skipped.
     pub fn parse(css: &str) -> Result<(ReportStyle, Vec<String>), CreateError> {
-        Self::parse_over("modern", css)
+        Self::parse_over(DEFAULT_THEME, css)
     }
 
     /// [`ReportStyle::parse`], starting from the built-in theme `base` when `css` imports none.
@@ -490,7 +504,7 @@ fn imported_theme(css: &str, warnings: &mut Vec<String>) -> Option<&'static str>
             None => warn(
                 warnings,
                 line,
-                format!("@import \"{name}\": only the built-in themes can be imported ({})", BUILTIN_THEMES.map(|t| t.0).join(", ")),
+                format!("@import \"{}\": only the built-in themes can be imported ({})", short(name), BUILTIN_THEMES.map(|t| t.0).join(", ")),
             ),
         }
     }
@@ -499,12 +513,13 @@ fn imported_theme(css: &str, warnings: &mut Vec<String>) -> Option<&'static str>
 
 /// The `@import` statements of `text`, with their lines.
 fn at_rules(text: &str) -> Vec<(usize, &str)> {
+    let lines = Lines::new(text);
     let mut out = Vec::new();
     let mut pos = 0;
     while let Some(i) = text.get(pos..).and_then(|t| t.find("@import")) {
         let start = pos + i;
         let end = text.get(start..).and_then(|t| t.find(';')).map_or(text.len(), |j| start + j + 1);
-        out.push((line_of(text, start), text.get(start..end).unwrap_or_default()));
+        out.push((lines.of(start), text.get(start..end).unwrap_or_default()));
         pos = end;
     }
     out
@@ -518,8 +533,18 @@ fn warn(warnings: &mut Vec<String>, line: usize, msg: String) {
     }
 }
 
-fn line_of(text: &str, byte: usize) -> usize {
-    text.get(..byte).map_or(1, |t| t.matches('\n').count() + 1)
+/// Where the lines of a text break, to number warnings without counting from the start each time.
+struct Lines(Vec<usize>);
+
+impl Lines {
+    fn new(text: &str) -> Lines {
+        Lines(text.match_indices('\n').map(|(i, _)| i).collect())
+    }
+
+    /// The (1-based) line that byte `byte` is on.
+    fn of(&self, byte: usize) -> usize {
+        self.0.partition_point(|&nl| nl < byte).saturating_add(1)
+    }
 }
 
 /// `css` with its comments replaced by spaces (newlines kept, so line numbers stay true).
@@ -537,7 +562,7 @@ fn strip_comments(css: &str, warnings: &mut Vec<String>) -> String {
                 rest = after.get(j + 2..).unwrap_or_default();
             }
             None => {
-                warn(warnings, line_of(css, css.len() - rest.len() + i), "a comment is never closed; the rest of the file is ignored".into());
+                warn(warnings, Lines::new(css).of(css.len() - rest.len() + i), "a comment is never closed; the rest of the file is ignored".into());
                 return out;
             }
         }
@@ -550,6 +575,7 @@ fn strip_comments(css: &str, warnings: &mut Vec<String>) -> String {
 /// nothing).
 fn apply(s: &mut ReportStyle, css: &str, warnings: &mut Vec<String>, builtin: bool) {
     let text = strip_comments(css, warnings);
+    let lines = Lines::new(&text);
     let mut pos = 0usize;
     let len = text.len();
     while pos < len {
@@ -560,7 +586,7 @@ fn apply(s: &mut ReportStyle, css: &str, warnings: &mut Vec<String>, builtin: bo
         if rest.is_empty() {
             break;
         }
-        let line = line_of(&text, pos);
+        let line = lines.of(pos);
         if rest.starts_with("@import") {
             pos += rest.find(';').map_or(rest.len(), |i| i + 1);
             if builtin {
@@ -588,19 +614,22 @@ fn apply(s: &mut ReportStyle, css: &str, warnings: &mut Vec<String>, builtin: bo
                 rest.get(body_start..).unwrap_or_default()
             }
         };
-        let block_line = line_of(&text, pos + body_start);
+
         if block.contains('{') {
             warn(warnings, line, "nested rules are not read".into());
         } else if let Some(at) = prelude.strip_prefix('@') {
             if at.trim().eq_ignore_ascii_case("page") {
-                page_rule(s, block, block_line, &text, pos + body_start, warnings);
+                page_rule(s, block, &lines, pos + body_start, warnings);
             } else {
                 warn(warnings, line, format!("@{} is not read", short(at)));
             }
         } else {
             // Each selector: `.part`, or `.part.type` for one comment type.
             let mut parts: Vec<(Part, Option<&'static str>)> = Vec::new();
-            for sel in prelude.split(',').map(str::trim) {
+            if prelude.split(',').count() > MAX_SELECTORS {
+                warn(warnings, line, format!("only the first {MAX_SELECTORS} selectors of a rule are read"));
+            }
+            for sel in prelude.split(',').map(str::trim).take(MAX_SELECTORS) {
                 let classes: Vec<&str> = sel.strip_prefix('.').map(|c| c.split('.').collect()).unwrap_or_default();
                 let part = classes.first().and_then(|c| Part::ALL.iter().find(|p| c.eq_ignore_ascii_case(p.class())).copied());
                 match (part, classes.get(1..).unwrap_or_default()) {
@@ -628,7 +657,7 @@ fn apply(s: &mut ReportStyle, css: &str, warnings: &mut Vec<String>, builtin: bo
                     ),
                 }
             }
-            for (decl_line, prop, value) in declarations(block, &text, pos + body_start) {
+            for (decl_line, prop, value) in declarations(block, &lines, pos + body_start) {
                 for (p, ty) in &parts {
                     let Some(part) = s.part_mut(*p) else { continue };
                     // A typed rule is checked on a copy and kept for `for_type`.
@@ -644,6 +673,12 @@ fn apply(s: &mut ReportStyle, css: &str, warnings: &mut Vec<String>, builtin: bo
                         warn(warnings, decl_line, format!(".{} doesn't draw {prop}; it takes {}", p.class(), p.takes()));
                     }
                     if let Some(class) = ty {
+                        // The later rule for the same part, type and property replaces the earlier.
+                        s.typed.retain(|(tp, tc, tprop, _)| !(tp == p && tc == class && *tprop == prop));
+                        if s.typed.len() >= MAX_TYPED_RULES {
+                            warn(warnings, decl_line, format!("only {MAX_TYPED_RULES} rules for comment types are read"));
+                            continue;
+                        }
                         s.typed.push((*p, class.to_string(), prop.clone(), value.clone()));
                     }
                 }
@@ -663,8 +698,8 @@ fn short(s: &str) -> String {
 }
 
 /// The `property: value` pairs of a block, lower-cased property first, with their lines.
-/// `offset` is where the block starts in `text`.
-fn declarations(block: &str, text: &str, offset: usize) -> Vec<(usize, String, String)> {
+/// `offset` is where the block starts in the text `lines` numbers.
+fn declarations(block: &str, lines: &Lines, offset: usize) -> Vec<(usize, String, String)> {
     let mut out = Vec::new();
     let mut start = 0;
     let mut depth = 0i32;
@@ -676,7 +711,7 @@ fn declarations(block: &str, text: &str, offset: usize) -> Vec<(usize, String, S
         if decl.is_empty() {
             return;
         }
-        let line = line_of(text, offset + from + lead);
+        let line = lines.of(offset.saturating_add(from).saturating_add(lead));
         match decl.split_once(':') {
             Some((p, v)) => {
                 let v = v.trim();
@@ -701,8 +736,8 @@ fn declarations(block: &str, text: &str, offset: usize) -> Vec<(usize, String, S
     out
 }
 
-fn page_rule(s: &mut ReportStyle, block: &str, _line: usize, text: &str, offset: usize, warnings: &mut Vec<String>) {
-    for (line, prop, value) in declarations(block, text, offset) {
+fn page_rule(s: &mut ReportStyle, block: &str, lines: &Lines, offset: usize, warnings: &mut Vec<String>) {
+    for (line, prop, value) in declarations(block, lines, offset) {
         let result = match prop.as_str() {
             "size" => page_size(&value).map(|size| s.page_size = Some(size)),
             "margin" => box_sides(&value).map(|m| s.margin = m.map(|v| v.clamp(0.0, 288.0))),
@@ -728,7 +763,11 @@ fn page_size(v: &str) -> Result<(f64, f64), String> {
     let (w, h) = match named {
         Some(size) => size,
         None => {
-            let lens: Vec<f64> = words.iter().filter(|w| *w != "landscape" && *w != "portrait").map(|w| length(w)).collect::<Result<_, _>>()?;
+            let lens: Vec<f64> = words
+                .iter()
+                .filter(|w| *w != "landscape" && *w != "portrait")
+                .map(|w| length_up_to(w, PAGE_SIDE_POINTS))
+                .collect::<Result<_, _>>()?;
             match lens.as_slice() {
                 [side] => (*side, *side),
                 [w, h] => (*w, *h),
@@ -736,25 +775,35 @@ fn page_size(v: &str) -> Result<(f64, f64), String> {
             }
         }
     };
-    if !(144.0..=14_400.0).contains(&w) || !(144.0..=14_400.0).contains(&h) {
+    if !(144.0..=PAGE_SIDE_POINTS).contains(&w) || !(144.0..=PAGE_SIDE_POINTS).contains(&h) {
         return Err("size: a page side must be between 2 and 200 inches".into());
     }
     Ok(if landscape { (w.max(h), w.min(h)) } else { (w, h) })
 }
 
-/// A length in points: `pt`, `px` (¾ pt), `mm`, `cm`, `in`, or a bare `0`.
+/// The largest page side a stylesheet can ask for, in points (200 inches, PDF's own limit).
+const PAGE_SIDE_POINTS: f64 = crate::MAX_SIDE;
+
+/// A length in points: `pt`, `px` (¾ pt), `mm`, `cm`, `in`, or a bare `0`, of at most 1000 pt
+/// either way.
 fn length(v: &str) -> Result<f64, String> {
+    length_up_to(v, 1000.0)
+}
+
+/// [`length`], of at most `limit` points either way.
+fn length_up_to(v: &str, limit: f64) -> Result<f64, String> {
     let v = v.trim().to_ascii_lowercase();
     let units = [("pt", 1.0), ("px", 0.75), ("mm", 72.0 / 25.4), ("cm", 72.0 / 2.54), ("in", 72.0)];
     let (num, scale) =
         units.iter().find_map(|(u, k)| v.strip_suffix(u).map(|n| (n, *k))).unwrap_or((v.as_str(), if v == "0" { 1.0 } else { f64::NAN }));
-    let n: f64 = num.trim().parse().map_err(|_| format!("\"{v}\" is not a length (use pt, px, mm, cm or in)"))?;
+    let not_length = || format!("\"{}\" is not a length (use pt, px, mm, cm or in)", short(&v));
+    let n: f64 = num.trim().parse().map_err(|_| not_length())?;
     let pts = n * scale;
     if !pts.is_finite() {
-        return Err(format!("\"{v}\" is not a length (use pt, px, mm, cm or in)"));
+        return Err(not_length());
     }
-    if !(-1000.0..=1000.0).contains(&pts) {
-        return Err(format!("\"{v}\" is too large"));
+    if !(-limit..=limit).contains(&pts) {
+        return Err(format!("\"{}\" is too large", short(&v)));
     }
     Ok(pts)
 }
@@ -961,7 +1010,7 @@ fn color(v: &str, depth: usize) -> Result<Paint, String> {
         return match name {
             "--comment" => Ok(Paint::Comment),
             "--author" => Ok(Paint::Author),
-            _ => Err(format!("var({name}): only var(--comment), the comment's colour, and var(--author), its author's, are defined")),
+            _ => Err(format!("var({}): only var(--comment), the comment's colour, and var(--author), its author's, are defined", short(name))),
         };
     }
     if let Some(args) = lv.strip_prefix("color-mix(").and_then(|a| a.strip_suffix(')')) {

@@ -1446,6 +1446,87 @@ fn report_sets_each_author_in_their_colour() {
     assert!(warnings.iter().any(|w| w.contains("var(--author)")), "{warnings:?}");
 }
 
+/// A stylesheet is untrusted and its text is saved and read again at every launch, so what it can
+/// make the parser keep is bounded: a rule reads its first 64 selectors, and at most 4096 rules
+/// for comment types are kept, a later one for the same part, type and property replacing the
+/// earlier. Warnings quote at most a short part of what they are about.
+#[test]
+fn report_stylesheets_are_bounded() {
+    use crate::report_style::Part;
+    // 100 different selectors in one rule: the first 64 are read.
+    let selectors: Vec<String> = ["meta", "kind", "body", "number", "author", "quote"]
+        .iter()
+        .flat_map(|part| crate::TYPE_CLASSES.iter().map(move |ty| format!(".{part}.{ty}")))
+        .take(100)
+        .collect();
+    let (style, warnings) = ReportStyle::parse(&format!("{} {{ display: none }}", selectors.join(", "))).unwrap();
+    assert_eq!(style.typed_rules(), 64);
+    assert!(warnings.iter().any(|w| w.contains("only the first 64 selectors")), "{warnings:?}");
+
+    // 20 types × 11 parts × 22 properties = 4840 rules for comment types, in 20 rules.
+    let parts = ["card", "number", "kind", "author", "meta", "quote", "body", "reply", "reply-author", "reply-meta", "reply-body"];
+    let props = "color:red;font-size:9pt;font-weight:bold;font-style:italic;line-height:1.2;text-transform:none;margin:1pt;padding:1pt;\
+                 margin-left:2pt;padding-left:2pt;margin-top:1pt;padding-top:1pt;background:red;border-left:1pt solid red;display:block;\
+                 font-family:serif;margin-right:1pt;padding-right:1pt;margin-bottom:1pt;padding-bottom:1pt;border-bottom:1pt solid red;\
+                 border-top:1pt solid red";
+    let css: String = crate::TYPE_CLASSES.iter().map(|ty| format!("{} {{ {props} }}\n", parts.map(|p| format!(".{p}.{ty}")).join(", "))).collect();
+    assert!(css.len() < MAX_STYLESHEET_BYTES, "{}", css.len());
+    assert_eq!(ReportStyle::parse(&css).unwrap().0.typed_rules(), 4096);
+    let again = ".card.ink { color: red }\n".repeat(2000);
+    assert_eq!(ReportStyle::parse(&again).unwrap().0.typed_rules(), 1, "the same rule is kept once");
+
+    // The cascade survives keeping one rule per part, type and property.
+    let (style, _) = ReportStyle::parse(".card.ink { padding: 4pt } .card.ink { padding-left: 1pt } .card.ink { padding: 8pt }").unwrap();
+    assert_eq!(style.for_type("pencil").part(Part::Card).padding, [8.0; 4]);
+
+    let long = format!("@import \"{}\";\n.meta {{ margin: {}pt; color: var(--{}) }}", "x".repeat(2000), "9".repeat(2000), "y".repeat(2000));
+    let (_, warnings) = ReportStyle::parse(&long).unwrap();
+    assert_eq!(warnings.len(), 3, "{warnings:?}");
+    assert!(warnings.iter().all(|w| w.chars().count() < 200), "{warnings:?}");
+
+    // A page as large as the subset says it can be.
+    let (style, warnings) = ReportStyle::parse("@page { size: 20in 200in }").unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(style.page_size, Some((1440.0, 14_400.0)));
+}
+
+/// A stylesheet can't make a report run to pages without end: padding takes at most a quarter
+/// of the page above and below, rows that draw nothing take no page, and a report past 10 000
+/// pages is refused.
+#[test]
+fn report_pages_are_bounded() {
+    let (style, _) = ReportStyle::parse("@page { margin: 288pt 54pt } .card { padding: 288pt 12pt }").unwrap();
+    let r = Report { blocks: (1..=20).map(|n| Block::Entry(entry(n, "Note"))).collect(), ..sample() };
+    let (doc, _) = report(&r, LETTER, &style).unwrap();
+    assert!(pages(&reopen(&doc)).len() <= 25, "{} pages", pages(&reopen(&doc)).len());
+
+    let (tiny, _) = ReportStyle::parse("@page { size: 144pt 144pt; margin: 0 } .card { margin-bottom: 200pt }").unwrap();
+    let r = Report { blocks: (1..=10_050).map(|n| Block::Entry(entry(n, "x"))).collect(), ..sample() };
+    assert!(matches!(report(&r, LETTER, &tiny), Err(CreateError::Invalid(m)) if m.contains("10000 pages")));
+}
+
+/// Upper case only where the standard fonts can draw the capital: µ's is Greek, and used to be
+/// written as an uncounted `?`. A reply's author too long for its line wraps. The author colour
+/// is reported in use only where a comment's part draws it.
+#[test]
+fn report_cases_wraps_and_author_colour_use() {
+    let (style, _) = ReportStyle::parse(".kind { text-transform: uppercase }").unwrap();
+    let mut e = entry(1, "Note");
+    e.kind = "µm".into();
+    e.replies[0].author = "Reviewer ".repeat(40);
+    let r = Report { blocks: vec![Block::Entry(e)], ..sample() };
+    let content = contents(&reopen(&report(&r, LETTER, &style).unwrap().0));
+    assert!(!content.contains("(?M) Tj"), "{content}");
+    assert!(content.matches("Reviewer").count() >= 40 && content.matches("(Reviewer").count() >= 2, "the author wraps: {content}");
+
+    for css in [
+        "@import \"simple\"; .title, .heading, .footer, .subtitle { color: var(--author) }",
+        "@import \"simple\"; .card.highlight { color: var(--author) }",
+    ] {
+        assert!(!ReportStyle::parse(css).unwrap().0.uses_author_color(), "{css}");
+    }
+}
+
 /// A property this subset reads on a part that doesn't draw it is named, with what the part
 /// takes; shorthands count when the part draws any side; type selectors are checked.
 #[test]

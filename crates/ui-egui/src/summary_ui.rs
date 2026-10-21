@@ -5,7 +5,7 @@
 //! colour). A stylesheet the user loads is one more entry in the theme menu, and the preview beside
 //! the options shows the summary a page at a time, made again whenever an option changes.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::{DocId, SummaryOptions, SummarySort};
@@ -21,6 +21,8 @@ const SAMPLE_DATE: &str = "2026-10-21 15:28";
 
 /// The most authors' colours kept between sessions.
 pub const MAX_SAVED_AUTHOR_COLORS: usize = 500;
+/// The longest author name whose colour is kept between sessions.
+pub const MAX_SAVED_AUTHOR_NAME_BYTES: usize = 512;
 
 /// `#rrggbb` as sRGB bytes.
 pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
@@ -30,11 +32,11 @@ pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
     Some([byte(0)?, byte(2)?, byte(4)?])
 }
 
-/// The dialog's choices, kept for the session; the theme and stylesheet are also remembered.
-#[derive(Default)]
+/// The dialog's choices, kept for the session; the theme, stylesheet, date format and authors'
+/// colours are also remembered.
 pub struct SummaryDraft {
     pub sort: SummarySort,
-    /// Quote the text highlights, underlines and strikethroughs mark.
+    /// Quote the text highlights, underlines, strikethroughs and squigglies mark.
     pub marked_text: bool,
     /// Comment types (as the Comments panel names them) left out.
     pub hidden_types: Vec<String>,
@@ -53,22 +55,45 @@ pub struct SummaryDraft {
     /// The summary page the preview shows (0-based).
     pub preview_page: usize,
     preview: Option<Preview>,
+    /// How many summaries the preview has made, for tests of its cache.
+    #[doc(hidden)]
+    pub previews_made: usize,
     /// Whether the chosen look draws authors' colours, for the look it was worked out for.
     shows_author_colors: Option<(u64, bool)>,
 }
 
+impl Default for SummaryDraft {
+    fn default() -> SummaryDraft {
+        SummaryDraft::new()
+    }
+}
+
 impl SummaryDraft {
     pub fn new() -> SummaryDraft {
-        SummaryDraft { marked_text: true, theme: "modern".into(), ..Default::default() }
+        SummaryDraft {
+            sort: SummarySort::default(),
+            marked_text: true,
+            hidden_types: Vec::new(),
+            panel_filter: false,
+            theme: pdfcraft_engine::SUMMARY_DEFAULT_THEME.into(),
+            stylesheet: None,
+            warnings: Vec::new(),
+            author_colors: BTreeMap::new(),
+            iso_dates: false,
+            preview_page: 0,
+            preview: None,
+            previews_made: 0,
+            shows_author_colors: None,
+        }
     }
 
     /// The engine's options for these choices; `only` is the comments to list.
-    pub fn options(&self, only: Option<HashSet<(usize, usize)>>) -> SummaryOptions {
+    pub fn options(&self, only: Option<BTreeSet<(usize, usize)>>) -> SummaryOptions {
         let custom = self.theme == CUSTOM;
         SummaryOptions {
             sort: self.sort,
-            // A stylesheet starts from the theme it imports, Modern when it imports none.
-            theme: if custom { "modern".into() } else { self.theme.clone() },
+            // A stylesheet starts from the theme it imports, the default theme when it imports none.
+            theme: if custom { pdfcraft_engine::SUMMARY_DEFAULT_THEME.into() } else { self.theme.clone() },
             stylesheet: if custom { self.stylesheet.as_ref().map(|(_, css)| css.clone()) } else { None },
             only,
             marked_text: self.marked_text,
@@ -103,7 +128,7 @@ fn listable(a: &Annotation) -> bool {
 
 /// What the summary of document `id` lists with these choices: the comments (`None`: all of
 /// them), how many that is, and how many there are.
-pub fn selection(app: &PdfCraftApp, id: DocId) -> (Option<HashSet<(usize, usize)>>, usize, usize) {
+pub fn selection(app: &PdfCraftApp, id: DocId) -> (Option<BTreeSet<(usize, usize)>>, usize, usize) {
     let Some(doc) = app.session.get(id) else { return (None, 0, 0) };
     let info = &doc.info;
     let d = &app.summary;
@@ -118,7 +143,7 @@ pub fn selection(app: &PdfCraftApp, id: DocId) -> (Option<HashSet<(usize, usize)
     if d.hidden_types.is_empty() && panel.is_none() {
         return (None, total, total);
     }
-    let only: HashSet<(usize, usize)> = info
+    let only: BTreeSet<(usize, usize)> = info
         .annotations
         .iter()
         .filter(|a| listable(a))
@@ -147,11 +172,15 @@ fn panel_filter_active(app: &PdfCraftApp, id: DocId) -> bool {
 /// shorter) as a texture, with that page and the number of pages. The summary is made again only
 /// when the choices or the document change, and the page drawn again only when it changes.
 fn preview(app: &mut PdfCraftApp, ctx: &egui::Context, id: DocId) -> Option<(egui::TextureHandle, usize, usize)> {
+    use std::hash::{Hash, Hasher};
     let (only, _, _) = selection(app, id);
     let opts = app.summary.options(only);
     let doc = app.session.get(id)?;
-    // The document's bytes and comments identify its state; the options identify the choices.
-    let key = format!("{id:?}/{:p}/{}/{}/{opts:?}", doc.bytes.as_ptr(), doc.bytes.len(), doc.info.annotations.len());
+    let ppp = ctx.pixels_per_point().max(1.0);
+    // The document's edits, the choices and the screen's pixel density identify a preview.
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (id, doc.edit_generation(), &opts, ppp.to_bits()).hash(&mut h);
+    let key = h.finish();
     let wanted = app.summary.preview_page;
     if let Some(p) = &app.summary.preview
         && p.key == key
@@ -160,33 +189,49 @@ fn preview(app: &mut PdfCraftApp, ctx: &egui::Context, id: DocId) -> Option<(egu
         app.summary.preview_page = p.page;
         return Some((p.texture.clone(), p.page, p.pages));
     }
-    let made = app.summary.preview.as_ref().filter(|p| p.key == key).map(|p| p.pdf.clone());
-    let pdf = match made {
-        Some(pdf) => pdf,
-        None => app.session.summarize_comments(id, &opts).ok()?.0,
+    let made = app.summary.preview.as_ref().filter(|p| p.key == key).map(|p| (p.pdf.clone(), p.size));
+    let (pdf, size) = match made {
+        Some(made) => made,
+        None => {
+            let (pdf, _) = app.session.summarize_comments(id, &opts).ok()?;
+            app.summary.previews_made = app.summary.previews_made.saturating_add(1);
+            // The paper the stylesheet asks for, Letter otherwise (as the summary is made).
+            let size = pdfcraft_engine::summary_style(&opts).ok().and_then(|(style, _)| style.page_size).unwrap_or((612.0, 792.0));
+            (pdf, size)
+        }
     };
     let mut r = pdfcraft_render::PageRenderer::new(pdf.clone(), pdfcraft_render::RenderConfig::default());
     let pages = r.page_count();
     let page = wanted.min(pages.saturating_sub(1));
     app.summary.preview_page = page;
-    let ppp = ctx.pixels_per_point().max(1.0);
-    // 260 points wide on screen; a Letter page is 612 points wide.
-    let scale = (260.0 * ppp / 612.0).clamp(0.1, 4.0);
+    let scale = preview_scale(size, ppp, ctx.input(|i| i.max_texture_side) as f32);
     let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Pixels, scale, ..Default::default() });
     if out.error.is_some() || out.width == 0 || out.height == 0 {
         return None;
     }
     let img = egui::ColorImage::from_rgba_premultiplied([out.width as usize, out.height as usize], &out.rgba);
     let texture = ctx.load_texture("summary-preview", img, egui::TextureOptions::LINEAR);
-    app.summary.preview = Some(Preview { key, pdf, pages, page, texture: texture.clone() });
+    app.summary.preview = Some(Preview { key, pdf, size, pages, page, texture: texture.clone() });
     Some((texture, page, pages))
+}
+
+/// The box the preview's page fits in, in points on screen.
+const PREVIEW: egui::Vec2 = egui::vec2(260.0, 340.0);
+
+/// The scale that fits a page of `size` points into [`PREVIEW`] on a screen of `ppp` pixels per
+/// point, in a texture no side of which passes `max_side` pixels.
+fn preview_scale(size: (f64, f64), ppp: f32, max_side: f32) -> f32 {
+    let (w, h) = (size.0.max(1.0) as f32, size.1.max(1.0) as f32);
+    ((PREVIEW.x / w).min(PREVIEW.y / h) * ppp.max(1.0)).min(max_side.max(1.0) / w.max(h)).clamp(0.01, 4.0)
 }
 
 /// The preview: the summary made for one set of choices, and the page of it on screen.
 struct Preview {
-    /// The choices and the document state it was made for.
-    key: String,
+    /// The document state, choices and pixel density it was made for.
+    key: u64,
     pdf: std::sync::Arc<Vec<u8>>,
+    /// The summary's paper, in points.
+    size: (f64, f64),
     pages: usize,
     page: usize,
     texture: egui::TextureHandle,
@@ -231,7 +276,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> Outc
             match preview(app, &ctx, id) {
                 Some((tex, page, pages)) => {
                     let size = tex.size_vec2() / ctx.pixels_per_point().max(1.0);
-                    let r = ui.add(egui::Image::new(&tex).fit_to_exact_size(size));
+                    let alt =
+                        crate::i18n::fmt(tl!("Preview: page {p} of {n}"), &[("p", &page.saturating_add(1).to_string()), ("n", &pages.to_string())]);
+                    let r = ui.add(egui::Image::new(&tex).fit_to_exact_size(size).alt_text(alt));
                     ui.painter().rect_stroke(r.rect, 0.0, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
                     if pages > 1 {
                         ui.horizontal(|ui| {
@@ -262,7 +309,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> Outc
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(crate::i18n::fmt(
-                tl!("{listed} of {total} comments"),
+                tl!("Comments: {listed} of {total}"),
                 &[("listed", &listed.to_string()), ("total", &total.to_string())],
             ))
             .color(t.text_muted),
@@ -345,25 +392,32 @@ fn author_colors(ui: &mut egui::Ui, app: &mut PdfCraftApp, id: DocId, t: &Tokens
     if !d.shows_author_colors() {
         ui.label(egui::RichText::new(tl!("This theme doesn't colour authors' names.")).small().color(t.text_faint));
     }
-    egui::ScrollArea::vertical().id_salt("summary-authors").max_height(110.0).auto_shrink([false, true]).show(ui, |ui| {
-        egui::Grid::new("summary-author-colors").num_columns(2).spacing([18.0, 4.0]).show(ui, |ui| {
-            for (i, (name, color)) in authors.iter().enumerate() {
+    // One author a row: the colour button (named for screen readers by the author), the name in
+    // a fixed width, and Auto when a colour was picked.
+    let row_h = ui.spacing().interact_size.y;
+    egui::ScrollArea::vertical().id_salt("summary-authors").max_height(110.0).auto_shrink([false, true]).show_rows(
+        ui,
+        row_h,
+        authors.len(),
+        |ui, rows| {
+            for (name, color) in authors.get(rows).unwrap_or_default() {
                 ui.horizontal(|ui| {
                     let mut c = *color;
-                    if ui.color_edit_button_srgb(&mut c).changed() {
+                    let button = ui.color_edit_button_srgb(&mut c);
+                    button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, name));
+                    if button.changed() {
                         d.author_colors.insert(name.clone(), c);
                     }
-                    ui.add(egui::Label::new(name.as_str()).truncate());
+                    ui.allocate_ui_with_layout(egui::vec2(260.0, row_h), Layout::left_to_right(Align::Center), |ui| {
+                        ui.add(egui::Label::new(name.as_str()).truncate());
+                    });
                     if d.author_colors.contains_key(name) && ui.small_button(tl!("Auto")).clicked() {
                         d.author_colors.remove(name);
                     }
                 });
-                if i % 2 == 1 {
-                    ui.end_row();
-                }
             }
-        });
-    });
+        },
+    );
 }
 
 fn appearance_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, out: &mut Outcome) {
@@ -412,11 +466,32 @@ fn appearance_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, out:
     });
     if d.theme == CUSTOM && !d.warnings.is_empty() {
         let n = d.warnings.len();
-        let title = crate::i18n::fmt(tl!("{n} parts of the stylesheet can't be used"), &[("n", &n.to_string())]);
+        let title = crate::i18n::fmt(tl!("Stylesheet warnings: {n}"), &[("n", &n.to_string())]);
         egui::CollapsingHeader::new(egui::RichText::new(title).small().color(t.text_muted)).id_salt("summary-warnings").show(ui, |ui| {
             for w in &d.warnings {
                 ui.label(egui::RichText::new(w).small().weak());
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Any paper fits the preview box, and no texture side passes the graphics card's limit.
+    #[test]
+    fn the_preview_fits_any_paper() {
+        for (size, ppp) in
+            [((612.0, 792.0), 1.0), ((612.0, 792.0), 2.0), ((841.89, 595.276), 2.0), ((14_400.0, 14_400.0), 3.0), ((144.0, 14_400.0), 1.0)]
+        {
+            let scale = preview_scale(size, ppp, 2048.0);
+            let (w, h) = (size.0 as f32 * scale, size.1 as f32 * scale);
+            assert!(w <= PREVIEW.x * ppp + 0.5 && h <= PREVIEW.y * ppp + 0.5, "{size:?} at {ppp}: {w} × {h}");
+            assert!(w.max(h) <= 2048.0 + 0.5, "{size:?}");
+        }
+        let tiny_card = preview_scale((612.0, 792.0), 2.0, 256.0);
+        assert!(792.0 * tiny_card <= 256.5, "a small texture limit wins");
+        assert!(preview_scale((0.0, f64::NAN), f32::NAN, 0.0).is_finite());
     }
 }

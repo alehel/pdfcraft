@@ -165,7 +165,17 @@ impl<'a> Ink<'a> {
         self.part.font().text_width(s, self.part.size)
     }
     fn text(&self, s: &str) -> String {
-        if self.part.uppercase { s.to_uppercase() } else { s.to_string() }
+        if !self.part.uppercase {
+            return s.to_string();
+        }
+        // A letter whose capital the standard fonts can't draw (µ's is Greek) keeps its case:
+        // `s` was escaped for those fonts already.
+        s.chars()
+            .map(|c| {
+                let up: String = c.to_uppercase().collect();
+                if pdfcraft_fonts::first_undrawable(&up).is_none() { up } else { c.to_string() }
+            })
+            .collect()
     }
     /// `s` wrapped to `width` points.
     fn lines(&self, width: f64, s: &str) -> Vec<String> {
@@ -184,6 +194,9 @@ impl<'a> Ink<'a> {
     }
 }
 
+/// The most pages a report runs to; laying out more is refused.
+const MAX_PAGES: usize = 10_000;
+
 /// Pages being laid out: what each holds, behind (fills) and in front (text).
 struct Pages {
     height: f64,
@@ -193,16 +206,22 @@ struct Pages {
     fonts: Vec<Std14>,
     /// Distance down from the top edge of the current page.
     y: f64,
+    /// More than [`MAX_PAGES`] were asked for; the rest went onto the last page.
+    full: bool,
 }
 
 impl Pages {
     fn new(height: f64, top: f64, bottom: f64) -> Pages {
-        let mut p = Pages { height, top, bottom, pages: Vec::new(), fonts: Vec::new(), y: 0.0 };
+        let mut p = Pages { height, top, bottom, pages: Vec::new(), fonts: Vec::new(), y: 0.0, full: false };
         p.new_page();
         p
     }
     fn new_page(&mut self) {
-        self.pages.push((Vec::new(), Vec::new()));
+        if self.pages.len() >= MAX_PAGES {
+            self.full = true;
+        } else {
+            self.pages.push((Vec::new(), Vec::new()));
+        }
         self.y = self.top;
     }
     fn room(&self) -> f64 {
@@ -355,7 +374,7 @@ fn entry_rows(e: &Entry, inner: f64, style: &ReportStyle) -> Vec<Row> {
     if !author_fits && !author.hidden {
         rows.extend(ai.rows(0.0, inner, &e.author));
     }
-    if !meta_fits && !meta.hidden {
+    if !meta_fits && !meta.hidden && !e.meta.is_empty() {
         rows.extend(mi.rows(0.0, inner, &e.meta));
     }
     let quote = style.part(Part::Quote);
@@ -391,11 +410,17 @@ fn entry_rows(e: &Entry, inner: f64, style: &ReportStyle) -> Vec<Row> {
             let mut head = Row { h: lead, ops: Vec::new() };
             let mut x = text_x;
             let base = lead / 2.0 + ra.size.max(rm.size) * 0.35;
+            // What doesn't fit on the line beside what came before goes on lines of its own.
+            let mut below: Vec<(&Ink, &str)> = Vec::new();
             for (ink, text, gap) in [(&ai, r.author.as_str(), 6.0), (&mi, r.meta.as_str(), 0.0)] {
                 if ink.part.hidden || text.is_empty() {
                     continue;
                 }
                 let t = ink.text(text);
+                if !below.is_empty() || x + ink.width(&t) > text_x + text_w {
+                    below.push((ink, text));
+                    continue;
+                }
                 let mut op = ink.op(x, &t, lead);
                 if let Op::Text { y, .. } = &mut op {
                     *y = base;
@@ -405,6 +430,9 @@ fn entry_rows(e: &Entry, inner: f64, style: &ReportStyle) -> Vec<Row> {
             }
             if !head.ops.is_empty() {
                 inside.push(head);
+            }
+            for (ink, text) in below {
+                inside.extend(ink.rows(text_x, text_w, text));
             }
             if !rb.hidden {
                 inside.extend(bi.rows(text_x, text_w, &r.body));
@@ -467,6 +495,7 @@ pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Docu
     let none = Vars { comment: NO_COLOR, author: NO_AUTHOR };
     let rule = |p: &PartStyle, side: (f64, &crate::report_style::Paint)| (side.0, side.1.resolve(none).filter(|_| !p.hidden));
     let mut p = Pages::new(h, mt, mb);
+    let mut by_type: std::collections::HashMap<String, std::borrow::Cow<'_, ReportStyle>> = std::collections::HashMap::new();
     let (title_s, sub_s, header_s) = (style.part(Part::Title), style.part(Part::Subtitle), style.part(Part::Header));
     if !title_s.hidden {
         p.flow(&Ink::new(title_s, none).rows(0.0, width, &title), ml);
@@ -508,17 +537,22 @@ pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Docu
                 }
             }
             Block::Entry(e) => {
-                // The style for this comment's type (`.card.highlight` and the like).
-                let style = style.for_type(&type_class(&e.kind));
-                let style: &ReportStyle = &style;
+                // The style for this comment's type (`.card.highlight` and the like), made once
+                // per type.
+                let class = type_class(&e.kind);
+                let style: &ReportStyle = by_type.entry(class).or_insert_with_key(|class| style.for_type(class));
                 let card = style.part(Part::Card);
                 if card.hidden {
                     continue;
                 }
-                let (stripe, [pad_t, pad_r, pad_b, pad_l]) = (card.border_left.0.max(0.0), card.padding);
+                // Padding of at most a quarter of the page above and below, so a row always fits.
+                let [pad_t, pad_r, pad_b, pad_l] = card.padding;
+                let (pad_t, pad_b) = (pad_t.min(p.body_height() / 4.0), pad_b.min(p.body_height() / 4.0));
+                let stripe = card.border_left.0.max(0.0);
                 let inner = (width - stripe - pad_l - pad_r).max(72.0);
                 let vars = Vars { comment: clean(e.color, NO_COLOR), author: clean(e.author_color, NO_AUTHOR) };
-                let rows = entry_rows(e, inner, style);
+                // Rows that are neither tall nor draw anything only cost pages.
+                let rows: Vec<Row> = entry_rows(e, inner, style).into_iter().filter(|r| r.h > 0.0 || !r.ops.is_empty()).collect();
                 let total: f64 = rows.iter().map(|r| r.h).sum::<f64>() + pad_t + pad_b;
                 // A card that fits on a page is not split; a longer one is, row by row.
                 if total > p.room() && total <= p.body_height() {
@@ -566,6 +600,10 @@ pub fn report(r: &Report, page: (f64, f64), style: &ReportStyle) -> Result<(Docu
                 p.place(&Row::gap(card.margin[2]), ml);
             }
         }
+    }
+
+    if p.full {
+        return Err(CreateError::Invalid(format!("the report would run past {MAX_PAGES} pages; leave some comments out or use smaller margins")));
     }
 
     // The footer: the report's name on the left, the page number on the right, a rule above.

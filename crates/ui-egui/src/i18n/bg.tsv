@@ -2406,13 +2406,13 @@ animation effects	Off	Изключени
 	Classic	Класическа
 	Compact	Компактна
 	Ink saver	Пестяща мастило
-	{n} parts of the stylesheet can't be used	{n} части от стиловия файл не могат да се използват
-	{name} is too large for a stylesheet (at most 64 KB).	{name} е твърде голям за стилов файл (най-много 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} е твърде голям за стилов файл (най-много {kb} KB).
 	{name} is not a UTF-8 text file.	{name} не е текстов файл в UTF-8.
-	Only comments the Comments panel's filter shows	Само коментарите, които филтърът на панела „Коментари“ показва
-	Load CSS…	Зареждане на CSS…
-	Export CSS…	Експортиране на CSS…
-	Create Summary	Създаване на обобщение
-	{listed} of {total} comments	{listed} от {total} коментара
+	Only comments the Comments panel's filter shows	Само коментарите, които филтърът на панела с коментари показва
+	Load CSS…	Зареди CSS…
+	Export CSS…	Експортирай CSS…
+	Create Summary	Създай обобщение
 	Author colours	Цветове на авторите
 	This theme doesn't colour authors' names.	Тази тема не оцветява имената на авторите.
+	Comments: {listed} of {total}	Коментари: {listed} от {total}
+	Stylesheet warnings: {n}	Предупреждения за стиловия файл: {n}

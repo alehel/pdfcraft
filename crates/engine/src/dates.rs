@@ -580,6 +580,64 @@ impl Session {
     }
 }
 
+/// A comment's date as the annotation list gives it ("2026-10-21 15:28") written the way the
+/// interface language `lang` (a code of [`DATE_LANGUAGES`]) writes dates and times, in digits so
+/// that the standard fonts of a comment summary can draw it in every language: "21.10.2026,
+/// 15:28" in German, "10/21/2026, 3:28 PM" in English, "2026/10/21 15:28" in Japanese. Anything
+/// else (a date the file wrote in another form, a day the month doesn't have, a language not in
+/// the list) comes back unchanged.
+pub fn summary_date(date: &str, lang: &str) -> String {
+    let Some(write) = numeric_date_time(lang) else { return date.to_string() };
+    let b = date.as_bytes();
+    let shape = b.len() == 16 && b.get(4) == Some(&b'-') && b.get(7) == Some(&b'-') && b.get(10) == Some(&b' ') && b.get(13) == Some(&b':');
+    let num = |r: std::ops::Range<usize>| date.get(r).filter(|d| d.bytes().all(|c| c.is_ascii_digit())).and_then(|d| d.parse::<u32>().ok());
+    let (Some(y), Some(mo), Some(d), Some(h), Some(mi)) = (num(0..4), num(5..7), num(8..10), num(11..13), num(14..16)) else {
+        return date.to_string();
+    };
+    let leap = y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400));
+    let days = match mo {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if !shape || !(1..=12).contains(&mo) || !(1..=days).contains(&d) || h > 23 || mi > 59 {
+        return date.to_string();
+    }
+    write(y, mo, d, h, mi)
+}
+
+/// Writes a date and time from its year, month, day, hour and minute.
+pub(crate) type WriteDateTime = fn(u32, u32, u32, u32, u32) -> String;
+
+/// How the interface language `lang` writes a date and time in digits; `None` for a language not
+/// in [`DATE_LANGUAGES`].
+pub(crate) fn numeric_date_time(lang: &str) -> Option<WriteDateTime> {
+    fn twelve(h: u32, mi: u32) -> String {
+        format!("{}:{mi:02} {}", if h.is_multiple_of(12) { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" })
+    }
+    let write: WriteDateTime = match lang {
+        "en" => |y, mo, d, h, mi| format!("{mo}/{d}/{y}, {}", twelve(h, mi)),
+        "te" => |y, mo, d, h, mi| format!("{d}/{mo}/{y}, {}", twelve(h, mi)),
+        "de" | "kk" | "pl" | "ru" | "uk" => |y, mo, d, h, mi| format!("{d:02}.{mo:02}.{y}, {h:02}:{mi:02}"),
+        "bg" => |y, mo, d, h, mi| format!("{d}.{mo:02}.{y}, {h}:{mi:02}"),
+        "tr" => |y, mo, d, h, mi| format!("{d:02}.{mo:02}.{y} {h:02}:{mi:02}"),
+        "cs" => |y, mo, d, h, mi| format!("{d}. {mo}. {y} {h}:{mi:02}"),
+        "sl" => |y, mo, d, h, mi| format!("{d}. {mo}. {y}, {h:02}:{mi:02}"),
+        "es" => |y, mo, d, h, mi| format!("{d}/{mo}/{y}, {h}:{mi:02}"),
+        "fr" => |y, mo, d, h, mi| format!("{d:02}/{mo:02}/{y} {h:02}:{mi:02}"),
+        "it" | "pt-br" => |y, mo, d, h, mi| format!("{d:02}/{mo:02}/{y}, {h:02}:{mi:02}"),
+        "el" | "ar" => |y, mo, d, h, mi| format!("{d}/{mo}/{y} {h:02}:{mi:02}"),
+        "vi" => |y, mo, d, h, mi| format!("{h:02}:{mi:02}, {d:02}/{mo:02}/{y}"),
+        "hu" => |y, mo, d, h, mi| format!("{y}. {mo:02}. {d:02}. {h}:{mi:02}"),
+        "lt" => |y, mo, d, h, mi| format!("{y}-{mo:02}-{d:02} {h:02}:{mi:02}"),
+        "ja" => |y, mo, d, h, mi| format!("{y}/{mo:02}/{d:02} {h}:{mi:02}"),
+        "zh-hans" | "zh-hant" => |y, mo, d, h, mi| format!("{y}/{mo}/{d} {h:02}:{mi:02}"),
+        _ => return None,
+    };
+    Some(write)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

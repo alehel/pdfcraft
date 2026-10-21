@@ -2443,13 +2443,13 @@ animation effects	Off	オフ
 	Classic	クラシック
 	Compact	コンパクト
 	Ink saver	インク節約
-	{n} parts of the stylesheet can't be used	スタイルシートのうち {n} 箇所は使用できません
-	{name} is too large for a stylesheet (at most 64 KB).	{name} はスタイルシートとしては大きすぎます (最大 64 KB)。
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} はスタイルシートの上限（{kb} KB）を超えています。
 	{name} is not a UTF-8 text file.	{name} は UTF-8 のテキストファイルではありません。
-	Only comments the Comments panel's filter shows	注釈パネルのフィルターで表示されている注釈のみ
+	Only comments the Comments panel's filter shows	コメントパネルの絞り込みで表示されている注釈のみ
 	Load CSS…	CSS を読み込む…
 	Export CSS…	CSS を書き出す…
-	Create Summary	概要を作成
-	{listed} of {total} comments	{total} 件中 {listed} 件の注釈
+	Create Summary	一覧を作成
 	Author colours	作成者の色
 	This theme doesn't colour authors' names.	このテーマでは作成者名に色を付けません。
+	Comments: {listed} of {total}	注釈: {total} 件中 {listed} 件
+	Stylesheet warnings: {n}	スタイルシートの警告: {n} 件

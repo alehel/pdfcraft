@@ -366,7 +366,10 @@ impl PdfCraftApp {
                 return;
             }
             if purpose == FilePurpose::Stylesheet && std::fs::metadata(p).is_ok_and(|m| m.len() > pdfcraft_engine::MAX_STYLESHEET_BYTES as u64) {
-                self.notify_fmt("{name} is too large for a stylesheet (at most 64 KB).", &[("name", &name)]);
+                self.notify_fmt(
+                    "{name} is too large for a stylesheet (at most {kb} KB).",
+                    &[("name", &name), ("kb", &(pdfcraft_engine::MAX_STYLESHEET_BYTES / 1024).to_string())],
+                );
                 return;
             }
             let read = if matches!(purpose, FilePurpose::TextFont { .. }) {
@@ -532,7 +535,10 @@ impl PdfCraftApp {
             FilePurpose::Stylesheet => {
                 let Some((name, bytes)) = files.into_iter().next() else { return };
                 if bytes.len() > pdfcraft_engine::MAX_STYLESHEET_BYTES {
-                    self.notify_fmt("{name} is too large for a stylesheet (at most 64 KB).", &[("name", &name)]);
+                    self.notify_fmt(
+                        "{name} is too large for a stylesheet (at most {kb} KB).",
+                        &[("name", &name), ("kb", &(pdfcraft_engine::MAX_STYLESHEET_BYTES / 1024).to_string())],
+                    );
                     return;
                 }
                 match String::from_utf8(bytes) {

@@ -2688,20 +2688,20 @@ key	Space	Space
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	Include	Bao gồm
-	Comment types	Loại nhận xét
+	Comment types	Loại bình luận
 	Quote the text that highlights, underlines and strikethroughs mark	Trích dẫn văn bản được đánh dấu bằng tô sáng, gạch chân và gạch ngang
 	Modern	Hiện đại
 	Simple	Đơn giản
 	Classic	Cổ điển
 	Compact	Gọn
 	Ink saver	Tiết kiệm mực
-	{n} parts of the stylesheet can't be used	{n} phần của bảng định kiểu không dùng được
-	{name} is too large for a stylesheet (at most 64 KB).	{name} quá lớn đối với một bảng định kiểu (tối đa 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} quá lớn đối với một bảng định kiểu (tối đa {kb} KB).
 	{name} is not a UTF-8 text file.	{name} không phải là tệp văn bản UTF-8.
-	Only comments the Comments panel's filter shows	Chỉ các nhận xét mà bộ lọc của bảng Nhận xét hiển thị
+	Only comments the Comments panel's filter shows	Chỉ các bình luận mà bộ lọc của bảng bình luận hiển thị
 	Load CSS…	Tải CSS…
 	Export CSS…	Xuất CSS…
 	Create Summary	Tạo bản tóm tắt
-	{listed} of {total} comments	{listed} trong {total} nhận xét
 	Author colours	Màu của tác giả
 	This theme doesn't colour authors' names.	Chủ đề này không tô màu tên tác giả.
+	Comments: {listed} of {total}	Bình luận: {listed} trên {total}
+	Stylesheet warnings: {n}	Cảnh báo của bảng định kiểu: {n}

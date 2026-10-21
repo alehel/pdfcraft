@@ -2437,20 +2437,20 @@ animation effects	Off	Aus
 	Page properties	Seiteneigenschaften
 	Include	Einbeziehen
 	Comment types	Kommentartypen
-	Quote the text that highlights, underlines and strikethroughs mark	Text zitieren, den Hervorhebungen, Unterstreichungen und Durchstreichungen markieren
+	Quote the text that highlights, underlines and strikethroughs mark	Hervorgehobenen, unterstrichenen und durchgestrichenen Text zitieren
 	Theme	Design
 	Modern	Modern
 	Simple	Schlicht
 	Classic	Klassisch
 	Compact	Kompakt
 	Ink saver	Tintensparend
-	{n} parts of the stylesheet can't be used	{n} Teile des Stylesheets können nicht verwendet werden
-	{name} is too large for a stylesheet (at most 64 KB).	{name} ist für ein Stylesheet zu groß (höchstens 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} ist für ein Stylesheet zu groß (höchstens {kb} KB).
 	{name} is not a UTF-8 text file.	{name} ist keine UTF-8-Textdatei.
 	Only comments the Comments panel's filter shows	Nur Kommentare, die der Filter des Kommentarbereichs zeigt
 	Load CSS…	CSS laden…
 	Export CSS…	CSS exportieren…
-	Create Summary	Übersicht erstellen
-	{listed} of {total} comments	{listed} von {total} Kommentaren
+	Create Summary	Zusammenfassung erstellen
 	Author colours	Farben der Verfasser
 	This theme doesn't colour authors' names.	Dieses Design färbt die Namen der Verfasser nicht ein.
+	Comments: {listed} of {total}	Kommentare: {listed} von {total}
+	Stylesheet warnings: {n}	Stylesheet-Warnungen: {n}

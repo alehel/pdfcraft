@@ -2352,13 +2352,13 @@ animation effects	Off	ఆఫ్
 	Classic	సాంప్రదాయ
 	Compact	కుదించిన
 	Ink saver	సిరా పొదుపు
-	{n} parts of the stylesheet can't be used	స్టైల్‌షీట్‌లో {n} భాగాలను ఉపయోగించలేము
-	{name} is too large for a stylesheet (at most 64 KB).	{name} స్టైల్‌షీట్‌కు చాలా పెద్దది (గరిష్ఠంగా 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} స్టైల్‌షీట్‌కు చాలా పెద్దది (గరిష్ఠంగా {kb} KB).
 	{name} is not a UTF-8 text file.	{name} UTF-8 పాఠ్య ఫైల్ కాదు.
 	Only comments the Comments panel's filter shows	వ్యాఖ్యల ప్యానెల్ ఫిల్టర్ చూపే వ్యాఖ్యలు మాత్రమే
 	Load CSS…	CSS లోడ్ చేయి…
 	Export CSS…	CSS ఎగుమతి చేయి…
 	Create Summary	సారాంశాన్ని సృష్టించు
-	{listed} of {total} comments	{total} వ్యాఖ్యలలో {listed}
 	Author colours	రచయితల రంగులు
 	This theme doesn't colour authors' names.	ఈ థీమ్ రచయితల పేర్లకు రంగు వేయదు.
+	Comments: {listed} of {total}	వ్యాఖ్యలు: {total} లో {listed}
+	Stylesheet warnings: {n}	స్టైల్‌షీట్ హెచ్చరికలు: {n}

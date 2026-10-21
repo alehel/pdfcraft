@@ -2441,20 +2441,20 @@ animation effects	Off	Izklopljeni
 	Page properties	Lastnosti strani
 	Include	Vključi
 	Comment types	Vrste komentarjev
-	Quote the text that highlights, underlines and strikethroughs mark	Navedi besedilo, ki ga označujejo poudarki, podčrtave in prečrtave
+	Quote the text that highlights, underlines and strikethroughs mark	Navedi označeno, podčrtano in prečrtano besedilo
 	Theme	Tema
 	Modern	Sodobna
 	Simple	Preprosta
 	Classic	Klasična
 	Compact	Strnjena
 	Ink saver	Varčevanje s črnilom
-	{n} parts of the stylesheet can't be used	Delov slogovne predloge, ki jih ni mogoče uporabiti: {n}
-	{name} is too large for a stylesheet (at most 64 KB).	{name} je prevelik za slogovno predlogo (največ 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	Datoteka {name} je prevelika za slogovno predlogo (največ {kb} KB).
 	{name} is not a UTF-8 text file.	{name} ni besedilna datoteka UTF-8.
-	Only comments the Comments panel's filter shows	Samo komentarji, ki jih prikazuje filter podokna Komentarji
-	Load CSS…	Naloži CSS …
-	Export CSS…	Izvozi CSS …
+	Only comments the Comments panel's filter shows	Samo komentarji, ki jih prikazuje filter razdelka s komentarji
+	Load CSS…	Naloži CSS…
+	Export CSS…	Izvozi CSS…
 	Create Summary	Ustvari povzetek
-	{listed} of {total} comments	Komentarji: {listed} od {total}
 	Author colours	Barve avtorjev
 	This theme doesn't colour authors' names.	Ta tema ne obarva imen avtorjev.
+	Comments: {listed} of {total}	Komentarji: {listed} od {total}
+	Stylesheet warnings: {n}	Opozorila slogovne predloge: {n}

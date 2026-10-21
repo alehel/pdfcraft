@@ -2465,13 +2465,13 @@ animation effects	Off	Вимкнено
 	Classic	Класична
 	Compact	Компактна
 	Ink saver	Економія чорнила
-	{n} parts of the stylesheet can't be used	Частини таблиці стилів, які не можна використати: {n}
-	{name} is too large for a stylesheet (at most 64 KB).	{name} завеликий для таблиці стилів (не більше 64 КБ).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} завеликий для таблиці стилів (не більше {kb} КБ).
 	{name} is not a UTF-8 text file.	{name} не є текстовим файлом у UTF-8.
-	Only comments the Comments panel's filter shows	Лише коментарі, які показує фільтр панелі «Коментарі»
+	Only comments the Comments panel's filter shows	Лише коментарі, які показує фільтр панелі коментарів
 	Load CSS…	Завантажити CSS…
 	Export CSS…	Експортувати CSS…
 	Create Summary	Створити зведення
-	{listed} of {total} comments	Коментарі: {listed} із {total}
 	Author colours	Кольори авторів
 	This theme doesn't colour authors' names.	Ця тема не виділяє імена авторів кольором.
+	Comments: {listed} of {total}	Коментарі: {listed} із {total}
+	Stylesheet warnings: {n}	Попередження таблиці стилів: {n}

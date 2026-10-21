@@ -2583,13 +2583,13 @@ animation effects	Off	Desactivados
 	Classic	Clásico
 	Compact	Compacto
 	Ink saver	Ahorro de tinta
-	{n} parts of the stylesheet can't be used	{n} partes de la hoja de estilos no se pueden usar
-	{name} is too large for a stylesheet (at most 64 KB).	{name} es demasiado grande para una hoja de estilos (64 KB como máximo).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} es demasiado grande para una hoja de estilos ({kb} KB como máximo).
 	{name} is not a UTF-8 text file.	{name} no es un archivo de texto UTF-8.
-	Only comments the Comments panel's filter shows	Solo los comentarios que muestra el filtro del panel Comentarios
+	Only comments the Comments panel's filter shows	Solo los comentarios que muestra el filtro del panel de comentarios
 	Load CSS…	Cargar CSS…
 	Export CSS…	Exportar CSS…
 	Create Summary	Crear resumen
-	{listed} of {total} comments	{listed} de {total} comentarios
 	Author colours	Colores de los autores
 	This theme doesn't colour authors' names.	Este tema no colorea los nombres de los autores.
+	Comments: {listed} of {total}	Comentarios: {listed} de {total}
+	Stylesheet warnings: {n}	Advertencias de la hoja de estilos: {n}

@@ -2517,13 +2517,13 @@ animation effects	Off	Vypnuto
 	Classic	Klasický
 	Compact	Kompaktní
 	Ink saver	Úspora inkoustu
-	{n} parts of the stylesheet can't be used	Části šablony stylů, které nelze použít ({n})
-	{name} is too large for a stylesheet (at most 64 KB).	{name} je pro šablonu stylů příliš velký (nejvýše 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} je pro šablonu stylů příliš velký (nejvýše {kb} KB).
 	{name} is not a UTF-8 text file.	{name} není textový soubor v UTF-8.
-	Only comments the Comments panel's filter shows	Jen komentáře, které zobrazuje filtr panelu Komentáře
+	Only comments the Comments panel's filter shows	Jen komentáře, které zobrazuje filtr panelu komentářů
 	Load CSS…	Načíst CSS…
 	Export CSS…	Exportovat CSS…
 	Create Summary	Vytvořit souhrn
-	{listed} of {total} comments	Komentáře: {listed} z {total}
 	Author colours	Barvy autorů
 	This theme doesn't colour authors' names.	Tento motiv nebarví jména autorů.
+	Comments: {listed} of {total}	Komentáře: {listed} z {total}
+	Stylesheet warnings: {n}	Upozornění šablony stylů: {n}

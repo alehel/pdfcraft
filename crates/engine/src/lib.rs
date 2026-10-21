@@ -49,9 +49,11 @@ pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transitio
 pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
+pub use dates::summary_date;
 pub use pdfcraft_cos::Algorithm;
 pub use pdfcraft_create::{
-    BUILTIN_THEMES as SUMMARY_THEMES, CONVERTIBLE, CreateError, ImageResolution, MAX_STYLESHEET_BYTES, SourceKind, decode_text, source_kind,
+    BUILTIN_THEMES as SUMMARY_THEMES, CONVERTIBLE, CreateError, DEFAULT_THEME as SUMMARY_DEFAULT_THEME, ImageResolution, MAX_STYLESHEET_BYTES,
+    SourceKind, decode_text, source_kind,
 };
 pub use pdfcraft_edit::added::{text_rect as added_text_rect, text_width as added_text_width};
 pub use pdfcraft_edit::{
@@ -4274,8 +4276,9 @@ impl Session {
     }
 
     /// [`Self::create_from_text`] for a plain-text report PdfCraft writes from documents (compare
-    /// reports; comment summaries are laid out by [`pdfcraft_create::report`]), which can quote any language: characters Helvetica can't draw are written
-    /// as `[U+XXXX]`, and the report's first line says so, rather than the report being refused.
+    /// reports; comment summaries are laid out by [`pdfcraft_create::report`]), which can quote
+    /// any language: characters Helvetica can't draw are written as `[U+XXXX]`, and the report's
+    /// first line says so, rather than the report being refused.
     fn create_report(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         let (doc, _escaped) = pdfcraft_create::from_text_escaped(title, text, pdfcraft_create::LETTER, 11.0)?;
         self.write_new(&doc)
@@ -4849,11 +4852,17 @@ impl Session {
         }
         let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        // Glyph-by-quadrilateral tests left: a crafted file can give many marks huge quad lists,
+        // and the marks past this budget are summarized without their quotes.
+        let mut budget = MAX_MARKED_TEXT_WORK;
         for (page, comments) in by_page {
             let Some(info) = doc.info.pages.get(page) else { continue };
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let Some(text) = res.text else { continue };
             for a in comments {
+                let cost = (text.glyphs.len() as u64).saturating_mul(a.quads.len().clamp(1, MAX_MARK_QUADS) as u64);
+                let Some(left) = budget.checked_sub(cost) else { continue };
+                budget = left;
                 if let Some(s) = marked_text(&text, info, a) {
                     out.insert((a.page, a.index), s);
                 }
@@ -5027,7 +5036,7 @@ pub struct OptimizeReport {
 }
 
 /// What Summarize Comments includes, how it orders it and how it looks.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SummaryOptions {
     pub sort: SummarySort,
     /// The built-in theme (`pdfcraft_create::BUILTIN_THEMES`: modern, simple, classic, compact, ink-saver).
@@ -5036,15 +5045,15 @@ pub struct SummaryOptions {
     pub stylesheet: Option<String>,
     /// The comments to list, as (page, index) of each thread's first comment; `None` lists every
     /// comment. Replies follow the comment they answer.
-    pub only: Option<std::collections::HashSet<(usize, usize)>>,
+    pub only: Option<std::collections::BTreeSet<(usize, usize)>>,
     /// Quote the text that highlights, underlines, strikethroughs and squigglies mark.
     pub marked_text: bool,
     /// Colours chosen for authors (sRGB), by name as the summary prints it. The others get their
     /// automatic colour ([`summary_author_colors`]).
     pub author_colors: std::collections::BTreeMap<String, [u8; 3]>,
-    /// The interface language whose way of writing dates the summary uses (one of
-    /// [`SUMMARY_DATE_LANGUAGES`], see [`summary_date`]); `None` writes them as ISO 8601 does,
-    /// "2026-10-21 15:28".
+    /// The interface language whose way of writing dates the summary uses (a code of
+    /// [`dates::DATE_LANGUAGES`], see [`summary_date`]); `None`, or a code not in that list, writes
+    /// them as ISO 8601 does, "2026-10-21 15:28".
     pub dates: Option<String>,
 }
 
@@ -5052,7 +5061,7 @@ impl Default for SummaryOptions {
     fn default() -> Self {
         SummaryOptions {
             sort: SummarySort::Page,
-            theme: "modern".into(),
+            theme: pdfcraft_create::DEFAULT_THEME.into(),
             stylesheet: None,
             only: None,
             marked_text: true,
@@ -5062,49 +5071,10 @@ impl Default for SummaryOptions {
     }
 }
 
-/// The languages whose way of writing dates a comment summary can use: the interface languages.
-pub const SUMMARY_DATE_LANGUAGES: [&str; 23] = [
-    "en", "ar", "bg", "cs", "de", "el", "es", "fr", "hu", "it", "ja", "kk", "lt", "pl", "pt-br", "ru", "sl", "te", "tr", "uk", "vi", "zh-hans",
-    "zh-hant",
-];
-
-/// A comment's date as the annotation list gives it ("2026-10-21 15:28") written the way `lang`
-/// (one of [`SUMMARY_DATE_LANGUAGES`]) writes dates and times, in digits so that the summary's
-/// standard fonts can draw it in every language: "21.10.2026, 15:28" in German, "10/21/2026,
-/// 3:28 PM" in English, "2026/10/21 15:28" in Japanese. Anything else (a date the file wrote in
-/// another form, or an impossible one) comes back unchanged, and so does every date for a
-/// language not in the list.
-pub fn summary_date(date: &str, lang: &str) -> String {
-    let b = date.as_bytes();
-    let shape = b.len() == 16 && b.get(4) == Some(&b'-') && b.get(7) == Some(&b'-') && b.get(10) == Some(&b' ') && b.get(13) == Some(&b':');
-    let num = |r: std::ops::Range<usize>| date.get(r).filter(|d| d.bytes().all(|c| c.is_ascii_digit())).and_then(|d| d.parse::<u32>().ok());
-    let (Some(y), Some(mo), Some(d), Some(h), Some(mi)) = (num(0..4), num(5..7), num(8..10), num(11..13), num(14..16)) else {
-        return date.to_string();
-    };
-    if !shape || !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 {
-        return date.to_string();
-    }
-    let twelve = format!("{}:{mi:02} {}", if h % 12 == 0 { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" });
-    match lang {
-        "en" => format!("{mo}/{d}/{y}, {twelve}"),
-        "te" => format!("{d}/{mo}/{y}, {twelve}"),
-        "de" | "kk" | "pl" | "ru" | "uk" => format!("{d:02}.{mo:02}.{y}, {h:02}:{mi:02}"),
-        "bg" => format!("{d}.{mo:02}.{y}, {h}:{mi:02}"),
-        "tr" => format!("{d:02}.{mo:02}.{y} {h:02}:{mi:02}"),
-        "cs" => format!("{d}. {mo}. {y} {h}:{mi:02}"),
-        "sl" => format!("{d}. {mo}. {y}, {h:02}:{mi:02}"),
-        "es" => format!("{d}/{mo}/{y}, {h}:{mi:02}"),
-        "fr" => format!("{d:02}/{mo:02}/{y} {h:02}:{mi:02}"),
-        "it" | "pt-br" => format!("{d:02}/{mo:02}/{y}, {h:02}:{mi:02}"),
-        "el" | "ar" => format!("{d}/{mo}/{y} {h:02}:{mi:02}"),
-        "vi" => format!("{h:02}:{mi:02}, {d:02}/{mo:02}/{y}"),
-        "hu" => format!("{y}. {mo:02}. {d:02}. {h}:{mi:02}"),
-        "lt" => format!("{y}-{mo:02}-{d:02} {h:02}:{mi:02}"),
-        "ja" => format!("{y}/{mo:02}/{d:02} {h}:{mi:02}"),
-        "zh-hans" | "zh-hant" => format!("{y}/{mo}/{d} {h:02}:{mi:02}"),
-        _ => date.to_string(),
-    }
-}
+/// The most glyph-by-quadrilateral tests a summary spends finding the text its marks cover.
+const MAX_MARKED_TEXT_WORK: u64 = 50_000_000;
+/// The most quadrilaterals of one mark that are matched against the page's text.
+const MAX_MARK_QUADS: usize = 1024;
 
 /// The colours authors get in a comment summary when none is chosen for them: distinct from each
 /// other, and dark enough to read as text on white.
@@ -5122,7 +5092,7 @@ pub const AUTHOR_PALETTE: [[u8; 3]; 10] = [
 ];
 
 /// The name a comment summary prints for the author of `a`.
-pub fn summary_author(a: &pdfcraft_render::Annotation) -> String {
+fn summary_author(a: &pdfcraft_render::Annotation) -> String {
     a.author.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "Unknown author".into())
 }
 
@@ -5131,14 +5101,16 @@ pub fn summary_author(a: &pdfcraft_render::Annotation) -> String {
 /// the colour of [`AUTHOR_PALETTE`] at its place in this list, so that choosing one author's
 /// colour leaves the others' alone.
 pub fn summary_author_colors(all: &[pdfcraft_render::Annotation], chosen: &std::collections::BTreeMap<String, [u8; 3]>) -> Vec<(String, [u8; 3])> {
-    let mut names: Vec<String> = all.iter().filter(|a| a.state.is_none()).map(summary_author).collect();
-    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
-    names.dedup();
+    // Each name once, then by name ignoring case (the set's order breaks ties).
+    let names: std::collections::BTreeSet<String> = all.iter().filter(|a| a.state.is_none()).map(summary_author).collect();
+    let mut names: Vec<String> = names.into_iter().collect();
+    names.sort_by_cached_key(|n| n.to_lowercase());
     names
         .into_iter()
         .enumerate()
         .map(|(i, name)| {
-            let auto = AUTHOR_PALETTE.get(i % AUTHOR_PALETTE.len()).copied().unwrap_or([0x54, 0x6e, 0x7a]);
+            // `i % len` is below the palette's (non-zero) length.
+            let auto = AUTHOR_PALETTE[i % AUTHOR_PALETTE.len()];
             let color = chosen.get(&name).copied().unwrap_or(auto);
             (name, color)
         })
@@ -5181,6 +5153,7 @@ pub fn marked_text(text: &pdfcraft_render::PageText, info: &pdfcraft_render::Pag
     } else {
         a.quads
             .iter()
+            .take(MAX_MARK_QUADS)
             .map(|q| {
                 let (xs, ys) = ([q[0], q[2], q[4], q[6]], [q[1], q[3], q[5], q[7]]);
                 [
@@ -5193,11 +5166,14 @@ pub fn marked_text(text: &pdfcraft_render::PageText, info: &pdfcraft_render::Pag
             .collect()
     };
     let boxes: Vec<[f32; 4]> = boxes.into_iter().filter(|b| b.iter().all(|v| v.is_finite()) && b[0] <= b[2] && b[1] <= b[3]).collect();
+    let inside = |b: &[f32; 4], x: f32, y: f32| x >= b[0] - SLACK && x <= b[2] + SLACK && y >= b[1] - SLACK && y <= b[3] + SLACK;
+    // Every box together, so glyphs elsewhere on the page are passed over at once.
+    let all = boxes.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |u, b| [u[0].min(b[0]), u[1].min(b[1]), u[2].max(b[2]), u[3].max(b[3])]);
     let mut out = String::new();
     let mut prev: Option<usize> = None;
     for (i, g) in text.glyphs.iter().enumerate() {
         let [x, y] = info.view_to_user((g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0);
-        if !boxes.iter().any(|b| x >= b[0] - SLACK && x <= b[2] + SLACK && y >= b[1] - SLACK && y <= b[3] + SLACK) {
+        if !inside(&all, x, y) || !boxes.iter().any(|b| inside(b, x, y)) {
             continue;
         }
         if let Some(p) = prev {
@@ -5214,7 +5190,7 @@ pub fn marked_text(text: &pdfcraft_render::PageText, info: &pdfcraft_render::Pag
 }
 
 /// Order of Summarize Comments.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SummarySort {
     #[default]
     Page,
@@ -5289,35 +5265,47 @@ pub fn comment_report(
     let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
     let colors: Colors =
         summary_author_colors(all, &opts.author_colors).into_iter().map(|(name, c)| (name, c.map(|v| f32::from(v) / 255.0))).collect();
-    // A comment's replies at every depth, in document order. A reply to a reply keeps its `/IRT`
-    // on the direct parent, so following one level would leave the deeper replies out.
     // A date written the way the summary's language writes it.
     let dated = |m: &str| opts.dates.as_deref().map_or_else(|| m.to_string(), |lang| summary_date(m, lang));
-    fn replies(
-        out: &mut Vec<Reply>,
-        all: &[pdfcraft_render::Annotation],
-        colors: &Colors,
-        dated: &dyn Fn(&str) -> String,
-        parent: &str,
-        depth: usize,
-    ) {
+    // The replies to each `/NM`, in document order (status changes left out).
+    let mut answers: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (i, r) in all.iter().enumerate().filter(|(_, r)| r.state.is_none()) {
+        if let Some(parent) = r.in_reply_to.as_deref() {
+            answers.entry(parent).or_default().push(i);
+        }
+    }
+    struct Thread<'a> {
+        all: &'a [pdfcraft_render::Annotation],
+        answers: &'a std::collections::HashMap<&'a str, Vec<usize>>,
+        colors: &'a Colors,
+        dated: &'a dyn Fn(&str) -> String,
+    }
+    // A comment's replies at every depth, in document order. A reply to a reply keeps its `/IRT`
+    // on the direct parent, so following one level would leave the deeper replies out. Each reply
+    // is listed once (`seen`, across the whole summary): replies are found by name, and a crafted
+    // file can give a reply the name of the comment it answers, which would list it again at
+    // every level and, with two such replies, double the work at each.
+    fn replies(t: &Thread, out: &mut Vec<Reply>, seen: &mut std::collections::HashSet<usize>, parent: &str, depth: usize) {
         if depth > 64 {
             return;
         }
-        for r in all.iter().filter(|r| r.state.is_none() && r.in_reply_to.as_deref() == Some(parent)) {
+        for &k in t.answers.get(parent).map(Vec::as_slice).unwrap_or_default() {
+            let Some(r) = t.all.get(k).filter(|_| seen.insert(k)) else { continue };
             let author = summary_author(r);
             out.push(Reply {
                 depth,
-                color: colors.get(&author).copied(),
+                color: t.colors.get(&author).copied(),
                 author,
-                meta: r.modified.as_deref().map(dated).unwrap_or_default(),
+                meta: r.modified.as_deref().map(t.dated).unwrap_or_default(),
                 body: r.contents.clone().unwrap_or_default(),
             });
             if let Some(nm) = r.name.as_deref() {
-                replies(out, all, colors, dated, nm, depth + 1);
+                replies(t, out, seen, nm, depth + 1);
             }
         }
     }
+    let thread = Thread { all, answers: &answers, colors: &colors, dated: &dated };
+    let mut seen = std::collections::HashSet::new();
     let mut numbered: Vec<(usize, &pdfcraft_render::Annotation)> = Vec::new();
     let mut last = usize::MAX;
     let mut n = 0usize;
@@ -5333,7 +5321,8 @@ pub fn comment_report(
     }
     match sort {
         SummarySort::Page => {}
-        SummarySort::Author => numbered.sort_by(|x, y| x.1.author.cmp(&y.1.author)),
+        // By the name the headings print, ignoring case as the Author colours list does.
+        SummarySort::Author => numbered.sort_by_cached_key(|x| summary_author(x.1).to_lowercase()),
         SummarySort::Date => numbered.sort_by(|x, y| x.1.modified.cmp(&y.1.modified)),
         SummarySort::Type => numbered.sort_by(|x, y| comment_kind(x.1).cmp(comment_kind(y.1))),
     }
@@ -5368,9 +5357,9 @@ pub fn comment_report(
         if sort != SummarySort::Page {
             meta.push(format!("Page {}", a.page + 1));
         }
-        let mut thread = Vec::new();
+        let mut thread_replies = Vec::new();
         if let Some(nm) = a.name.as_deref() {
-            replies(&mut thread, all, &colors, &dated, nm, 0);
+            replies(&thread, &mut thread_replies, &mut seen, nm, 0);
         }
         let who = summary_author(a);
         report.blocks.push(Block::Entry(Entry {
@@ -5383,7 +5372,7 @@ pub fn comment_report(
             color: a.color,
             quote: marked.get(&(a.page, a.index)).cloned(),
             body: a.contents.clone().filter(|c| !c.trim().is_empty()),
-            replies: thread,
+            replies: thread_replies,
         }));
     }
     report

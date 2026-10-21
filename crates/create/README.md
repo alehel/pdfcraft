@@ -18,9 +18,15 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
   `from_images`. The largest page side is still capped at 14,400 points;
 - `from_text(text, …)`: plain text set in Helvetica, wrapped and paginated. Text Helvetica
   can't draw is refused, naming the line and the character, never set as `?`.
-- `from_text_escaped(text, …)`: the same for reports PdfCraft generates from documents
-  (comment summaries, compare reports): such characters are written as `[U+XXXX]` and the first
-  line says so (`ESCAPED_NOTE`).
+- `from_text_escaped(text, …)`: the same for plain-text reports PdfCraft generates from
+  documents (compare reports): such characters are written as `[U+XXXX]` and the first line says
+  so (`ESCAPED_NOTE`).
+- `report(&Report, page, &ReportStyle)`: a formatted report (the comment summary): a title,
+  group headings and one card per entry with what it quotes and its replies, laid out in the
+  standard fonts in a `ReportStyle`, which is a built-in theme (`BUILTIN_THEMES`, `themes/`) or
+  a user's stylesheet in a small, lenient CSS subset (`ReportStyle::parse`,
+  `docs/report-stylesheets.md`). Characters the standard fonts can't draw are written as
+  `[U+XXXX]` and the subtitle says so.
 
 Every function returns a `pdfcraft_cos::Document`; the caller writes it.
 

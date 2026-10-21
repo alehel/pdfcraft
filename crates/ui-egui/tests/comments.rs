@@ -914,6 +914,8 @@ fn summary_of_only_the_highlights_quotes_their_text() {
     // "quick" on page 1: Helvetica 14 pt from x 20, baseline 150 ("The " is 28 pt wide).
     h.state_mut()
         .apply_edit(add(Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[48.0, 162.0, 80.0, 162.0, 48.0, 147.0, 80.0, 147.0]] }, ""));
+    h.state_mut()
+        .apply_edit(add(Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 162.0, 45.0, 162.0, 20.0, 147.0, 45.0, 147.0]] }, ""));
     h.state_mut().apply_edit(add(Shape::Rectangle { rect: [150.0, 20.0, 200.0, 60.0] }, "BOX_NOTE"));
     h.run_steps(3);
 
@@ -921,11 +923,16 @@ fn summary_of_only_the_highlights_quotes_their_text() {
     h.run_steps(2);
     h.get_by_label("Create PDF comment summary…").click();
     h.run_steps(2);
-    h.get_by_label("2 of 2 comments");
+    h.get_by_label("Comments: 3 of 3");
     h.get_by_label("Rectangle (1)").click();
     h.run_steps(2);
-    h.get_by_label("1 of 2 comments");
+    h.get_by_label("Comments: 2 of 3");
     assert!(h.state().views[0].comments.hidden_types.is_empty(), "the panel's filter is left alone");
+    // With a type left out the preview is made once, not again at every frame (the comments it
+    // lists used to be keyed in an order that changed from frame to frame).
+    let made = h.state().summary.previews_made;
+    h.run_steps(5);
+    assert_eq!(h.state().summary.previews_made, made, "the preview's summary is kept");
     h.get_by_label("Create Summary").click();
     h.run_steps(3);
 
@@ -979,7 +986,7 @@ fn summary_theme_and_stylesheet_are_chosen_listed_saved_and_remembered() {
     h.state_mut().set_summary_stylesheet("mine.css".into(), "@import \"classic\";\n.kind { font-family: monospace; glow: 1 }".into());
     h.run_steps(2);
     assert_eq!(h.state().summary.theme, pdfcraft_ui_egui::summary_ui::CUSTOM);
-    h.get_by_label("1 parts of the stylesheet can't be used");
+    h.get_by_label("Stylesheet warnings: 1");
     h.get_by_label("Create Summary").click();
     h.run_steps(3);
     let s = h.state();
@@ -1028,6 +1035,13 @@ fn summary_authors_get_colours_that_can_be_picked_and_reset() {
     h.get_by_label("Create PDF comment summary…").click();
     h.run_steps(2);
     h.get_by_label("Author colours");
+    // Each colour button is named for screen readers by its author.
+    for author in ["Ada", "Bo"] {
+        assert!(
+            h.query_by(|n| n.role() == egui::accesskit::Role::ColorWell && n.label().as_deref() == Some(author)).is_some(),
+            "{author}'s colour button"
+        );
+    }
     assert!(h.query_by_label("This theme doesn't colour authors' names.").is_none(), "Modern colours them");
     assert!(h.query_by_label("Auto").is_none(), "nothing picked yet");
 

@@ -2925,6 +2925,29 @@ fn comment_summary_gives_each_author_a_colour() {
     assert!(by_author.blocks.iter().all(|b| !matches!(b, pdfcraft_create::Block::Entry(e) if !e.author.is_empty())));
 }
 
+/// Replies are found by name, and a crafted file can name a reply after the comment it answers.
+/// Each reply is listed once: before, one such reply was listed at every level down to the depth
+/// limit, and two of them doubled the work at each level (2^65 steps, a hang).
+#[test]
+fn a_reply_named_like_its_parent_is_listed_once() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "ECHO".into(), author: "Bo".into() }).unwrap();
+    let mut all = s.get(id).unwrap().info.annotations.clone();
+    let parent = all[0].name.clone().expect("the comment has a name");
+    all[1].name = Some(parent.clone());
+    let text = comment_summary("doc.pdf", &all, &SummaryOptions::default(), &Default::default());
+    assert_eq!(text.matches("ECHO").count(), 1, "{text}");
+
+    // Two of them: still each once, and at once.
+    let mut twin = all[1].clone();
+    twin.index = 2;
+    twin.contents = Some("TWIN".into());
+    all.push(twin);
+    let text = comment_summary("doc.pdf", &all, &SummaryOptions::default(), &Default::default());
+    assert_eq!((text.matches("ECHO").count(), text.matches("TWIN").count()), (1, 1), "{text}");
+}
+
 /// Summary dates the way an interface language writes them, in digits the standard fonts can draw;
 /// ISO 8601 when no language is asked for. A date the file wrote in another form, an impossible
 /// one, and every date for a language not in the list come back unchanged.
@@ -2945,11 +2968,14 @@ fn summary_dates_follow_the_interface_language() {
     assert_eq!(summary_date("2026-01-05 00:07", "en"), "1/5/2026, 12:07 AM");
     assert_eq!(summary_date("2026-01-05 12:07", "en"), "1/5/2026, 12:07 PM");
     assert_eq!(summary_date("2026-01-05 09:07", "de"), "05.01.2026, 09:07");
+    assert_eq!(summary_date("2028-02-29 10:00", "de"), "29.02.2028, 10:00", "a leap day");
     for odd in [
         "",
         "D:20261021",
         "2026-13-01 10:00",
         "2026-10-00 10:00",
+        "2026-02-29 10:00",
+        "2026-04-31 10:00",
         "2026-10-21 24:00",
         "2026-10-21T15:28",
         "2026-10-21 15:28:00",
@@ -2959,9 +2985,11 @@ fn summary_dates_follow_the_interface_language() {
         assert_eq!(summary_date(odd, "de"), odd, "{odd:?}");
     }
     assert_eq!(summary_date("2026-10-21 15:28", "xx"), "2026-10-21 15:28");
-    for lang in SUMMARY_DATE_LANGUAGES {
-        let d = summary_date("2026-10-21 15:28", lang);
-        assert!(d.is_ascii() && d.contains("2026") && d.contains("21"), "{lang}: {d}");
+    // Every interface language (the UI's tests tie DATE_LANGUAGES to them) has a way.
+    for lang in &dates::DATE_LANGUAGES {
+        assert!(dates::numeric_date_time(lang.code).is_some(), "{}", lang.code);
+        let d = summary_date("2026-10-21 15:28", lang.code);
+        assert!(d.is_ascii() && d.contains("2026") && d.contains("21"), "{}: {d}", lang.code);
     }
 
     // In a summary: the comment's date and its reply's.

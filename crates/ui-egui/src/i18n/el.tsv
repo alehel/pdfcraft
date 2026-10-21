@@ -2442,20 +2442,20 @@ animation effects	Off	Ανενεργά
 	Page properties	Ιδιότητες σελίδας
 	Include	Συμπερίληψη
 	Comment types	Τύποι σχολίων
-	Quote the text that highlights, underlines and strikethroughs mark	Παράθεση του κειμένου που επισημαίνουν οι επισημάνσεις, οι υπογραμμίσεις και οι διαγραφές
+	Quote the text that highlights, underlines and strikethroughs mark	Παράθεση επισημασμένου, υπογραμμισμένου και διαγραμμένου κειμένου
 	Theme	Θέμα
 	Modern	Σύγχρονο
 	Simple	Απλό
 	Classic	Κλασικό
 	Compact	Συμπαγές
 	Ink saver	Εξοικονόμηση μελανιού
-	{n} parts of the stylesheet can't be used	{n} τμήματα του φύλλου στυλ δεν μπορούν να χρησιμοποιηθούν
-	{name} is too large for a stylesheet (at most 64 KB).	Το {name} είναι πολύ μεγάλο για φύλλο στυλ (έως 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	Το {name} είναι πολύ μεγάλο για φύλλο στυλ (έως {kb} KB).
 	{name} is not a UTF-8 text file.	Το {name} δεν είναι αρχείο κειμένου UTF-8.
-	Only comments the Comments panel's filter shows	Μόνο τα σχόλια που δείχνει το φίλτρο του πίνακα Σχόλια
+	Only comments the Comments panel's filter shows	Μόνο τα σχόλια που δείχνει το φίλτρο του πίνακα σχολίων
 	Load CSS…	Φόρτωση CSS…
 	Export CSS…	Εξαγωγή CSS…
 	Create Summary	Δημιουργία σύνοψης
-	{listed} of {total} comments	{listed} από {total} σχόλια
 	Author colours	Χρώματα συντακτών
 	This theme doesn't colour authors' names.	Αυτό το θέμα δεν χρωματίζει τα ονόματα των συντακτών.
+	Comments: {listed} of {total}	Σχόλια: {listed} από {total}
+	Stylesheet warnings: {n}	Προειδοποιήσεις φύλλου στυλ: {n}

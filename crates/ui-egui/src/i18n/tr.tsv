@@ -2432,20 +2432,20 @@ animation effects	Off	Kapalı
 	Page properties	Sayfa özellikleri
 	Include	Dahil et
 	Comment types	Yorum türleri
-	Quote the text that highlights, underlines and strikethroughs mark	Vurgulama, altını çizme ve üstünü çizmenin işaretlediği metni alıntıla
+	Quote the text that highlights, underlines and strikethroughs mark	Vurgulanan, altı çizili ve üstü çizili metni alıntıla
 	Theme	Tema
 	Modern	Çağdaş
 	Simple	Sade
 	Classic	Klasik
-	Compact	Sıkı
+	Compact	Kompakt
 	Ink saver	Mürekkep tasarrufu
-	{n} parts of the stylesheet can't be used	Stil sayfasının {n} bölümü kullanılamıyor
-	{name} is too large for a stylesheet (at most 64 KB).	{name} bir stil sayfası için çok büyük (en fazla 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} bir stil sayfası için çok büyük (en fazla {kb} KB).
 	{name} is not a UTF-8 text file.	{name} bir UTF-8 metin dosyası değil.
 	Only comments the Comments panel's filter shows	Yalnızca Yorumlar panelinin filtresinin gösterdiği yorumlar
 	Load CSS…	CSS yükle…
 	Export CSS…	CSS dışa aktar…
 	Create Summary	Özet oluştur
-	{listed} of {total} comments	{total} yorumdan {listed} tanesi
 	Author colours	Yazar renkleri
 	This theme doesn't colour authors' names.	Bu tema yazar adlarını renklendirmez.
+	Comments: {listed} of {total}	Yorumlar: {listed}/{total}
+	Stylesheet warnings: {n}	Stil sayfası uyarıları: {n}

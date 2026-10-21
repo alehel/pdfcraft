@@ -2442,13 +2442,13 @@ animation effects	Off	Ki
 	Classic	Klasszikus
 	Compact	Tömör
 	Ink saver	Tintatakarékos
-	{n} parts of the stylesheet can't be used	A stíluslap {n} része nem használható
-	{name} is too large for a stylesheet (at most 64 KB).	A(z) {name} túl nagy egy stíluslaphoz (legfeljebb 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	A(z) {name} túl nagy egy stíluslaphoz (legfeljebb {kb} KB).
 	{name} is not a UTF-8 text file.	A(z) {name} nem UTF-8 szövegfájl.
 	Only comments the Comments panel's filter shows	Csak a Megjegyzések panel szűrője által mutatott megjegyzések
 	Load CSS…	CSS betöltése…
 	Export CSS…	CSS exportálása…
 	Create Summary	Összefoglaló létrehozása
-	{listed} of {total} comments	{listed} / {total} megjegyzés
 	Author colours	Szerzők színei
 	This theme doesn't colour authors' names.	Ez a téma nem színezi a szerzők nevét.
+	Comments: {listed} of {total}	Megjegyzések: {listed} / {total}
+	Stylesheet warnings: {n}	Stíluslap-figyelmeztetések: {n}

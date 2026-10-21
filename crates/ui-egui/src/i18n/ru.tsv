@@ -2349,20 +2349,20 @@ animation effects	Off	Выкл
 	Page properties	Свойства страницы
 	Include	Включить
 	Comment types	Типы комментариев
-	Quote the text that highlights, underlines and strikethroughs mark	Цитировать текст, отмеченный выделениями, подчёркиваниями и зачёркиваниями
+	Quote the text that highlights, underlines and strikethroughs mark	Цитировать текст, отмеченный выделениями, подчеркиваниями и зачеркиваниями
 	Theme	Тема
 	Modern	Современная
 	Simple	Простая
 	Classic	Классическая
 	Compact	Компактная
 	Ink saver	Экономия чернил
-	{n} parts of the stylesheet can't be used	Части таблицы стилей, которые нельзя использовать: {n}
-	{name} is too large for a stylesheet (at most 64 KB).	{name} слишком велик для таблицы стилей (не более 64 КБ).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} слишком велик для таблицы стилей (не более {kb} КБ).
 	{name} is not a UTF-8 text file.	{name} не является текстовым файлом в UTF-8.
-	Only comments the Comments panel's filter shows	Только комментарии, которые показывает фильтр панели «Комментарии»
+	Only comments the Comments panel's filter shows	Только комментарии, которые показывает фильтр панели комментариев
 	Load CSS…	Загрузить CSS…
 	Export CSS…	Экспортировать CSS…
 	Create Summary	Создать сводку
-	{listed} of {total} comments	Комментарии: {listed} из {total}
 	Author colours	Цвета авторов
 	This theme doesn't colour authors' names.	Эта тема не выделяет имена авторов цветом.
+	Comments: {listed} of {total}	Комментарии: {listed} из {total}
+	Stylesheet warnings: {n}	Предупреждения таблицы стилей: {n}

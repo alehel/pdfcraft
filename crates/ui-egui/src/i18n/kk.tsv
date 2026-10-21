@@ -2433,21 +2433,21 @@ animation effects	Off	Өшірулі
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
 	Include	Қосу
-	Comment types	Пікір түрлері
+	Comment types	Түсініктеме түрлері
 	Quote the text that highlights, underlines and strikethroughs mark	Ерекшелеу, асты сызу және сызып тастау белгілеген мәтінді келтіру
-	Theme	Тақырып
+	Theme	Тема
 	Modern	Заманауи
 	Simple	Қарапайым
 	Classic	Классикалық
 	Compact	Ықшам
 	Ink saver	Сия үнемдеу
-	{n} parts of the stylesheet can't be used	Стиль кестесінің {n} бөлігін пайдалану мүмкін емес
-	{name} is too large for a stylesheet (at most 64 KB).	{name} стиль кестесі үшін тым үлкен (ең көбі 64 КБ).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} стиль кестесі үшін тым үлкен (ең көбі {kb} КБ).
 	{name} is not a UTF-8 text file.	{name} UTF-8 мәтіндік файлы емес.
-	Only comments the Comments panel's filter shows	Тек Пікірлер панелінің сүзгісі көрсететін пікірлер
+	Only comments the Comments panel's filter shows	Тек Түсініктемелер панелінің сүзгісі көрсететін түсініктемелер
 	Load CSS…	CSS жүктеу…
 	Export CSS…	CSS экспорттау…
 	Create Summary	Қорытынды жасау
-	{listed} of {total} comments	{total} пікірдің {listed}
 	Author colours	Авторлардың түстері
-	This theme doesn't colour authors' names.	Бұл тақырып авторлардың аттарын боямайды.
+	This theme doesn't colour authors' names.	Бұл тема авторлардың аттарын боямайды.
+	Comments: {listed} of {total}	Түсініктемелер: {listed}/{total}
+	Stylesheet warnings: {n}	Стиль кестесінің ескертулері: {n}

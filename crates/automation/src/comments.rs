@@ -600,10 +600,25 @@ impl Automation {
             Some(s) => SummarySort::parse(s).ok_or_else(|| ToolError::InvalidArgs(format!("unknown sort {s:?}")))?,
             None => SummarySort::Page,
         };
-        // `types` and `authors` narrow the summary like the Comments panel's filter does.
+        // `types` and `authors` narrow the summary like the Comments panel's filter does, and
+        // `comments` names the comments outright (any other filter a script works out).
         let types = if a.get("types").is_some() { Some(a.strs("types")?) } else { None };
         let authors = if a.get("authors").is_some() { Some(a.strs("authors")?) } else { None };
-        let only = (types.is_some() || authors.is_some()).then(|| {
+        let named: Option<std::collections::BTreeSet<(usize, usize)>> = match a.get("comments") {
+            None => None,
+            Some(_) => {
+                let all = self.comments(a)?;
+                let ids = a.strs("comments")?;
+                let found = ids.iter().map(|id| {
+                    all.iter()
+                        .find(|c| c.name.as_deref() == Some(*id) && c.in_reply_to.is_none())
+                        .map(|c| (c.page, c.index))
+                        .ok_or_else(|| failed(format!("no comment with id {id:?} starts a thread (see comment_list)")))
+                });
+                Some(found.collect::<Result<_>>()?)
+            }
+        };
+        let only = (types.is_some() || authors.is_some() || named.is_some()).then(|| {
             self.session
                 .get(id)
                 .map(|d| {
@@ -617,6 +632,7 @@ impl Automation {
                             })
                         })
                         .filter(|c| authors.as_ref().is_none_or(|w| w.iter().any(|w| *w == c.author.as_deref().unwrap_or(""))))
+                        .filter(|c| named.as_ref().is_none_or(|n| n.contains(&(c.page, c.index))))
                         .map(|c| (c.page, c.index))
                         .collect()
                 })
@@ -634,7 +650,7 @@ impl Automation {
             }
             (None, css) => css.map(str::to_string),
         };
-        let theme = a.opt_str("theme")?.unwrap_or("modern").to_string();
+        let theme = a.opt_str("theme")?.unwrap_or(pdfcraft_engine::SUMMARY_DEFAULT_THEME).to_string();
         // Colours for some authors; the others keep their automatic ones.
         let mut author_colors = std::collections::BTreeMap::new();
         if let Some(v) = a.get("author_colors") {
@@ -642,19 +658,25 @@ impl Automation {
             for (name, c) in map {
                 let c = c.as_str().ok_or_else(|| ToolError::InvalidArgs(format!("author_colors: the colour for {name:?} must be a string")))?;
                 let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                author_colors.insert(name.clone(), parse_color(c)?.map(byte));
+                // "" is a comment without an author, as in `authors`; the summary calls them this.
+                let name = if name.is_empty() { "Unknown author".to_string() } else { name.clone() };
+                author_colors.insert(name, parse_color(c)?.map(byte));
             }
         }
         // Dates as ISO 8601 writes them, or as an interface language does.
         let dates = match a.opt_str("dates")? {
             None | Some("iso") => None,
-            Some(lang) if pdfcraft_engine::SUMMARY_DATE_LANGUAGES.contains(&lang) => Some(lang.to_string()),
-            Some(other) => {
-                return Err(ToolError::InvalidArgs(format!(
-                    "dates {other:?}: use iso or a language ({})",
-                    pdfcraft_engine::SUMMARY_DATE_LANGUAGES.join(", ")
-                )));
-            }
+            Some(lang) => match pdfcraft_engine::dates::date_language(lang) {
+                Some(l) => Some(l.code.to_string()),
+                None => {
+                    let codes: Vec<&str> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| l.code).collect();
+                    return Err(ToolError::InvalidArgs(format!(
+                        "dates {:?}: use iso or a language ({})",
+                        lang.chars().take(40).collect::<String>(),
+                        codes.join(", ")
+                    )));
+                }
+            },
         };
         let opts = SummaryOptions { sort, theme, stylesheet, only, marked_text: a.opt_bool("marked_text")?.unwrap_or(true), author_colors, dates };
         let (bytes, warnings) = self.session.summarize_comments(id, &opts).map_err(failed)?;

@@ -2398,7 +2398,7 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
-	Include	包括
+	Include	包含
 	Comment types	注释类型
 	Quote the text that highlights, underlines and strikethroughs mark	引用高亮、下划线和删除线所标记的文本
 	Theme	主题
@@ -2407,13 +2407,13 @@ animation effects	Off	关
 	Classic	经典
 	Compact	紧凑
 	Ink saver	省墨
-	{n} parts of the stylesheet can't be used	样式表中有 {n} 处无法使用
-	{name} is too large for a stylesheet (at most 64 KB).	{name} 作为样式表过大（最多 64 KB）。
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} 作为样式表过大（最多 {kb} KB）。
 	{name} is not a UTF-8 text file.	{name} 不是 UTF-8 文本文件。
 	Only comments the Comments panel's filter shows	仅注释面板筛选显示的注释
-	Load CSS…	载入 CSS…
+	Load CSS…	加载 CSS…
 	Export CSS…	导出 CSS…
 	Create Summary	创建摘要
-	{listed} of {total} comments	{listed}/{total} 条注释
 	Author colours	作者颜色
 	This theme doesn't colour authors' names.	此主题不会为作者姓名着色。
+	Comments: {listed} of {total}	注释：{listed}/{total}
+	Stylesheet warnings: {n}	样式表警告：{n}

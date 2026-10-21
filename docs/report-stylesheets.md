@@ -1,6 +1,6 @@
 # Comment summary stylesheets
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (authors' colours: the `.author` part and `var(--author)`)
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (stylesheet limits; the box properties each part draws)
 
 The comment summary (Comments ▸ "…" ▸ Create PDF comment summary, or the `comments_summarize`
 tool) is drawn in a **theme**. Five are built in, and a **stylesheet** can restyle any of them.
@@ -50,7 +50,7 @@ Each part of the report is a class. A rule may name several, separated by commas
 | `.kind` | The comment type ("Highlight") |
 | `.author` | Who wrote the comment (left out when the summary is sorted by author: the heading names them) |
 | `.meta` | Date and page |
-| `.quote` | The text a highlight, underline or strikethrough marks |
+| `.quote` | The text a highlight, underline, strikethrough or squiggly marks |
 | `.body` | The comment's note |
 | `.reply` | One reply's band: `margin-left` is the indent per level, `border-left` the thread line, `padding-left` the space before the text |
 | `.reply-author`, `.reply-meta`, `.reply-body` | A reply's author, date and text |
@@ -127,16 +127,26 @@ comment's colour:
 Anything else (other selectors, nesting, `@media`, other properties, other `var()` names) is
 skipped with a warning naming its line, the way a browser skips CSS it doesn't know, and the rest
 still applies. So is a property a part doesn't draw (`background` on `.title`, `padding` on
-`.footer`): the warning says what that part takes. The Parts table above lists the box properties
-each part draws; every part that holds text takes the text properties. The dialog lists the
-warnings when a stylesheet is loaded; the tool returns them in `warnings`. A stylesheet over 64 KB
-is refused.
+`.footer`): the warning says what that part takes. The box properties each part draws are
+`.header`: `padding-bottom`, `border-bottom`, `margin-bottom`; `.heading`: `margin-top`,
+`margin-bottom`, `padding-bottom`, `border-bottom`; `.card`: `background`, `border-left`,
+`border-bottom`, `padding`, `margin-bottom`; `.quote` and `.reply`: `background`, `border-left`,
+`padding`, `margin`; `.body`: `margin`; `.footer`: `border-top`. Every part that holds text takes
+the text properties. The dialog lists the warnings when a stylesheet is loaded; the tool returns
+them in `warnings`.
+
+A stylesheet is read with limits, so that one can't make the summary, or the app that remembers
+it, slow: a stylesheet over 64 KB is refused, a rule reads its first 64 selectors, and at most
+4096 rules for comment types are kept (a later rule for the same part, type and property
+replaces an earlier one). `var(--comment)` and `var(--author)` outside a comment's parts (the
+title, headings, footer) stand for fixed greys.
 
 Text is set in the standard PDF fonts, which hold Western European characters; others are written
 as `[U+XXXX]` and the summary says so. Fonts can't be embedded from a stylesheet.
 
 ## Revision history
 
+- 2026-10-22: Limits on what a stylesheet can make the parser keep; page sizes up to 200 inches as documented; the box properties each part draws listed in full.
 - 2026-10-21: Authors' colours: the `.author` part, `var(--author)`, colours picked in the dialog or given to the tool.
 - 2026-10-21: Comment-type selectors (`.card.highlight`); a warning for a property a part doesn't draw.
 - 2026-10-21: First version: five built-in themes, stylesheets, `@import`, `var(--comment)`, `color-mix()`.

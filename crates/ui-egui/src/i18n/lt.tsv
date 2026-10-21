@@ -2693,13 +2693,13 @@ theme	Appearance	Išvaizda
 	Classic	Klasikinė
 	Compact	Kompaktiška
 	Ink saver	Rašalo taupymas
-	{n} parts of the stylesheet can't be used	Negalima naudoti stilių failo dalių: {n}
-	{name} is too large for a stylesheet (at most 64 KB).	{name} per didelis stilių failui (ne daugiau kaip 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} per didelis stilių failui (ne daugiau kaip {kb} KB).
 	{name} is not a UTF-8 text file.	{name} nėra UTF-8 tekstinis failas.
 	Only comments the Comments panel's filter shows	Tik komentarai, kuriuos rodo komentarų skydelio filtras
 	Load CSS…	Įkelti CSS…
 	Export CSS…	Eksportuoti CSS…
-	Create Summary	Kurti santrauką
-	{listed} of {total} comments	Komentarų: {listed} iš {total}
+	Create Summary	Kurti suvestinę
 	Author colours	Autorių spalvos
 	This theme doesn't colour authors' names.	Ši tema nespalvina autorių vardų.
+	Comments: {listed} of {total}	Komentarų: {listed} iš {total}
+	Stylesheet warnings: {n}	Stilių failo įspėjimai: {n}

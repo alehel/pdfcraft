@@ -6919,7 +6919,17 @@ fn comment_summary_themes_through_tools() {
     let r = ok(&mut a, "comments_summarize", json!({ "doc": doc, "css": "@import \"ink-saver\";", "out": "inline.pdf" }));
     assert!(r.get("warnings").is_none(), "{r}");
 
-    assert!(a.call("comments_summarize", &json!({ "doc": doc, "stylesheet": "../outside.css" })).is_err(), "confined to the root");
+    // A stylesheet outside the root is refused for being outside, not for being missing.
+    let outside = dir.parent().unwrap().join(format!("pdfcraft-outside-{}.css", std::process::id()));
+    std::fs::write(&outside, ".kind { color: red }").unwrap();
+    let name = outside.file_name().unwrap().to_str().unwrap().to_string();
+    for path in [format!("../{name}"), outside.to_str().unwrap().to_string()] {
+        assert!(
+            matches!(a.call("comments_summarize", &json!({ "doc": doc, "stylesheet": path, "out": "x.pdf" })), Err(ToolError::Failed(m)) if m.contains("outside")),
+            "{path}"
+        );
+    }
+    let _ = std::fs::remove_file(&outside);
     assert!(
         matches!(a.call("comments_summarize", &json!({ "doc": doc, "theme": "neon" })), Err(ToolError::Failed(m)) if m.contains("modern, simple, classic"))
     );
@@ -6948,6 +6958,26 @@ fn comment_summary_author_colours_through_tools() {
     for bad in [json!({ "Bo": "#ff00" }), json!({ "Bo": 3 }), json!(["Bo"])] {
         assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "author_colors": bad })), Err(ToolError::InvalidArgs(_))), "{bad}");
     }
+}
+
+/// `comments` lists only the comments named by id (a filter of the script's own), and
+/// `author_colors` takes "" for comments without an author, as `authors` does.
+#[test]
+fn comment_summary_of_chosen_comments_through_tools() {
+    let dir = workdir("summary-chosen");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let first =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "FIRST_NOTE", "author": "Ada" }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [60, 20], "contents": "SECOND_NOTE", "author": "" }));
+    let id = first["comment"]["id"].as_str().expect("an id").to_string();
+    let r = ok(&mut a, "comments_summarize", json!({ "doc": doc, "comments": [id], "author_colors": { "": "#00ff00" }, "out": "chosen.pdf" }));
+    let unknown = r["authors"].as_array().unwrap().iter().find(|x| x["name"] == "Unknown author").cloned().unwrap_or_default();
+    assert_eq!((unknown["color"].as_str(), unknown["chosen"].as_bool()), (Some("#00FF00"), Some(true)), "{r}");
+    let s = ok(&mut a, "doc_open", json!({ "path": "chosen.pdf" }))["doc"].as_u64().unwrap();
+    let text = ok(&mut a, "text_extract", json!({ "doc": s }))["pages"][0]["text"].as_str().unwrap_or_default().to_string();
+    assert!(text.contains("FIRST_NOTE") && !text.contains("SECOND_NOTE"), "{text}");
+    assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "comments": ["nope"] })), Err(ToolError::Failed(m)) if m.contains("nope")));
 }
 
 /// `dates` writes the summary's dates the way an interface language does, or as ISO 8601.

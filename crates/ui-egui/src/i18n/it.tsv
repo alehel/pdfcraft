@@ -2655,13 +2655,13 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Classic	Classico
 	Compact	Compatto
 	Ink saver	Risparmio inchiostro
-	{n} parts of the stylesheet can't be used	{n} parti del foglio di stile non possono essere usate
-	{name} is too large for a stylesheet (at most 64 KB).	{name} è troppo grande per un foglio di stile (al massimo 64 KB).
+	{name} is too large for a stylesheet (at most {kb} KB).	{name} è troppo grande per un foglio di stile (al massimo {kb} KB).
 	{name} is not a UTF-8 text file.	{name} non è un file di testo UTF-8.
 	Only comments the Comments panel's filter shows	Solo i commenti mostrati dal filtro del pannello Commenti
 	Load CSS…	Carica CSS…
 	Export CSS…	Esporta CSS…
 	Create Summary	Crea riepilogo
-	{listed} of {total} comments	{listed} di {total} commenti
 	Author colours	Colori degli autori
 	This theme doesn't colour authors' names.	Questo tema non colora i nomi degli autori.
+	Comments: {listed} of {total}	Commenti: {listed} di {total}
+	Stylesheet warnings: {n}	Avvisi del foglio di stile: {n}

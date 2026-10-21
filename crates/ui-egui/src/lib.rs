@@ -2320,6 +2320,7 @@ impl PdfCraftApp {
             .summary
             .author_colors
             .iter()
+            .take(summary_ui::MAX_SAVED_AUTHOR_COLORS)
             .map(|(name, [r, g, b])| (name.clone(), serde_json::Value::String(format!("#{r:02x}{g:02x}{b:02x}"))))
             .collect::<serde_json::Map<_, _>>()
             .into();
@@ -2412,7 +2413,7 @@ impl PdfCraftApp {
         if let Some(saved) = v["summary_author_colors"].as_object() {
             self.summary.author_colors = saved
                 .iter()
-                .filter(|(name, _)| name.len() <= 512)
+                .filter(|(name, _)| name.len() <= summary_ui::MAX_SAVED_AUTHOR_NAME_BYTES)
                 .filter_map(|(name, c)| Some((name.clone(), summary_ui::parse_hex(c.as_str()?)?)))
                 .take(summary_ui::MAX_SAVED_AUTHOR_COLORS)
                 .collect();

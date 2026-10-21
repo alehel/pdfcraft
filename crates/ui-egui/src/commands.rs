@@ -501,7 +501,11 @@ impl PdfCraftApp {
                 self.reveal_tools();
             }
             "comment.export" => self.export_data_dialog(true, false),
-            "comment.summarize" => self.dialog = Some(Dialog::SummarizeComments),
+            "comment.summarize" => {
+                // The preview starts at the summary's first page.
+                self.summary.preview_page = 0;
+                self.dialog = Some(Dialog::SummarizeComments);
+            }
             "sign.digital" | "sign.certify" => {
                 let certify = id == "sign.certify";
                 self.quick_tool = crate::QuickTool::SignArea { certify };

@@ -1118,6 +1118,50 @@ fn summary_dates_follow_the_interface_language_or_iso() {
     assert!(again.summary.iso_dates);
 }
 
+/// Summarize Options ▸ Preview: a summary longer than a page is previewed a page at a time, with
+/// the page and the page count between Previous and Next; opening the dialog again starts at the
+/// first page.
+#[test]
+fn summary_preview_pages_through_a_long_summary() {
+    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    for k in 0..8 {
+        let x = 20.0 + 25.0 * k as f64;
+        let rect = pdfcraft_engine::Shape::Rectangle { rect: [x, 20.0, x + 20.0, 40.0] };
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            style: pdfcraft_engine::Style::default_for(&rect),
+            shape: rect,
+            contents: "A long note that takes room. ".repeat(40),
+            author: "Ada".into(),
+        }));
+    }
+    h.run_steps(3);
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.get_by_label("More options").click();
+        h.run_steps(2);
+        h.get_by_label("Create PDF comment summary…").click();
+        h.run_steps(3);
+    };
+    open(&mut h);
+    let pages = (2..20).find(|n| h.query_by_label(&format!("Page 1 of {n}")).is_some()).expect("Page 1 of n, n ≥ 2");
+    // The dialog's Next, drawn after the viewer's.
+    h.get_all_by_label("Next page").last().expect("Next").click();
+    h.run_steps(3);
+    assert_eq!(h.state().summary.preview_page, 1);
+    h.get_by_label(&format!("Page 2 of {pages}"));
+    h.state_mut().summary.preview_page = 99;
+    h.run_steps(3);
+    assert_eq!(h.state().summary.preview_page, pages - 1, "past the end shows the last page");
+    h.get_all_by_label("Previous page").last().expect("Previous").click();
+    h.run_steps(3);
+    assert_eq!(h.state().summary.preview_page, pages - 2);
+
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    open(&mut h);
+    assert_eq!(h.state().summary.preview_page, 0);
+}
+
 #[test]
 fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());

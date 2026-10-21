@@ -3,7 +3,7 @@
 //! Two sections: **Include** (which comment types, optionally only what the Comments panel's filter
 //! shows, and whether to quote marked text) and **Appearance** (order, theme and each author's
 //! colour). A stylesheet the user loads is one more entry in the theme menu, and the preview beside
-//! the options is the summary's first page, drawn again whenever an option changes.
+//! the options shows the summary a page at a time, made again whenever an option changes.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -12,7 +12,7 @@ use pdfcraft_engine::{DocId, SummaryOptions, SummarySort};
 use pdfcraft_render::Annotation;
 
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::{PdfCraftApp, icons, widgets};
 
 /// The theme menu's entry for the loaded stylesheet (`SummaryDraft::theme`).
 pub const CUSTOM: &str = "custom";
@@ -50,7 +50,9 @@ pub struct SummaryDraft {
     pub author_colors: BTreeMap<String, [u8; 3]>,
     /// Write dates as ISO 8601 does rather than the way the interface language does.
     pub iso_dates: bool,
-    preview: Option<(String, egui::TextureHandle)>,
+    /// The summary page the preview shows (0-based).
+    pub preview_page: usize,
+    preview: Option<Preview>,
     /// Whether the chosen look draws authors' colours, for the look it was worked out for.
     shows_author_colors: Option<(u64, bool)>,
 }
@@ -141,32 +143,53 @@ fn panel_filter_active(app: &PdfCraftApp, id: DocId) -> bool {
     })
 }
 
-/// The summary's first page as a texture, made again only when the choices or the document
-/// change.
-fn preview(app: &mut PdfCraftApp, ctx: &egui::Context, id: DocId) -> Option<egui::TextureHandle> {
+/// Page `SummaryDraft::preview_page` of the summary (moved to its last page when the summary is
+/// shorter) as a texture, with that page and the number of pages. The summary is made again only
+/// when the choices or the document change, and the page drawn again only when it changes.
+fn preview(app: &mut PdfCraftApp, ctx: &egui::Context, id: DocId) -> Option<(egui::TextureHandle, usize, usize)> {
     let (only, _, _) = selection(app, id);
     let opts = app.summary.options(only);
     let doc = app.session.get(id)?;
     // The document's bytes and comments identify its state; the options identify the choices.
     let key = format!("{id:?}/{:p}/{}/{}/{opts:?}", doc.bytes.as_ptr(), doc.bytes.len(), doc.info.annotations.len());
-    if let Some((k, tex)) = &app.summary.preview
-        && *k == key
+    let wanted = app.summary.preview_page;
+    if let Some(p) = &app.summary.preview
+        && p.key == key
+        && p.page == wanted.min(p.pages.saturating_sub(1))
     {
-        return Some(tex.clone());
+        app.summary.preview_page = p.page;
+        return Some((p.texture.clone(), p.page, p.pages));
     }
-    let (pdf, _) = app.session.summarize_comments(id, &opts).ok()?;
-    let mut r = pdfcraft_render::PageRenderer::new(pdf, pdfcraft_render::RenderConfig::default());
+    let made = app.summary.preview.as_ref().filter(|p| p.key == key).map(|p| p.pdf.clone());
+    let pdf = match made {
+        Some(pdf) => pdf,
+        None => app.session.summarize_comments(id, &opts).ok()?.0,
+    };
+    let mut r = pdfcraft_render::PageRenderer::new(pdf.clone(), pdfcraft_render::RenderConfig::default());
+    let pages = r.page_count();
+    let page = wanted.min(pages.saturating_sub(1));
+    app.summary.preview_page = page;
     let ppp = ctx.pixels_per_point().max(1.0);
     // 260 points wide on screen; a Letter page is 612 points wide.
     let scale = (260.0 * ppp / 612.0).clamp(0.1, 4.0);
-    let out = r.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale, ..Default::default() });
+    let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Pixels, scale, ..Default::default() });
     if out.error.is_some() || out.width == 0 || out.height == 0 {
         return None;
     }
     let img = egui::ColorImage::from_rgba_premultiplied([out.width as usize, out.height as usize], &out.rgba);
-    let tex = ctx.load_texture("summary-preview", img, egui::TextureOptions::LINEAR);
-    app.summary.preview = Some((key, tex.clone()));
-    Some(tex)
+    let texture = ctx.load_texture("summary-preview", img, egui::TextureOptions::LINEAR);
+    app.summary.preview = Some(Preview { key, pdf, pages, page, texture: texture.clone() });
+    Some((texture, page, pages))
+}
+
+/// The preview: the summary made for one set of choices, and the page of it on screen.
+struct Preview {
+    /// The choices and the document state it was made for.
+    key: String,
+    pdf: std::sync::Arc<Vec<u8>>,
+    pages: usize,
+    page: usize,
+    texture: egui::TextureHandle,
 }
 
 /// What the dialog asks for when it closes.
@@ -206,10 +229,28 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> Outc
         ui.vertical(|ui| {
             ui.label(egui::RichText::new(tl!("Preview")).small().color(t.text_muted));
             match preview(app, &ctx, id) {
-                Some(tex) => {
+                Some((tex, page, pages)) => {
                     let size = tex.size_vec2() / ctx.pixels_per_point().max(1.0);
                     let r = ui.add(egui::Image::new(&tex).fit_to_exact_size(size));
                     ui.painter().rect_stroke(r.rect, 0.0, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+                    if pages > 1 {
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled_ui(page > 0, |ui| icons::button(ui, "chevron-left", 24.0, false, tl!("Previous page"))).inner.clicked()
+                            {
+                                app.summary.preview_page = page.saturating_sub(1);
+                            }
+                            let of =
+                                crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &page.saturating_add(1).to_string()), ("n", &pages.to_string())]);
+                            ui.label(egui::RichText::new(of).small().color(t.text_muted));
+                            if ui
+                                .add_enabled_ui(page + 1 < pages, |ui| icons::button(ui, "chevron-right", 24.0, false, tl!("Next page")))
+                                .inner
+                                .clicked()
+                            {
+                                app.summary.preview_page = page.saturating_add(1);
+                            }
+                        });
+                    }
                 }
                 None => {
                     ui.label(egui::RichText::new("—").color(t.text_faint));

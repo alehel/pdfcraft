@@ -2863,7 +2863,7 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert!(text.contains("Page 2\n\n#1  Rectangle  Reviewer"), "{text}");
     assert!(text.contains("Still editable") && text.contains("    Agreed"), "{text}");
     assert!(!text.contains("Marked"), "checkmarks aren't listed: {text}");
-    let pdf = s.summarize_comments(id, &SummaryOptions { sort: SummarySort::Author, ..Default::default() }).unwrap();
+    let (pdf, _) = s.summarize_comments(id, &SummaryOptions { sort: SummarySort::Author, ..Default::default() }).unwrap();
     let n = s.open_new("summary.pdf", pdf).unwrap();
     assert!(!s.get(n).unwrap().info.pages.is_empty());
     assert_eq!(
@@ -2915,7 +2915,7 @@ fn comment_summary_quotes_marked_text_and_lists_only_the_chosen_comments() {
     s.apply(id, rect_comment(0, [20.0, 20.0, 60.0, 60.0])).unwrap();
     let all = s.get(id).unwrap().info.annotations.clone();
     let summary = |opts: &SummaryOptions| {
-        let created = s.summarize_comments(id, opts).unwrap();
+        let (created, _) = s.summarize_comments(id, opts).unwrap();
         let mut r = pdfcraft_render::PageRenderer::new(created, pdfcraft_render::RenderConfig::default());
         r.render(RenderRequestFor::text(0)).text.map(|t| t.plain_text()).unwrap_or_default()
     };
@@ -2937,6 +2937,44 @@ fn comment_summary_quotes_marked_text_and_lists_only_the_chosen_comments() {
     assert!(!text.contains("Strikethrough") && !text.contains("Rectangle") && !text.contains("Cut this"), "{text}");
     let none = SummaryOptions { only: Some(Default::default()), ..Default::default() };
     assert!(comment_summary("fox.pdf", &all, &none, &Default::default()).ends_with("No comments match the summary options.\n"));
+}
+
+/// Summarize Comments draws in the theme it is given, a stylesheet over it, or refuses an
+/// unknown theme; the stylesheet's skipped parts come back as warnings.
+#[test]
+fn comment_summary_themes_and_stylesheets() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    let fonts = |pdf: &Arc<Vec<u8>>| -> String {
+        let doc = pdfcraft_cos::Document::open(pdf.clone()).unwrap();
+        let mut names: Vec<String> = Vec::new();
+        for (_, o) in doc.scan_objects() {
+            if let Some(d) = o.as_dict()
+                && d.name(b"Type") == Some(b"Font")
+            {
+                names.extend(d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned()));
+            }
+        }
+        names.sort();
+        names.join(",")
+    };
+    let summary = |theme: &str, css: Option<&str>| {
+        s.summarize_comments(id, &SummaryOptions { theme: theme.into(), stylesheet: css.map(Into::into), ..Default::default() })
+    };
+    let (modern, w) = summary("modern", None).unwrap();
+    assert!(w.is_empty());
+    assert!(fonts(&modern).starts_with("Helvetica"), "{}", fonts(&modern));
+    let (classic, _) = summary("Classic", None).unwrap();
+    assert!(fonts(&classic).split(',').all(|f| f.starts_with("Times")), "{}", fonts(&classic));
+    // A stylesheet without @import goes over the chosen theme; one with @import over its own.
+    let (over, warnings) = summary("classic", Some(".kind { font-family: monospace } .card { shadow: 2px }")).unwrap();
+    assert!(fonts(&over).contains("Courier-Bold") && fonts(&over).contains("Times"), "{}", fonts(&over));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("shadow"), "{warnings:?}");
+    let (imported, _) = summary("classic", Some("@import \"modern\";")).unwrap();
+    assert_eq!(fonts(&imported), fonts(&modern));
+    assert!(matches!(summary("fancy", None), Err(EditError::Source(m)) if m.contains("modern, simple, classic, compact, ink-saver")));
+    assert!(matches!(summary("modern", Some(&"x".repeat(pdfcraft_create::MAX_STYLESHEET_BYTES + 1))), Err(EditError::Create(_))));
 }
 
 /// The words under a markup comment come out in reading order on one line, and nothing comes out

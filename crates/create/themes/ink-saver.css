@@ -1,0 +1,25 @@
+/* Ink saver: no filled areas. Black and grey text, hairline rules, and each comment's colour
+   only in a thin stripe beside it. */
+
+@page { margin: 54pt 54pt 60pt 54pt; }
+
+.title { font-family: Helvetica, sans-serif; font-size: 18pt; font-weight: bold; color: black; line-height: 24pt; }
+.subtitle { font-size: 10pt; color: #555555; line-height: 14pt; }
+.header { padding-bottom: 10pt; border-bottom: 0.5pt solid #999999; margin-bottom: 4pt; }
+
+.heading { font-size: 12pt; font-weight: bold; color: black; line-height: 17pt; margin-top: 10pt; padding-bottom: 2pt; border-bottom: 0.5pt solid #999999; margin-bottom: 6pt; }
+.note { font-size: 10.5pt; font-style: italic; color: #555555; line-height: 15pt; }
+
+.card { background: transparent; border-left: 1.5pt solid var(--comment); padding: 2pt 0 2pt 10pt; margin-bottom: 12pt; }
+.number { font-size: 9.5pt; font-weight: bold; color: #555555; }
+.kind { font-size: 10.5pt; font-weight: bold; color: black; line-height: 15pt; }
+.meta { font-size: 9.5pt; color: #555555; line-height: 13pt; }
+.quote { font-size: 10.5pt; font-style: italic; color: black; line-height: 14.5pt; background: transparent; padding: 0; margin-top: 3pt; margin-bottom: 1pt; }
+.body { font-size: 10.5pt; color: black; line-height: 14.5pt; margin-top: 3pt; }
+
+.reply { margin: 5pt 0 0 12pt; padding-left: 7pt; border-left: 0.5pt solid #999999; }
+.reply-author { font-size: 9.5pt; font-weight: bold; color: black; line-height: 14pt; }
+.reply-meta { font-size: 9pt; color: #555555; }
+.reply-body { font-size: 10pt; color: black; line-height: 13.5pt; }
+
+.footer { font-size: 8pt; color: #555555; border-top: 0.5pt solid #999999; }

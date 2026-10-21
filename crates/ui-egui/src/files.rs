@@ -26,6 +26,8 @@ pub enum FilePurpose {
     CreateMultipleSeparate,
     /// Find text and redact ▸ Import list: a text file with one word or phrase per line.
     RedactWords,
+    /// Summarize Options ▸ Load stylesheet: a CSS file restyling the comment summary.
+    Stylesheet,
 }
 
 /// Discover installed document fonts off the GUI thread, only when the picker is opened.
@@ -65,6 +67,9 @@ fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     }
     if purpose == FilePurpose::RedactWords {
         return dialog.add_filter(tl!("Text"), &["txt"]);
+    }
+    if purpose == FilePurpose::Stylesheet {
+        return dialog.add_filter("CSS", &["css"]);
     }
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
         return dialog.add_filter("PDF", &["pdf"]);
@@ -360,6 +365,10 @@ impl PdfCraftApp {
                 self.notify_fmt("{name} is too large for a word list (at most 1 MB).", &[("name", &name)]);
                 return;
             }
+            if purpose == FilePurpose::Stylesheet && std::fs::metadata(p).is_ok_and(|m| m.len() > pdfcraft_engine::MAX_STYLESHEET_BYTES as u64) {
+                self.notify_fmt("{name} is too large for a stylesheet (at most 64 KB).", &[("name", &name)]);
+                return;
+            }
             let read = if matches!(purpose, FilePurpose::TextFont { .. }) {
                 use std::io::Read;
                 std::fs::File::open(p).and_then(|f| {
@@ -519,6 +528,17 @@ impl PdfCraftApp {
                 }
                 self.redact_search.words = pdfcraft_engine::redact_word_list(&pdfcraft_engine::decode_text(&bytes)).join("\n");
                 self.redact_search.mode = crate::redact_ui::SearchMode::Words;
+            }
+            FilePurpose::Stylesheet => {
+                let Some((name, bytes)) = files.into_iter().next() else { return };
+                if bytes.len() > pdfcraft_engine::MAX_STYLESHEET_BYTES {
+                    self.notify_fmt("{name} is too large for a stylesheet (at most 64 KB).", &[("name", &name)]);
+                    return;
+                }
+                match String::from_utf8(bytes) {
+                    Ok(css) => self.set_summary_stylesheet(name, css),
+                    Err(_) => self.notify_fmt("{name} is not a UTF-8 text file.", &[("name", &name)]),
+                }
             }
         }
     }
@@ -801,17 +821,62 @@ impl PdfCraftApp {
 
     /// Summarize Comments: make the summary and open it as a new document.
     pub fn summarize_comments(&mut self) {
-        let Some((view, id)) = self.active_ids() else { return };
+        let Some((_, id)) = self.active_ids() else { return };
         let stem =
             self.session.get(id).map(|d| std::path::Path::new(&d.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
-        let only = self.summary_only_shown.then(|| match (self.session.get(id), self.views.get(view)) {
-            (Some(d), Some(v)) => crate::comments_panel::shown(&d.info, &v.comments).into_iter().map(|a| (a.page, a.index)).collect(),
-            _ => Default::default(),
-        });
-        let opts = pdfcraft_engine::SummaryOptions { sort: self.summary_sort, only, marked_text: self.summary_marked_text };
+        let (only, _, _) = crate::summary_ui::selection(self, id);
+        let opts = self.summary.options(only);
         match self.session.summarize_comments(id, &opts) {
-            Ok(bytes) => self.open_created(&format!("Summary of comments on {}.pdf", stem.unwrap_or_default()), bytes, "Created a comment summary"),
+            // What the stylesheet can't say is listed in the dialog.
+            Ok((bytes, _warnings)) => {
+                self.open_created(&format!("Summary of comments on {}.pdf", stem.unwrap_or_default()), bytes, "Created a comment summary")
+            }
             Err(e) => self.notify_fmt("Couldn't summarize comments: {e}", &[("e", &e.to_string())]),
+        }
+    }
+
+    /// Use `css` (from the file `name`) as the summary's theme, and list what it says that can't
+    /// be used. A stylesheet too large to read is not kept.
+    pub fn set_summary_stylesheet(&mut self, name: String, css: String) {
+        let opts = pdfcraft_engine::SummaryOptions { stylesheet: Some(css.clone()), ..Default::default() };
+        match pdfcraft_engine::summary_style(&opts) {
+            Ok((_, warnings)) => {
+                self.summary.warnings = warnings;
+                self.summary.stylesheet = Some((name, css));
+                self.summary.theme = crate::summary_ui::CUSTOM.into();
+            }
+            Err(e) => self.notify_fmt("Couldn't use {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+        }
+    }
+
+    /// Summarize Options ▸ Export CSS: write the chosen theme's stylesheet, to start a custom one
+    /// from (the loaded stylesheet, when that is the one chosen).
+    pub fn save_summary_theme(&mut self) {
+        let (file, css): (String, String) = match (&self.summary.stylesheet, self.summary.theme.as_str()) {
+            (Some((name, css)), crate::summary_ui::CUSTOM) => (name.clone(), css.clone()),
+            (_, theme) => {
+                let Some((id, _, css)) = pdfcraft_engine::SUMMARY_THEMES.iter().find(|(id, _, _)| *id == theme).copied() else { return };
+                (format!("{id}.css"), css.to_string())
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let write =
+                move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), css.as_bytes()) {
+                    Ok(()) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
+                    Err(e) => app.notify_fmt("Couldn't write {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
+                };
+            match self.save_override.clone() {
+                Some(p) => write(self, p.into()),
+                None => {
+                    let d = rfd::AsyncFileDialog::new().set_title(tl!("Export CSS…")).set_file_name(file).add_filter("CSS", &["css"]);
+                    self.ask_one(crate::pickers::Ask::Save(d), None, write);
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = crate::editing::download(&file, css.as_bytes());
         }
     }
 

@@ -6880,3 +6880,48 @@ fn text_box_and_callout_fill_and_border_through_tools() {
         assert_eq!(session.get(saved).unwrap().comment_props(0, index).unwrap().fill, None);
     }
 }
+
+/// The summary's look through the tools: a built-in theme, a stylesheet file over it (confined
+/// to the root), inline css, warnings for what a stylesheet can't say, and the theme list.
+#[test]
+fn comment_summary_themes_through_tools() {
+    let dir = workdir("summary-themes");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "Themed", "author": "Ada" }));
+    let themes = ok(&mut a, "comments_summary_themes", json!({}));
+    let ids: Vec<&str> = themes["themes"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["modern", "simple", "classic", "compact", "ink-saver"]);
+    assert!(themes["themes"][2]["css"].as_str().unwrap().contains(".card"));
+
+    let r = ok(&mut a, "comments_summarize", json!({ "doc": doc, "theme": "classic", "out": "classic.pdf" }));
+    assert!(r.get("warnings").is_none(), "{r}");
+    let fonts = |file: &str| -> String {
+        let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(file)).unwrap())).unwrap();
+        let mut names: Vec<String> = doc
+            .scan_objects()
+            .filter_map(|(_, o)| {
+                o.as_dict()
+                    .filter(|d| d.name(b"Type") == Some(b"Font"))
+                    .and_then(|d| d.name(b"BaseFont"))
+                    .map(|n| String::from_utf8_lossy(n).into_owned())
+            })
+            .collect();
+        names.sort();
+        names.join(",")
+    };
+    assert!(fonts("classic.pdf").contains("Times-Bold"), "{}", fonts("classic.pdf"));
+
+    std::fs::write(dir.join("mine.css"), ".kind { font-family: monospace; glow: 1 }").unwrap();
+    let r = ok(&mut a, "comments_summarize", json!({ "doc": doc, "stylesheet": "mine.css", "out": "mine.pdf" }));
+    assert!(r["warnings"][0].as_str().unwrap().contains("glow"), "{r}");
+    assert!(fonts("mine.pdf").contains("Courier-Bold"), "{}", fonts("mine.pdf"));
+    let r = ok(&mut a, "comments_summarize", json!({ "doc": doc, "css": "@import \"ink-saver\";", "out": "inline.pdf" }));
+    assert!(r.get("warnings").is_none(), "{r}");
+
+    assert!(a.call("comments_summarize", &json!({ "doc": doc, "stylesheet": "../outside.css" })).is_err(), "confined to the root");
+    assert!(
+        matches!(a.call("comments_summarize", &json!({ "doc": doc, "theme": "neon" })), Err(ToolError::Failed(m)) if m.contains("modern, simple, classic"))
+    );
+    assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "css": "", "stylesheet": "mine.css" })), Err(ToolError::InvalidArgs(_))));
+}

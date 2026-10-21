@@ -50,7 +50,9 @@ pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, source_kind};
+pub use pdfcraft_create::{
+    BUILTIN_THEMES as SUMMARY_THEMES, CONVERTIBLE, CreateError, ImageResolution, MAX_STYLESHEET_BYTES, SourceKind, decode_text, source_kind,
+};
 pub use pdfcraft_edit::added::{text_rect as added_text_rect, text_width as added_text_width};
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
@@ -4820,13 +4822,16 @@ impl Session {
 
     /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing the comments
     /// `opts` includes with their number, author, type, date, text and replies, and with
-    /// `opts.marked_text` the text each highlight, underline, strikethrough or squiggly marks.
-    pub fn summarize_comments(&self, id: DocId, opts: &SummaryOptions) -> Result<Arc<Vec<u8>>, EditError> {
+    /// `opts.marked_text` the text each highlight, underline, strikethrough or squiggly marks, in
+    /// the look of `opts.theme` and `opts.stylesheet`. Returns the PDF and a warning for each part
+    /// of the stylesheet that was skipped.
+    pub fn summarize_comments(&self, id: DocId, opts: &SummaryOptions) -> Result<(Arc<Vec<u8>>, Vec<String>), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let (style, warnings) = summary_style(opts)?;
         let marked = if opts.marked_text { self.marked_texts(id, opts) } else { Default::default() };
         let report = comment_report(&doc.name, &doc.info.annotations, opts, &marked);
-        let (created, _escaped) = pdfcraft_create::report(&report, pdfcraft_create::LETTER)?;
-        self.write_new(&created)
+        let (created, _escaped) = pdfcraft_create::report(&report, pdfcraft_create::LETTER, &style)?;
+        Ok((self.write_new(&created)?, warnings))
     }
 
     /// The page text under each text-markup comment `opts` includes, keyed by (page, index).
@@ -5021,10 +5026,14 @@ pub struct OptimizeReport {
     pub discarded: Vec<(Hidden, usize)>,
 }
 
-/// What Summarize Comments includes and how it orders it.
+/// What Summarize Comments includes, how it orders it and how it looks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SummaryOptions {
     pub sort: SummarySort,
+    /// The built-in theme (`pdfcraft_create::BUILTIN_THEMES`: modern, simple, classic, compact, ink-saver).
+    pub theme: String,
+    /// A stylesheet applied over `theme` (or over the theme it `@import`s).
+    pub stylesheet: Option<String>,
     /// The comments to list, as (page, index) of each thread's first comment; `None` lists every
     /// comment. Replies follow the comment they answer.
     pub only: Option<std::collections::HashSet<(usize, usize)>>,
@@ -5034,7 +5043,7 @@ pub struct SummaryOptions {
 
 impl Default for SummaryOptions {
     fn default() -> Self {
-        SummaryOptions { sort: SummarySort::Page, only: None, marked_text: true }
+        SummaryOptions { sort: SummarySort::Page, theme: "modern".into(), stylesheet: None, only: None, marked_text: true }
     }
 }
 
@@ -5042,6 +5051,20 @@ impl SummaryOptions {
     /// Whether the summary lists `a` (a thread's first comment).
     pub fn includes(&self, a: &pdfcraft_render::Annotation) -> bool {
         self.only.as_ref().is_none_or(|only| only.contains(&(a.page, a.index)))
+    }
+}
+
+/// The look `opts` asks for: its stylesheet over its theme, or the theme alone. An unknown theme
+/// or a stylesheet too large to read is refused; anything else in a stylesheet that can't be used
+/// is skipped and listed in the warnings.
+pub fn summary_style(opts: &SummaryOptions) -> Result<(pdfcraft_create::ReportStyle, Vec<String>), EditError> {
+    if pdfcraft_create::builtin_theme(&opts.theme).is_none() {
+        let names: Vec<&str> = pdfcraft_create::BUILTIN_THEMES.iter().map(|t| t.0).collect();
+        return Err(EditError::Source(format!("no theme is called \"{}\" (the themes are {})", opts.theme, names.join(", "))));
+    }
+    match &opts.stylesheet {
+        Some(css) => Ok(pdfcraft_create::ReportStyle::parse_over(&opts.theme, css)?),
+        None => Ok((pdfcraft_create::ReportStyle::builtin(&opts.theme).unwrap_or_default(), Vec::new())),
     }
 }
 

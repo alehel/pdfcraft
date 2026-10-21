@@ -2508,9 +2508,20 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
-	Include:	Zahrnout:
-	All comments ({n})	Všechny komentáře ({n})
-	Only the comments currently showing ({n})	Jen právě zobrazené komentáře ({n})
+	Include	Zahrnout
 	Comment types	Typy komentářů
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Platí také hledání v panelu Komentáře a jeho filtry podle autora, stavu, barvy a zaškrtnutí.
 	Quote the text that highlights, underlines and strikethroughs mark	Citovat text označený zvýrazněním, podtržením a přeškrtnutím
+	Theme	Motiv
+	Modern	Moderní
+	Simple	Jednoduchý
+	Classic	Klasický
+	Compact	Kompaktní
+	Ink saver	Úspora inkoustu
+	{n} parts of the stylesheet can't be used	Části šablony stylů, které nelze použít ({n})
+	{name} is too large for a stylesheet (at most 64 KB).	{name} je pro šablonu stylů příliš velký (nejvýše 64 KB).
+	{name} is not a UTF-8 text file.	{name} není textový soubor v UTF-8.
+	Only comments the Comments panel's filter shows	Jen komentáře, které zobrazuje filtr panelu Komentáře
+	Load CSS…	Načíst CSS…
+	Export CSS…	Exportovat CSS…
+	Create Summary	Vytvořit souhrn
+	{listed} of {total} comments	Komentáře: {listed} z {total}

@@ -2711,9 +2711,19 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
-	Include:	تضمين:
-	All comments ({n})	كل التعليقات ({n})
-	Only the comments currently showing ({n})	التعليقات المعروضة حاليًا فقط ({n})
+	Include	تضمين
 	Comment types	أنواع التعليقات
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	يُطبَّق أيضًا البحث في لوحة التعليقات وعوامل التصفية حسب المؤلف والحالة واللون وعلامة الاختيار.
 	Quote the text that highlights, underlines and strikethroughs mark	اقتباس النص الذي تحدده علامات التمييز والتسطير والشطب
+	Modern	حديث
+	Simple	بسيط
+	Classic	كلاسيكي
+	Compact	مضغوط
+	Ink saver	موفّر الحبر
+	{n} parts of the stylesheet can't be used	{n} من أجزاء ورقة الأنماط لا يمكن استخدامها
+	{name} is too large for a stylesheet (at most 64 KB).	{name} أكبر من أن تكون ورقة أنماط (64 كيلوبايت على الأكثر).
+	{name} is not a UTF-8 text file.	{name} ليس ملفًا نصيًا بترميز UTF-8.
+	Only comments the Comments panel's filter shows	التعليقات التي يعرضها عامل تصفية لوحة التعليقات فقط
+	Load CSS…	تحميل CSS…
+	Export CSS…	تصدير CSS…
+	Create Summary	إنشاء الملخص
+	{listed} of {total} comments	{listed} من {total} تعليقات

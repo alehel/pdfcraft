@@ -2574,9 +2574,20 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
-	Include:	Incluir:
-	All comments ({n})	Todos los comentarios ({n})
-	Only the comments currently showing ({n})	Solo los comentarios que se muestran ahora ({n})
+	Include	Incluir
 	Comment types	Tipos de comentario
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	También se aplican la búsqueda del panel Comentarios y sus filtros por autor, estado, color y marca de verificación.
 	Quote the text that highlights, underlines and strikethroughs mark	Citar el texto que marcan los resaltados, subrayados y tachados
+	Theme	Tema
+	Modern	Moderno
+	Simple	Sencillo
+	Classic	Clásico
+	Compact	Compacto
+	Ink saver	Ahorro de tinta
+	{n} parts of the stylesheet can't be used	{n} partes de la hoja de estilos no se pueden usar
+	{name} is too large for a stylesheet (at most 64 KB).	{name} es demasiado grande para una hoja de estilos (64 KB como máximo).
+	{name} is not a UTF-8 text file.	{name} no es un archivo de texto UTF-8.
+	Only comments the Comments panel's filter shows	Solo los comentarios que muestra el filtro del panel Comentarios
+	Load CSS…	Cargar CSS…
+	Export CSS…	Exportar CSS…
+	Create Summary	Crear resumen
+	{listed} of {total} comments	{listed} de {total} comentarios

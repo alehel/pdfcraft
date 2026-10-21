@@ -2430,9 +2430,20 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
-	Include:	Dahil et:
-	All comments ({n})	Tüm yorumlar ({n})
-	Only the comments currently showing ({n})	Yalnızca şu anda gösterilen yorumlar ({n})
+	Include	Dahil et
 	Comment types	Yorum türleri
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Yorumlar panelindeki arama ile yazar, durum, renk ve onay işareti filtreleri de uygulanır.
 	Quote the text that highlights, underlines and strikethroughs mark	Vurgulama, altını çizme ve üstünü çizmenin işaretlediği metni alıntıla
+	Theme	Tema
+	Modern	Çağdaş
+	Simple	Sade
+	Classic	Klasik
+	Compact	Sıkı
+	Ink saver	Mürekkep tasarrufu
+	{n} parts of the stylesheet can't be used	Stil sayfasının {n} bölümü kullanılamıyor
+	{name} is too large for a stylesheet (at most 64 KB).	{name} bir stil sayfası için çok büyük (en fazla 64 KB).
+	{name} is not a UTF-8 text file.	{name} bir UTF-8 metin dosyası değil.
+	Only comments the Comments panel's filter shows	Yalnızca Yorumlar panelinin filtresinin gösterdiği yorumlar
+	Load CSS…	CSS yükle…
+	Export CSS…	CSS dışa aktar…
+	Create Summary	Özet oluştur
+	{listed} of {total} comments	{total} yorumdan {listed} tanesi

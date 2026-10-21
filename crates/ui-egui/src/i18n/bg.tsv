@@ -2397,9 +2397,20 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
-	Include:	Включване:
-	All comments ({n})	Всички коментари ({n})
-	Only the comments currently showing ({n})	Само показаните в момента коментари ({n})
+	Include	Включване
 	Comment types	Типове коментари
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Търсенето в панела „Коментари“ и филтрите по автор, състояние, цвят и отметка също се прилагат.
 	Quote the text that highlights, underlines and strikethroughs mark	Цитиране на текста, отбелязан с маркиране, подчертаване и зачертаване
+	Theme	Тема
+	Modern	Модерна
+	Simple	Проста
+	Classic	Класическа
+	Compact	Компактна
+	Ink saver	Пестяща мастило
+	{n} parts of the stylesheet can't be used	{n} части от стиловия файл не могат да се използват
+	{name} is too large for a stylesheet (at most 64 KB).	{name} е твърде голям за стилов файл (най-много 64 KB).
+	{name} is not a UTF-8 text file.	{name} не е текстов файл в UTF-8.
+	Only comments the Comments panel's filter shows	Само коментарите, които филтърът на панела „Коментари“ показва
+	Load CSS…	Зареждане на CSS…
+	Export CSS…	Експортиране на CSS…
+	Create Summary	Създаване на обобщение
+	{listed} of {total} comments	{listed} от {total} коментара

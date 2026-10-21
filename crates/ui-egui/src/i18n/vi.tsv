@@ -2687,9 +2687,19 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
-	Include:	Bao gồm:
-	All comments ({n})	Tất cả nhận xét ({n})
-	Only the comments currently showing ({n})	Chỉ các nhận xét đang hiển thị ({n})
+	Include	Bao gồm
 	Comment types	Loại nhận xét
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	Tìm kiếm trong bảng Nhận xét và các bộ lọc theo tác giả, trạng thái, màu và dấu kiểm cũng được áp dụng.
 	Quote the text that highlights, underlines and strikethroughs mark	Trích dẫn văn bản được đánh dấu bằng tô sáng, gạch chân và gạch ngang
+	Modern	Hiện đại
+	Simple	Đơn giản
+	Classic	Cổ điển
+	Compact	Gọn
+	Ink saver	Tiết kiệm mực
+	{n} parts of the stylesheet can't be used	{n} phần của bảng định kiểu không dùng được
+	{name} is too large for a stylesheet (at most 64 KB).	{name} quá lớn đối với một bảng định kiểu (tối đa 64 KB).
+	{name} is not a UTF-8 text file.	{name} không phải là tệp văn bản UTF-8.
+	Only comments the Comments panel's filter shows	Chỉ các nhận xét mà bộ lọc của bảng Nhận xét hiển thị
+	Load CSS…	Tải CSS…
+	Export CSS…	Xuất CSS…
+	Create Summary	Tạo bản tóm tắt
+	{listed} of {total} comments	{listed} trong {total} nhận xét

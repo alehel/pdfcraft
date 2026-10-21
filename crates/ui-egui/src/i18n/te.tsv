@@ -2343,9 +2343,20 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
-	Include:	చేర్చు:
-	All comments ({n})	అన్ని వ్యాఖ్యలు ({n})
-	Only the comments currently showing ({n})	ప్రస్తుతం కనిపిస్తున్న వ్యాఖ్యలు మాత్రమే ({n})
+	Include	చేర్చు
 	Comment types	వ్యాఖ్య రకాలు
-	The Comments panel's search and its author, status, colour and checkmark filters apply too.	వ్యాఖ్యల ప్యానెల్ శోధన, రచయిత, స్థితి, రంగు, టిక్ గుర్తు ఫిల్టర్‌లు కూడా వర్తిస్తాయి.
 	Quote the text that highlights, underlines and strikethroughs mark	హైలైట్‌లు, అండర్‌లైన్‌లు, కొట్టివేతలు గుర్తించిన పాఠ్యాన్ని ఉదహరించు
+	Theme	థీమ్
+	Modern	ఆధునిక
+	Simple	సరళ
+	Classic	సాంప్రదాయ
+	Compact	కుదించిన
+	Ink saver	సిరా పొదుపు
+	{n} parts of the stylesheet can't be used	స్టైల్‌షీట్‌లో {n} భాగాలను ఉపయోగించలేము
+	{name} is too large for a stylesheet (at most 64 KB).	{name} స్టైల్‌షీట్‌కు చాలా పెద్దది (గరిష్ఠంగా 64 KB).
+	{name} is not a UTF-8 text file.	{name} UTF-8 పాఠ్య ఫైల్ కాదు.
+	Only comments the Comments panel's filter shows	వ్యాఖ్యల ప్యానెల్ ఫిల్టర్ చూపే వ్యాఖ్యలు మాత్రమే
+	Load CSS…	CSS లోడ్ చేయి…
+	Export CSS…	CSS ఎగుమతి చేయి…
+	Create Summary	సారాంశాన్ని సృష్టించు
+	{listed} of {total} comments	{total} వ్యాఖ్యలలో {listed}

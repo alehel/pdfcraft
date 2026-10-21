@@ -894,16 +894,16 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     h.get_by_label("Create PDF comment summary…").click();
     h.run_steps(2);
     h.get_by_label("Summarize Options");
-    h.get_by_label("Create PDF Comment Summary").click();
+    h.get_by_label("Create Summary").click();
     h.run_steps(3);
     let s = h.state();
     assert_eq!(s.views.len(), 2);
     assert!(s.session.get(s.views[1].id).unwrap().name.starts_with("Summary of comments on text"));
 }
 
-/// Summarize Options ▸ "Only the comments currently showing" with the Rectangle type unticked:
-/// the summary lists the highlight, quoting the words it marks, and not the rectangle. The types
-/// are the panel's own filter, so the panel hides the rectangle too.
+/// Summarize Options with the Rectangle type unticked: the summary lists the highlight, quoting
+/// the words it marks, and not the rectangle. The dialog's types are its own: the Comments panel
+/// still shows every comment.
 #[test]
 fn summary_of_only_the_highlights_quotes_their_text() {
     use pdfcraft_engine::{Edit, Markup, NewAnnotation, Shape, Style};
@@ -921,13 +921,12 @@ fn summary_of_only_the_highlights_quotes_their_text() {
     h.run_steps(2);
     h.get_by_label("Create PDF comment summary…").click();
     h.run_steps(2);
-    h.get_by_label("Only the comments currently showing (2)").click();
+    h.get_by_label("2 of 2 comments");
+    h.get_by_label("Rectangle (1)").click();
     h.run_steps(2);
-    h.get_by_label("Rectangle").click();
-    h.run_steps(2);
-    h.get_by_label("Only the comments currently showing (1)");
-    assert_eq!(h.state().views[0].comments.hidden_types, ["Rectangle"], "the dialog sets the panel's filter");
-    h.get_by_label("Create PDF Comment Summary").click();
+    h.get_by_label("1 of 2 comments");
+    assert!(h.state().views[0].comments.hidden_types.is_empty(), "the panel's filter is left alone");
+    h.get_by_label("Create Summary").click();
     h.run_steps(3);
 
     let s = h.state();
@@ -941,6 +940,70 @@ fn summary_of_only_the_highlights_quotes_their_text() {
         .unwrap_or_default();
     assert!(text.contains("Highlight") && text.contains("\u{201c}quick\u{201d}"), "{text}");
     assert!(!text.contains("Rectangle") && !text.contains("BOX_NOTE"), "{text}");
+}
+
+/// Summarize Options ▸ Theme: Export CSS writes the chosen theme, a loaded stylesheet becomes
+/// the chosen theme (what it can't use is listed), the preview follows, and both are remembered.
+#[test]
+fn summary_theme_and_stylesheet_are_chosen_listed_saved_and_remembered() {
+    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    let rect = pdfcraft_engine::Shape::Rectangle { rect: [150.0, 20.0, 200.0, 60.0] };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&rect),
+        shape: rect,
+        contents: "Boxed".into(),
+        author: "Tester".into(),
+    }));
+    h.run_steps(3);
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Create PDF comment summary…").click();
+    h.run_steps(2);
+    h.get_by_label("Preview");
+    h.state_mut().summary.theme = "classic".into();
+    h.run_steps(2);
+
+    // Export CSS: the chosen theme's stylesheet, to start from.
+    let dir = std::env::temp_dir().join(format!("pdfcraft-theme-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("classic.css");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.get_by_label("Export CSS…").click();
+    h.run_steps(2);
+    let saved = std::fs::read_to_string(&out).unwrap();
+    assert!(saved.contains("Times") && saved.contains(".card"), "{saved}");
+    h.state_mut().save_override = None;
+
+    // A loaded stylesheet is chosen, starting from the theme it imports; what it can't use is listed.
+    h.state_mut().set_summary_stylesheet("mine.css".into(), "@import \"classic\";\n.kind { font-family: monospace; glow: 1 }".into());
+    h.run_steps(2);
+    assert_eq!(h.state().summary.theme, pdfcraft_ui_egui::summary_ui::CUSTOM);
+    h.get_by_label("1 parts of the stylesheet can't be used");
+    h.get_by_label("Create Summary").click();
+    h.run_steps(3);
+    let s = h.state();
+    let summary = s.session.get(s.views.last().unwrap().id).unwrap();
+    let doc = pdfcraft_cos::Document::open(summary.bytes.clone()).unwrap();
+    let fonts: Vec<String> = doc
+        .scan_objects()
+        .filter_map(|(_, o)| {
+            o.as_dict()
+                .filter(|d| d.name(b"Type") == Some(b"Font"))
+                .and_then(|d| d.name(b"BaseFont"))
+                .map(|n| String::from_utf8_lossy(n).into_owned())
+        })
+        .collect();
+    assert!(fonts.iter().any(|f| f == "Courier-Bold") && fonts.iter().any(|f| f.starts_with("Times")), "{fonts:?}");
+
+    // Remembered: a new app restored from the saved state has both.
+    let saved = h.state().persist();
+    let mut again = PdfCraftApp::new();
+    again.restore(&saved);
+    assert_eq!(again.summary.theme, pdfcraft_ui_egui::summary_ui::CUSTOM);
+    assert_eq!(again.summary.stylesheet.as_ref().map(|s| s.0.as_str()), Some("mine.css"));
+    assert_eq!(again.summary.warnings.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

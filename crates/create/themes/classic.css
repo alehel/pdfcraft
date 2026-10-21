@@ -1,0 +1,25 @@
+/* Classic: a printed review in Times. Black text and rules, no fills; each comment's colour
+   only marks the line beside the text it quotes. */
+
+@page { margin: 72pt 72pt 72pt 72pt; }
+
+.title { font-family: Times, serif; font-size: 22pt; font-weight: bold; color: black; line-height: 28pt; }
+.subtitle { font-family: serif; font-size: 11pt; font-style: italic; color: #444444; line-height: 15pt; }
+.header { padding-bottom: 10pt; border-bottom: 1.5pt solid black; margin-bottom: 6pt; }
+
+.heading { font-family: serif; font-size: 12pt; font-weight: bold; text-transform: uppercase; color: black; line-height: 18pt; margin-top: 14pt; padding-bottom: 2pt; border-bottom: 0.5pt solid black; margin-bottom: 2pt; }
+.note { font-family: serif; font-size: 11pt; font-style: italic; color: #444444; line-height: 15pt; }
+
+.card { background: transparent; border-left: none; padding: 8pt 0 8pt 0; border-bottom: 0.5pt solid #bbbbbb; margin-bottom: 0; }
+.number { font-family: serif; font-size: 11pt; font-weight: bold; color: black; }
+.kind { font-family: serif; font-size: 11pt; font-weight: bold; color: black; line-height: 15pt; }
+.meta { font-family: serif; font-size: 10pt; font-style: italic; color: #444444; line-height: 14pt; }
+.quote { font-family: serif; font-size: 11pt; font-style: italic; color: #222222; line-height: 15pt; background: transparent; border-left: 2pt solid var(--comment); padding: 0 0 0 10pt; margin-top: 4pt; margin-bottom: 2pt; }
+.body { font-family: serif; font-size: 11pt; color: black; line-height: 15pt; margin-top: 4pt; }
+
+.reply { margin: 5pt 0 0 18pt; padding-left: 0; border-left: none; }
+.reply-author { font-family: serif; font-size: 10pt; font-weight: bold; color: black; line-height: 14pt; }
+.reply-meta { font-family: serif; font-size: 9.5pt; font-style: italic; color: #444444; }
+.reply-body { font-family: serif; font-size: 10.5pt; color: black; line-height: 14pt; }
+
+.footer { font-family: serif; font-size: 9pt; font-style: italic; color: #444444; border-top: none; }

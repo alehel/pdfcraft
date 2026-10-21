@@ -3,6 +3,7 @@ use std::sync::Arc;
 use pdfcraft_cos::{SaveOptions, write_full};
 
 use super::*;
+use crate::report_style::ReportStyle;
 
 fn reopen(doc: &Document) -> Document {
     let bytes = write_full(doc, &SaveOptions::default()).unwrap();
@@ -1205,13 +1206,13 @@ fn report_lays_out_headings_cards_and_page_breaks() {
     }
     let long = "word ".repeat(3000);
     r.blocks.push(Block::Entry(entry(41, &long)));
-    let (doc, escaped) = report(&r, LETTER).unwrap();
+    let (doc, escaped) = report(&r, LETTER, &ReportStyle::default()).unwrap();
     assert_eq!(escaped, 0);
     let doc = reopen(&doc);
     let pages = pages(&doc);
     assert!(pages.len() > 6, "{} pages", pages.len());
     let fonts = pages[0].get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap().clone();
-    let names: Vec<String> = [b"F1".as_slice(), b"F2", b"F3"]
+    let names: Vec<String> = [b"F0".as_slice(), b"F1", b"F2"]
         .iter()
         .map(|k| String::from_utf8_lossy(doc.resolve(fonts.get(k).unwrap()).as_dict().unwrap().name(b"BaseFont").unwrap()).into_owned())
         .collect();
@@ -1232,12 +1233,139 @@ fn report_survives_hostile_entries() {
     e.quote = Some(String::new());
     e.replies = (0..200).map(|d| Reply { depth: d, author: String::new(), meta: String::new(), body: "\u{0}\t\r\n".into() }).collect();
     let r = Report { title: "T".into(), subtitle: Vec::new(), blocks: vec![Block::Entry(e), Block::Note("none".into())], footer: "f".repeat(5000) };
-    let (doc, escaped) = report(&r, LETTER).unwrap();
+    let (doc, escaped) = report(&r, LETTER, &ReportStyle::default()).unwrap();
     assert_eq!(escaped, 2 + 200, "the two ideographs and each reply's NUL");
     reopen(&doc);
     for bad in [(0.0, 0.0), (f64::NAN, 792.0), (612.0, f64::INFINITY), (1e9, 792.0)] {
-        assert!(matches!(report(&r, bad), Err(CreateError::Invalid(_))), "{bad:?}");
+        assert!(matches!(report(&r, bad, &ReportStyle::default()), Err(CreateError::Invalid(_))), "{bad:?}");
     }
-    let (empty, _) = report(&Report::default(), LETTER).unwrap();
+    let (empty, _) = report(&Report::default(), LETTER, &ReportStyle::default()).unwrap();
     assert_eq!(pages(&reopen(&empty)).len(), 1);
+}
+
+/// The content stream of every page of `doc`, decoded.
+fn contents(doc: &Document) -> String {
+    pages(doc)
+        .iter()
+        .map(|p| {
+            let Object::Stream(s) = &*doc.resolve(p.get(b"Contents").unwrap()) else { panic!() };
+            String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+        })
+        .collect()
+}
+
+fn sample() -> Report {
+    Report {
+        title: "Summary".into(),
+        subtitle: vec!["notes.pdf".into()],
+        blocks: vec![Block::Heading("Page 1".into()), Block::Entry(entry(1, "Note"))],
+        footer: "notes.pdf".into(),
+    }
+}
+
+/// The built-in themes read without a warning, differ from each other, and Modern is the default.
+#[test]
+fn builtin_report_themes_parse_cleanly() {
+    let mut seen: Vec<ReportStyle> = Vec::new();
+    for (id, _, css) in BUILTIN_THEMES {
+        let (style, warnings) = ReportStyle::parse_over(id, css).unwrap();
+        assert!(warnings.is_empty(), "{id}: {warnings:?}");
+        assert_eq!(Some(&style), ReportStyle::builtin(id).as_ref(), "{id}");
+        assert_eq!(ReportStyle::parse_over(id, "").unwrap().0, style, "{id}: an empty stylesheet over it changes nothing");
+        assert!(!seen.contains(&style), "{id} looks like another theme");
+        seen.push(style);
+        let (doc, _) = report(&sample(), LETTER, seen.last().unwrap()).unwrap();
+        reopen(&doc);
+    }
+    assert_eq!(ReportStyle::default(), ReportStyle::builtin("modern").unwrap());
+    assert_eq!(builtin_theme("INK-SAVER"), Some(BUILTIN_THEMES[4].2));
+    assert!(ReportStyle::builtin("nope").is_none());
+}
+
+/// A stylesheet starts from the theme it imports and overrides it; what it says reaches the page
+/// (fonts, colours, the comment's colour through var() and color-mix(), paper, hidden parts).
+#[test]
+fn report_stylesheet_overrides_its_imported_theme() {
+    use crate::report_style::{Family, Paint, Part};
+    let css = r#"
+        @import "classic";
+        /* Paper */
+        @page { size: a4 landscape; margin: 20mm }
+        .quote { font-family: "Courier New", monospace; background: color-mix(in srgb, var(--comment) 50%, white); border-left: none }
+        .number, .footer { display: none }
+        .kind { color: rgb(255 0 0); font-size: 14px; font-weight: 700; text-transform: uppercase }
+    "#;
+    let (style, warnings) = ReportStyle::parse(css).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let (w, h) = style.page_size.unwrap();
+    assert!((w - 841.89).abs() < 0.01 && (h - 595.276).abs() < 0.01, "{w} {h}");
+    assert!((style.margin[0] - 56.69).abs() < 0.01);
+    let quote = style.part(Part::Quote);
+    assert_eq!(quote.family, Family::Mono);
+    assert!(quote.italic, "kept from classic");
+    assert_eq!(quote.background.resolve([1.0, 1.0, 0.0]), Some([1.0, 1.0, 0.5]));
+    assert_eq!(style.part(Part::Body).family, Family::Serif, "classic's body");
+    let kind = style.part(Part::Kind);
+    assert_eq!((kind.color.clone(), kind.size, kind.bold, kind.uppercase), (Paint::Rgb([1.0, 0.0, 0.0]), 10.5, true, true));
+    assert!(style.part(Part::Number).hidden && style.part(Part::Footer).hidden);
+
+    let (doc, _) = report(&sample(), LETTER, &style).unwrap();
+    let doc = reopen(&doc);
+    let page = &pages(&doc)[0];
+    assert_eq!(media(page), [0.0, 0.0, 841.89, 595.276]);
+    let content = contents(&doc);
+    assert!(content.contains("(HIGHLIGHT) Tj") && content.contains("1.000 0.000 0.000 rg"), "{content}");
+    assert!(content.contains("1.000 0.950 0.500 rg"), "the quote's tint: {content}");
+    assert!(!content.contains("(#1) Tj") && !content.contains("Page 1 of 1"), "hidden parts: {content}");
+    let fonts = page.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap().clone();
+    let names: Vec<String> =
+        fonts.iter().map(|(_, r)| String::from_utf8_lossy(doc.resolve(r).as_dict().unwrap().name(b"BaseFont").unwrap()).into_owned()).collect();
+    assert!(names.contains(&"Courier-Oblique".to_string()) && names.contains(&"Times-Roman".to_string()), "{names:?}");
+    assert!(!names.iter().any(|n| n.starts_with("Helvetica")), "only the faces used: {names:?}");
+}
+
+/// What the subset doesn't read is skipped with a warning naming its line, and the rest applies.
+#[test]
+fn report_stylesheet_warns_about_what_it_skips() {
+    let css = ".title { colour: red; color: blue }\n.sidebar { color: red }\n.body { font-family: Comic Sans; font-size: 200pt }\n@import \"fancy.css\";\n.meta { color: var(--accent) }\n@media print { .x { y: z } }\n.note { color: #12 }";
+    let (style, warnings) = ReportStyle::parse(css).unwrap();
+    let joined = warnings.join("\n");
+    for expected in [
+        "line 1: property \"colour\"",
+        "line 2: selector \".sidebar\"",
+        "line 3: font-family",
+        "line 4: @import \"fancy.css\"",
+        "line 5: var(--accent)",
+        "line 6:",
+        "line 7: \"#12\" is not a colour",
+    ] {
+        assert!(joined.contains(expected), "{expected:?} in {joined}");
+    }
+    assert_eq!(style.part(crate::report_style::Part::Title).color, crate::report_style::Paint::Rgb([0.0, 0.0, 1.0]), "the good declaration applies");
+}
+
+/// A stylesheet is untrusted: a huge one is refused, and no prefix of a real one, nor nested,
+/// unbalanced or binary junk, panics.
+#[test]
+fn report_stylesheets_never_panic() {
+    assert!(matches!(ReportStyle::parse(&" ".repeat(MAX_STYLESHEET_BYTES + 1)), Err(CreateError::Invalid(_))));
+    let all: String = BUILTIN_THEMES.iter().map(|t| t.2).collect::<Vec<_>>().join("\n")
+        + "\n.quote{background:color-mix(in srgb, rgba(10%,20%,30%/0.5) 30%, #abcd)}";
+    for (i, _) in all.char_indices() {
+        let _ = ReportStyle::parse(&all[..i]);
+    }
+    let deep = format!(".quote {{ background: {}red{} }}", "color-mix(in srgb, ".repeat(40), ", white)".repeat(40));
+    for junk in [
+        deep.as_str(),
+        "}}}{{{",
+        "/* never closed",
+        ".card { padding: 1e308pt; margin: -1e308in; border-left: NaNpt solid red; line-height: inf }",
+        ".card { font-size: 0pt; line-height: 0 } @page { size: 1pt 1pt; margin: 10000in }",
+        "\u{0}\u{feff}.title{color:\u{1f600}}",
+        "@page { size: 99999in }",
+    ] {
+        if let Ok((style, _)) = ReportStyle::parse(junk) {
+            let _ = report(&sample(), LETTER, &style);
+        }
+    }
 }

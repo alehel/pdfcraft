@@ -82,6 +82,11 @@ fn failed(e: impl std::fmt::Display) -> ToolError {
     ToolError::Failed(e.to_string())
 }
 
+/// `n` and a noun that takes a plain "s", singular for one: "1 page", "3 pages".
+fn count_noun(n: usize, noun: &str) -> String {
+    if n == 1 { format!("1 {noun}") } else { format!("{n} {noun}s") }
+}
+
 impl From<pdfcraft_engine::EditError> for ToolError {
     fn from(e: pdfcraft_engine::EditError) -> Self {
         failed(e)
@@ -495,7 +500,7 @@ impl Automation {
                 let n = self.doc(&a)?.page_images(page).len();
                 let k = a.int("image")?;
                 if k < 1 || k as usize > n {
-                    return Err(ToolError::InvalidArgs(format!("image {k} is out of range: page {} has {n} images", page + 1)));
+                    return Err(ToolError::InvalidArgs(format!("image {k} is out of range: page {} has {}", page + 1, count_noun(n, "image"))));
                 }
                 let index = k as usize - 1;
                 if name == "image_save" {
@@ -737,7 +742,7 @@ impl Automation {
                 let n = self.doc(&a)?.text_lines(page).len();
                 let line = a.int("line")?;
                 if line < 1 || line as usize > n {
-                    return Err(ToolError::InvalidArgs(format!("line {line} is out of range: page {} has {n} lines", page + 1)));
+                    return Err(ToolError::InvalidArgs(format!("line {line} is out of range: page {} has {}", page + 1, count_noun(n, "line"))));
                 }
                 let text = a.str("text")?.to_owned();
                 let mut out = self.apply(&a, Edit::EditTextLine { page, line: line as usize - 1, text })?;
@@ -974,11 +979,10 @@ impl Automation {
             )));
         }
         let n = keys.map_or(blocks.len(), Vec::len);
-        let i = usize::try_from(k)
-            .ok()
-            .and_then(|k| k.checked_sub(1))
-            .filter(|i| *i < n)
-            .ok_or_else(|| ToolError::InvalidArgs(format!("paragraph {k} is out of range: page {} has {n} paragraphs", page + 1)))?;
+        let i =
+            usize::try_from(k).ok().and_then(|k| k.checked_sub(1)).filter(|i| *i < n).ok_or_else(|| {
+                ToolError::InvalidArgs(format!("paragraph {k} is out of range: page {} has {}", page + 1, count_noun(n, "paragraph")))
+            })?;
         let Some(keys) = keys else { return Ok(i) };
         keys.get(i).and_then(|key| key.find(blocks, i)).ok_or_else(|| {
             ToolError::InvalidArgs(format!(
@@ -1914,7 +1918,7 @@ impl Automation {
             return Err(ToolError::InvalidArgs(format!("{key} must list at least one page")));
         }
         if let Some(p) = pages.iter().find(|p| **p >= n) {
-            return Err(ToolError::InvalidArgs(format!("page {} is out of range: the document has {n} pages", p + 1)));
+            return Err(ToolError::InvalidArgs(format!("page {} is out of range: the document has {}", p + 1, count_noun(n, "page"))));
         }
         Ok(pages)
     }
@@ -1929,7 +1933,7 @@ impl Automation {
         let Some(at) = a.opt_int(key)? else { return Ok(None) };
         let n = self.doc(a)?.info.pages.len();
         if at < 1 || at as usize > n + 1 {
-            return Err(ToolError::InvalidArgs(format!("{key} must be between 1 and {} (the document has {n} pages)", n + 1)));
+            return Err(ToolError::InvalidArgs(format!("{key} must be between 1 and {} (the document has {})", n + 1, count_noun(n, "page"))));
         }
         Ok(Some(at as usize - 1))
     }
@@ -1997,7 +2001,7 @@ impl Automation {
         let id = DocId(doc);
         let n = self.session.get(id).ok_or_else(|| failed(format!("no open document with id {doc} (see doc_list)")))?.info.pages.len();
         if page < 1 || page > n {
-            return Err(ToolError::InvalidArgs(format!("page {page} is out of range: the document has {n} pages")));
+            return Err(ToolError::InvalidArgs(format!("page {page} is out of range: the document has {}", count_noun(n, "page"))));
         }
         let out = self.renderer(id)?.render(RenderRequest { page: page - 1, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false });
         if let Some(e) = out.error {
@@ -2010,7 +2014,7 @@ impl Automation {
         let n = self.doc(a)?.info.pages.len();
         let p = a.int("page")?;
         if p < 1 || p as usize > n {
-            return Err(ToolError::InvalidArgs(format!("page {p} is out of range: the document has {n} pages")));
+            return Err(ToolError::InvalidArgs(format!("page {p} is out of range: the document has {}", count_noun(n, "page"))));
         }
         Ok(p as usize - 1)
     }
@@ -2116,7 +2120,7 @@ impl Automation {
         let start = match a.opt_int("start_page")? {
             None => 0,
             Some(p) if p >= 1 && usize::try_from(p).is_ok_and(|p| p <= n) => usize::try_from(p - 1).unwrap_or(0),
-            Some(p) => return Err(ToolError::InvalidArgs(format!("start_page {p} is out of range: the document has {n} pages"))),
+            Some(p) => return Err(ToolError::InvalidArgs(format!("start_page {p} is out of range: the document has {}", count_noun(n, "page")))),
         };
         let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
         let mut matches = Vec::new();

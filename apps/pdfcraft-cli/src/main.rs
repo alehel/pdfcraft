@@ -528,13 +528,14 @@ fn edit(args: &[String]) -> Result<(), CliError> {
         // A destination past the end must fail like `page_move` / `page_insert_blank` do, not
         // silently become an append (#1330). Checked per edit: earlier edits change the count.
         let n = session.get(id).map_or(0, |d| d.info.pages.len());
+        let s = if n == 1 { "" } else { "s" };
         let destination = match &e {
             Edit::MovePages { to, .. } => Some(("--move target", *to)),
             Edit::InsertBlankPage { at, .. } => Some(("--insert-blank", *at)),
             _ => None,
         };
         if let Some((option, at)) = destination.filter(|(_, at)| *at > n) {
-            return Err(format!("{option} {} is past the end: it must be between 1 and {} (the document has {n} pages)", at + 1, n + 1).into());
+            return Err(format!("{option} {} is past the end: it must be between 1 and {} (the document has {n} page{s})", at + 1, n + 1).into());
         }
         // Pages count from the document as the earlier options left it, so a page past the end is
         // reported with its own option and the current page count (#1550).
@@ -545,7 +546,7 @@ fn edit(args: &[String]) -> Result<(), CliError> {
             _ => None,
         };
         if let Some((option, bad)) = listed.and_then(|(option, pages)| pages.iter().find(|p| **p >= n).map(|p| (option, *p))) {
-            return Err(format!("{option}: page {} does not exist; after the earlier options the document has {n} pages", bad + 1).into());
+            return Err(format!("{option}: page {} does not exist; after the earlier options the document has {n} page{s}", bad + 1).into());
         }
         session.apply(id, e).map_err(|e| e.to_string())?;
     }

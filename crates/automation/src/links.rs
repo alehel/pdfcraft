@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 use crate::comments::parse_color;
-use crate::{Args, Automation, Result, ToolError, failed};
+use crate::{Args, Automation, Result, ToolError, count_noun, failed};
 
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
@@ -109,7 +109,7 @@ impl Automation {
         let (source_path, file, destination, new_window) = {
             let source = self.doc(a)?;
             if page >= source.info.pages.len() {
-                return Err(bad(format!("page {page_number} is out of range: the document has {} pages", source.info.pages.len())));
+                return Err(bad(format!("page {page_number} is out of range: the document has {}", count_noun(source.info.pages.len(), "page"))));
             }
             let link = source
                 .info

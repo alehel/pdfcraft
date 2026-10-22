@@ -566,7 +566,8 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
     let n = page_count(doc)?;
     check(targets, n)?;
     if targets.len() != src_pages.len() || targets.is_empty() {
-        return Err(OrganizeError::Invalid(format!("{} pages can't replace {}", src_pages.len(), targets.len())));
+        let s = if src_pages.len() == 1 { "" } else { "s" };
+        return Err(OrganizeError::Invalid(format!("{} page{s} can't replace {}", src_pages.len(), targets.len())));
     }
     let imported = import_pages(doc, src, src_pages, n)?;
     let all = walk(doc)?;

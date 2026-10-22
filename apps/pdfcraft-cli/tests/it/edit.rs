@@ -228,10 +228,10 @@ fn a_destination_past_the_end_fails_and_writes_nothing() {
     std::fs::write(&input, fixture()).unwrap();
     let output = tmp("past-end", "out.pdf");
     for (option, value, diagnostic) in [
-        ("--insert-blank", "3", "--insert-blank 3 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
-        ("--insert-blank", "99", "--insert-blank 99 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
-        ("--move", "1:3", "--move target 3 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
-        ("--move", "1:99", "--move target 99 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
+        ("--insert-blank", "3", "--insert-blank 3 is past the end: it must be between 1 and 2 (the document has 1 page)"),
+        ("--insert-blank", "99", "--insert-blank 99 is past the end: it must be between 1 and 2 (the document has 1 page)"),
+        ("--move", "1:3", "--move target 3 is past the end: it must be between 1 and 2 (the document has 1 page)"),
+        ("--move", "1:99", "--move target 99 is past the end: it must be between 1 and 2 (the document has 1 page)"),
     ] {
         let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), option, value]).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{option} {value}");

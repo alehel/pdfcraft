@@ -37,6 +37,7 @@ mod date_format;
 mod dialog_chrome;
 mod document_links;
 mod editing;
+mod editor_taps;
 mod export;
 mod fill_sign;
 mod folders;

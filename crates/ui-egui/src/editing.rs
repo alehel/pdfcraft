@@ -1521,6 +1521,7 @@ mod revert_draft_tests {
             calendar: None,
             calendar_rect: None,
             calendar_text: None,
+            had_focus: false,
         }
     }
 

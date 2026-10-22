@@ -100,6 +100,7 @@ mod icon_data;
 pub mod icons;
 pub mod last_session;
 pub mod motion;
+mod page_pointer;
 mod page_selection_ui;
 mod pageboxes;
 mod palette;

@@ -383,9 +383,13 @@ pub struct Annotation {
     pub author: Option<String>,
     pub contents: Option<String>,
     pub modified: Option<String>,
-    /// `/NM` of this annotation, and of the one it replies to (`/IRT`), for threading.
+    /// `/NM` of this annotation, and of the one it replies to (`/IRT`).
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// The page and `/Annots` position of the annotation `/IRT` points at, found by object
+    /// reference. Threads follow this rather than `/NM`, which need not be unique: PyMuPDF
+    /// names the first comment on every page `fitz-A0`.
+    pub parent: Option<(usize, usize)>,
     /// Rect in PDF user space: [x0, y0, x1, y1].
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
@@ -411,6 +415,16 @@ impl Annotation {
     /// A checkmark reply (`/StateModel /Marked`): "Marked" or "Unmarked" rather than a review status.
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))
+    }
+
+    /// A reply (or status reply) to another annotation rather than a comment of its own.
+    pub fn is_reply(&self) -> bool {
+        self.in_reply_to.is_some() || self.parent.is_some()
+    }
+
+    /// Whether this annotation's `/IRT` points at `other`.
+    pub fn replies_to(&self, other: &Annotation) -> bool {
+        self.parent == Some((other.page, other.index))
     }
 }
 
@@ -1142,9 +1156,22 @@ impl<'a> Inspector<'a> {
     // ── annotations ─────────────────────────────────────────────────────────────────────────
 
     fn annotations(&self, info: &mut DocInfo) {
+        let page_annots = |id: ObjectId| match self.doc.get_dictionary(id).ok().and_then(|d| d.get(b"Annots").ok()).map(|o| self.resolve(o)) {
+            Some(Object::Array(annots)) => Some(annots),
+            _ => None,
+        };
+        // Where each annotation is listed (the first listing wins), so a reply's `/IRT` can be
+        // matched to its parent by reference.
+        let mut slots: HashMap<ObjectId, (usize, usize)> = HashMap::new();
         for (&id, &page) in &self.page_index {
-            let Ok(page_dict) = self.doc.get_dictionary(id) else { continue };
-            let Ok(Object::Array(annots)) = page_dict.get(b"Annots").map(|o| self.resolve(o)) else { continue };
+            for (index, a) in page_annots(id).into_iter().flatten().enumerate() {
+                if let Object::Reference(r) = a {
+                    slots.entry(*r).and_modify(|s| *s = (*s).min((page, index))).or_insert((page, index));
+                }
+            }
+        }
+        for (&id, &page) in &self.page_index {
+            let Some(annots) = page_annots(id) else { continue };
             for (index, a) in annots.iter().enumerate() {
                 let Some(d) = self.dict(a) else { continue };
                 let Some(subtype) = self.name(d, b"Subtype") else { continue };
@@ -1198,6 +1225,10 @@ impl<'a> Inspector<'a> {
                     _ => Vec::new(),
                 };
                 let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
+                let parent = match d.get(b"IRT") {
+                    Ok(Object::Reference(r)) => slots.get(r).copied(),
+                    _ => None,
+                };
                 let fill_sign = self.is_fill_sign(d, &subtype);
                 // Keep in step with `pdfcraft_annot::summaries`.
                 let key: &[u8] = if subtype == "Line" { b"L" } else { b"Vertices" };
@@ -1219,6 +1250,7 @@ impl<'a> Inspector<'a> {
                     modified: self.text(d, b"M").map(|m| pretty_date(&m)),
                     name: self.text(d, b"NM"),
                     in_reply_to,
+                    parent,
                     rect,
                     color,
                     index,

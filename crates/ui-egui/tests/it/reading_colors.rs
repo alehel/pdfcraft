@@ -147,6 +147,7 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
         app
     });
     h.run_steps(6);
+    assert!(h.query_by_label("Original").is_some());
     let theme = h.state().theme_preference;
     let appearance = h.get_by_label("Light theme").rect();
     let preset = h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).rect();
@@ -165,6 +166,7 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
         h.run_steps(4);
         assert_eq!(h.state().reading_colors, expected);
         assert_eq!(h.state().theme_preference, theme);
+        assert_eq!(h.query_by_label("Original").is_some(), expected.params.is_none());
     }
     if let Ok(path) = std::env::var("PDFCRAFT_READING_SHOT") {
         h.render().unwrap().save(path).unwrap();

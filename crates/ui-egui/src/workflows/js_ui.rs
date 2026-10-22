@@ -659,15 +659,18 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
             });
         }
     });
-    let params = app.reading_colors.params;
-    let text = params.map_or(egui::Color32::BLACK, |p| egui::Color32::from_rgb(p.text[0], p.text[1], p.text[2]));
-    let background = params.map_or(egui::Color32::WHITE, |p| egui::Color32::from_rgb(p.background[0], p.background[1], p.background[2]));
     ui.add_space(8.0);
-    egui::Frame::new().fill(background).inner_margin(16.0).show(ui, |ui| {
-        ui.set_min_width((ui.available_width() - 32.0).max(0.0));
-        ui.label(egui::RichText::new(tl!("Reading colours")).size(18.0).color(text));
-        ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).color(text));
-    });
+    if let Some(params) = app.reading_colors.params {
+        let text = egui::Color32::from_rgb(params.text[0], params.text[1], params.text[2]);
+        let background = egui::Color32::from_rgb(params.background[0], params.background[1], params.background[2]);
+        egui::Frame::new().fill(background).inner_margin(16.0).show(ui, |ui| {
+            ui.set_min_width((ui.available_width() - 32.0).max(0.0));
+            ui.label(egui::RichText::new(tl!("Reading colours")).size(18.0).color(text));
+            ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).color(text));
+        });
+    } else {
+        ui.label(tl!("Original"));
+    }
     egui::CollapsingHeader::new(tl!("Custom")).default_open(mode == "custom").show(ui, |ui| {
         let mut colors = if app.reading_colors.params.is_some() { app.reading_colors } else { pdfcraft_render::ReadingColors::BLACK_ON_WHITE };
         let mut changed = false;

@@ -521,6 +521,14 @@ Every other Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fe
 |---|---|
 | x86_64 | `pdfcraft-<ver>-freebsd-x86_64.tar.gz` |
 
+### illumos and Solaris (experimental)
+
+No downloads, and not tested on a real system yet. The app builds from source there
+(`cargo build --release -p pdfcraft` on OpenIndiana, OmniOS or Oracle Solaris on x86_64) and
+draws through X11 only, since those systems have no Wayland. OpenGL isn't available there, so a
+GPU that wgpu can't start is reported rather than retried with OpenGL. File dialogs use the
+XDG portal, falling back to zenity.
+
 ### Web (WebAssembly)
 
 | Build | File | Notes |

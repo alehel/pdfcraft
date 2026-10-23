@@ -386,6 +386,7 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
+                self.marks_draft.opened(kind);
                 self.dialog = Some(Dialog::Marks(kind));
             }
             "edit.bates" => {

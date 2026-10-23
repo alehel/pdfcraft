@@ -809,6 +809,12 @@
 	Applies to 1 page	มีผลกับ 1 หน้า
 	Applies to {n} pages	มีผลกับ {n} หน้า
 	Replaces the existing one on those pages.	แทนที่ของเดิมในหน้าเหล่านั้น
+	Checking pages…	กำลังตรวจสอบหน้า…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	หน้า {pages} มีพื้นสีขาวของตัวเองซึ่งจะบังพื้นหลัง แทนที่
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	หน้า {pages} มีพื้นสีขาวของตัวเองซึ่งจะบังพื้นหลัง แทนที่ทั้งหมด
+	Removing the background puts the page's own backdrop back.	การเอาพื้นหลังออกจะคืนพื้นสีขาวเดิมของหน้า
+	A picture covers page {pages} (a scan?), so the background won't show there.	มีรูปภาพปิดหน้า {pages} อยู่ (ภาพสแกน?) จึงจะมองไม่เห็นพื้นหลังที่นั่น
+	Pictures cover pages {pages} (scans?), so the background won't show there.	มีรูปภาพหลายรูปปิดหน้า {pages} อยู่ (ภาพสแกน?) จึงจะมองไม่เห็นพื้นหลังที่นั่น
 	PDF or image	PDF หรือรูปภาพ
 	No file chosen	ยังไม่ได้เลือกไฟล์
 	Page number	เลขหน้า

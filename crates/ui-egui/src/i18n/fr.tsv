@@ -830,6 +830,12 @@
 	Applies to 1 page	S'applique à 1 page
 	Applies to {n} pages	S'applique à {n} pages
 	Replaces the existing one on those pages.	Remplace celui qui existe déjà sur ces pages.
+	Checking pages…	Vérification des pages…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	La page {pages} a son propre remplissage blanc, qui masquerait l'arrière-plan. Le remplacer
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Les pages {pages} ont leur propre remplissage blanc, qui masquerait l'arrière-plan. Le remplacer
+	Removing the background puts the page's own backdrop back.	Supprimer l'arrière-plan rétablit le remplissage blanc propre à la page.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Une image couvre la page {pages} (une numérisation ?), l'arrière-plan n'y sera donc pas visible.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Des images couvrent les pages {pages} (des numérisations ?), l'arrière-plan n'y sera donc pas visible.
 	PDF or image	PDF ou image
 	No file chosen	Aucun fichier choisi
 	Page number	Numéro de page

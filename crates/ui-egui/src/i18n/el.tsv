@@ -438,6 +438,12 @@
 	Applies to 1 page	Εφαρμόζεται σε 1 σελίδα
 	Applies to {n} pages	Εφαρμόζεται σε {n} σελίδες
 	Replaces the existing one on those pages.	Αντικαθιστά το υπάρχον στοιχείο στις συγκεκριμένες σελίδες.
+	Checking pages…	Έλεγχος σελίδων…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Η σελίδα {pages} έχει δική της λευκή γέμιση, που θα έκρυβε το φόντο. Αντικατάσταση
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Οι σελίδες {pages} έχουν δική τους λευκή γέμιση, που θα έκρυβε το φόντο. Αντικατάσταση
+	Removing the background puts the page's own backdrop back.	Η αφαίρεση του φόντου επαναφέρει τη λευκή γέμιση της σελίδας.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Μια εικόνα καλύπτει τη σελίδα {pages} (σάρωση;), οπότε το φόντο δεν θα φαίνεται εκεί.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Εικόνες καλύπτουν τις σελίδες {pages} (σαρώσεις;), οπότε το φόντο δεν θα φαίνεται εκεί.
 	PDF or image	PDF ή εικόνα
 	No file chosen	Δεν έχει επιλεγεί αρχείο
 	Scale relative to target page	Κλίμακα ως προς τη σελίδα προορισμού

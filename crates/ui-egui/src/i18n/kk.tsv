@@ -812,6 +812,12 @@
 	Applies to 1 page	1 бетке қолданылады
 	Applies to {n} pages	{n} бетке қолданылады
 	Replaces the existing one on those pages.	Осы беттерде бар элементті ауыстырады.
+	Checking pages…	Беттер тексерілуде…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Өз ақ толтыруы фонды жасыратын бет: {pages}. Ауыстыру
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Өз ақ толтыруы фонды жасыратын беттер: {pages}. Ауыстыру
+	Removing the background puts the page's own backdrop back.	Фонды жою беттің өз ақ толтыруын қайтарады.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Сурет жауып тұрған бет (сканер ме?): {pages}; онда фон көрінбейді.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Суреттер жауып тұрған беттер (сканер ме?): {pages}; онда фон көрінбейді.
 	PDF or image	PDF немесе сурет
 	No file chosen	Файл таңдалмады
 	Page number	Бет нөмірі

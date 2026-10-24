@@ -342,13 +342,8 @@ impl<'a> Lexer<'a> {
         if s.contains('.') {
             // Tolerate forms like "--5", "5-" or "1.2.3" by parsing the longest valid prefix.
             let cleaned: String = s.trim_start_matches('+').replacen("--", "-", 1);
-            if let Some(v) = cleaned.get(..real_prefix_len(cleaned.as_bytes())).filter(|p| !p.is_empty()).and_then(|p| parse_counted::<f64>(p).ok()) {
-                return Ok(Object::Real(v));
-            }
-            if cleaned.trim_start_matches('-').starts_with('.') {
-                return Ok(Object::Real(0.0));
-            }
-            return Err(CosError::Syntax { offset: start, detail: format!("bad number {s:?}") });
+            let v = cleaned.get(..real_prefix_len(cleaned.as_bytes())).and_then(|p| parse_counted::<f64>(p).ok());
+            return Ok(Object::Real(v.unwrap_or(0.0)));
         }
         // Tolerate a doubled sign ("--280") like the real branch does.
         let t = s.trim_start_matches('+');

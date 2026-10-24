@@ -562,6 +562,11 @@ pub struct DocView {
     /// Redact tool: the box being drawn, and a mark to add (page, quads) for the app to style.
     pub redact_drag: crate::redact_ui::AreaDrag,
     pub pending_redaction: Option<(usize, Vec<[f64; 8]>)>,
+    /// Apply redactions ran in this view: Save asks where and proposes the name with `_Redacted`
+    /// ([`pdfcraft_engine::redacted_file_name`]). A desktop save clears it, and the document then
+    /// has the name it was saved under. The web build keeps it, so every download carries the
+    /// `_Redacted` name.
+    pub redacted: bool,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -854,6 +859,7 @@ impl DocView {
             links: Default::default(),
             redact_drag: None,
             pending_redaction: None,
+            redacted: false,
             crop_drag: None,
             camera: None,
             camera_done: None,

@@ -4,7 +4,7 @@
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, SaveTarget};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -72,6 +72,50 @@ fn marking_applying_and_clearing() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!((doc.redaction_marks(), doc.can_undo()), (0, Some("Apply redactions")));
     assert!(doc.form.is_empty(), "the whole page was redacted, fields included");
+}
+
+/// After Apply redactions, Save asks where instead of writing over the opened file, as Acrobat
+/// shows Save As with `_Redacted` appended to the name. Once that copy is written, Save writes
+/// it in place again.
+#[test]
+fn saving_after_applying_redactions_asks_where() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-redacted-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("contract.pdf");
+    let source = include_bytes!("../data/form.pdf").to_vec();
+    std::fs::write(&original, &source).unwrap();
+    let path = original.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&path);
+        app
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().execute("redact.pages");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), 1);
+    assert!(h.state_mut().execute("redact.apply"));
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert_eq!(marks(&h), 0);
+    assert!(h.state().views[0].redacted);
+    let copy = dir.join("contract_Redacted.pdf");
+    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where first");
+    h.run_steps(3);
+    assert_eq!(std::fs::read(&original).unwrap(), source, "the opened file is left as it was");
+    assert!(copy.exists(), "the redacted copy is written where the user chose");
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().name, "contract_Redacted.pdf");
+    assert!(!s.views[0].redacted);
+    h.state_mut().pick_override = None;
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "the next Save writes the copy in place");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

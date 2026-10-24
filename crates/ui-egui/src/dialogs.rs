@@ -1353,6 +1353,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
+                if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
+                    view.redacted = true;
+                }
                 if marks == 1 {
                     app.notify_tr("Applied 1 redaction mark. Save to remove the content from the file.");
                 } else {

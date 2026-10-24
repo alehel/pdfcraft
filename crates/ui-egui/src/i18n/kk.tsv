@@ -2537,3 +2537,4 @@ animation effects	Off	Өшірулі
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
+@plural	{n} reply|{n} replies	{n} жауап|{n} жауап

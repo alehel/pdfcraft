@@ -6269,6 +6269,32 @@ fn page_properties_sets_the_tab_order_of_the_selected_pages() {
     assert_eq!((tabs(&h), undo(&h)), before);
 }
 
+/// Page properties sets the tab order of the document it was opened on: when another document
+/// is active by OK, neither document changes.
+#[test]
+fn page_properties_does_not_apply_to_another_active_document() {
+    use pdfcraft_engine::TabOrder::Annotations;
+    let mut h = organize(3);
+    let first = h.state().views[0].id;
+    h.state_mut().views[0].select_pages(&[0]);
+    assert!(h.state_mut().execute("page.properties"));
+    h.run_steps(3);
+    h.get_by_label("Use Column Order").click();
+    h.run_steps(2);
+    h.state_mut().open_bytes("other.pdf", None, fixture(3)).unwrap();
+    h.run_steps(4);
+    let other = h.state().views[1].id;
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(other));
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    for id in [first, other] {
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.tab_orders(), [Annotations; 3]);
+        assert!(doc.can_undo().is_none());
+    }
+}
+
 /// Leaving Organize (a page opened from the grid, or the grid's Close) goes back to the
 /// workspace's panel: under the Edit tab, the Edit panel, not All tools.
 #[test]

@@ -221,7 +221,7 @@ impl PdfCraftApp {
                     let mut theirs = pages.iter().map(|p| orders.get(*p).copied());
                     let first = theirs.next().flatten();
                     let before = if theirs.all(|o| o == first) { first } else { None };
-                    self.page_props_draft = Some(crate::PagePropsDraft { pages, before, tab_order: before });
+                    self.page_props_draft = Some(crate::PagePropsDraft { doc: self.views[i].id, pages, before, tab_order: before });
                     self.dialog = Some(Dialog::PageProps);
                 }
             }

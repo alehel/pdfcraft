@@ -398,10 +398,11 @@ pub struct DuplicateDraft {
     pub to: usize,
 }
 
-/// Page Properties: the pages it applies to (0-based), and their tab order as they have it
-/// (`None` when they differ) and as chosen (`None` until one is chosen).
+/// Page Properties: the document and pages it applies to (0-based), and their tab order as they
+/// have it (`None` when they differ) and as chosen (`None` until one is chosen).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PagePropsDraft {
+    pub doc: DocId,
     pub pages: Vec<usize>,
     pub before: Option<pdfcraft_engine::TabOrder>,
     pub tab_order: Option<pdfcraft_engine::TabOrder>,

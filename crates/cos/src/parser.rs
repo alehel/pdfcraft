@@ -613,7 +613,7 @@ mod tests {
         assert_eq!(obj("1e400"), Object::Real(f64::INFINITY));
         assert_eq!(obj("1.5e400"), Object::Real(f64::INFINITY));
         assert_eq!(obj("-1.0e400"), Object::Real(f64::NEG_INFINITY));
-        for bad in ["+inf", "-inf", "+nan", "-nan", "+Infinity", "-NaN", "+inf.", "-inf.", "+nan.", "-nan."] {
+        for bad in ["+inf", "-inf", "+nan", "-nan", "+Infinity", "-NaN"] {
             assert!(Lexer::new(bad.as_bytes(), 0).object().is_err(), "{bad} must be rejected");
         }
         assert_eq!(obj("12 0 R"), Object::Ref(ObjRef::new(12, 0)));

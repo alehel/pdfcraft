@@ -293,6 +293,8 @@ pub enum Dialog {
     Split,
     /// Pages ▸ Number pages… (page labels).
     NumberPages,
+    /// Organize pages ▸ Page properties (the tab order of the selected pages).
+    PageProps,
     /// Protect Using Password.
     Protect,
     /// Set Page Boxes (crop, trim, bleed, art, media).
@@ -394,6 +396,15 @@ pub struct DuplicateDraft {
     pub all: bool,
     pub from: usize,
     pub to: usize,
+}
+
+/// Page Properties: the pages it applies to (0-based), and their tab order as they have it
+/// (`None` when they differ) and as chosen (`None` until one is chosen).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PagePropsDraft {
+    pub pages: Vec<usize>,
+    pub before: Option<pdfcraft_engine::TabOrder>,
+    pub tab_order: Option<pdfcraft_engine::TabOrder>,
 }
 
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
@@ -899,6 +910,8 @@ pub struct PdfCraftApp {
     pub attach_override: Option<(String, Vec<u8>)>,
     /// Duplicate Field: which field and onto which pages.
     pub duplicate_draft: Option<DuplicateDraft>,
+    /// Page Properties: which pages, and the tab order chosen for them.
+    pub page_props_draft: Option<PagePropsDraft>,
     /// Text field table: the table being set up, and the page it goes on.
     pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
@@ -1232,6 +1245,7 @@ impl PdfCraftApp {
             v_pressed: false,
             attach_override: None,
             duplicate_draft: None,
+            page_props_draft: None,
             field_table_draft: None,
             form_preview: false,
             window_title: String::new(),
@@ -2935,6 +2949,11 @@ impl PdfCraftApp {
                         // Same path as the menu, so the page range is seeded.
                         self.execute("page.number");
                         Some(Dialog::NumberPages)
+                    }
+                    "page-properties" => {
+                        // Same path as the panel, so the selected pages and their order are seeded.
+                        self.execute("page.properties");
+                        self.dialog
                     }
                     "none" => None,
                     _ => Some(Dialog::About),

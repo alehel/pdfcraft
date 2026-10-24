@@ -2656,7 +2656,7 @@ status = "shipped"
 commands = ["page.organize"]
 tools = []
 evidence = ["crates/ui-egui/tests/it/editing.rs::shift_click_selects_a_range_and_moves_it", "crates/ui-egui/tests/it/editing.rs::organize_tool_opens_the_overview_directly_and_can_be_reentered", "crates/ui-egui/tests/it/editing.rs::organize_opens_on_the_current_page", "crates/ui-egui/tests/it/control.rs::organize_overview_is_reachable_through_the_control_channel", "crates/ui-egui/tests/it/editing.rs::organize_panel_comes_with_the_grid_and_closes_it", "crates/ui-egui/tests/it/editing.rs::leaving_organize_goes_back_to_the_workspace_panel"]
-notes = "Opening the Organize pages tool enters the overview directly, on the current page: selected and scrolled into view (#1910). Hovered, focused and selected pages expose individual rotate/delete actions; the toolbar acts on the selection. The left panel is laid out as Acrobat's Organize pages panel: Pages selected (typed ranges, or All, Even, Odd, Landscape or Portrait pages; empty, it shows the current page), rotate, delete, extract, Insert (a blank page, pages from a file, duplicates), Replace, Split, Bates numbering, Set page boxes, Crop pages, Print pages and Page labels. Closing it, by its Close, the grid's Close or opening a page, returns to the workspace's own panel (Edit, Convert, E-Sign or All tools). Page transitions, Page templates and Page properties are listed but planned."
+notes = "Opening the Organize pages tool enters the overview directly, on the current page: selected and scrolled into view (#1910). Hovered, focused and selected pages expose individual rotate/delete actions; the toolbar acts on the selection. The left panel is laid out as Acrobat's Organize pages panel: Pages selected (typed ranges, or All, Even, Odd, Landscape or Portrait pages; empty, it shows the current page), rotate, delete, extract, Insert (a blank page, pages from a file, duplicates), Replace, Split, Bates numbering, Set page boxes, Crop pages, Print pages, Page labels and Page properties (the selected pages' tab order). Closing it, by its Close, the grid's Close or opening a page, returns to the workspace's own panel (Edit, Convert, E-Sign or All tools). Page transitions and Page templates are listed but planned."
 
 [[feature]]
 id = "organize.multi-select-pages"
@@ -3240,11 +3240,11 @@ title = "Page tab order property"
 area = "D"
 tier = "P1"
 milestone = "M6"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["page.properties"]
+tools = ["form_tab_order"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::page_properties_sets_the_tab_order_of_the_selected_pages", "crates/forms/src/tests.rs::tab_orders_are_read_for_each_page", "crates/forms/src/tests.rs::rows_and_columns_tab_right_to_left_in_a_document_bound_on_the_right", "crates/forms/src/tests.rs::an_indirect_tabs_value_orders_the_page", "crates/automation/tests/it/automation.rs::page_tab_orders_are_read_and_set_per_page_through_tools"]
+notes = "Organize pages ▸ Page properties ▸ Tab Order sets the selected pages' order: Use Row Order, Use Column Order, Use Document Structure or Unspecified, as one undo step. It opens on the pages' order, or with no choice when they differ. Rows and columns run right to left in a document bound on the right. form_tab_order reads each page's order (page_tabs) and sets it for chosen pages. Acrobat's Page Properties also has an Actions tab (organize.page-actions), still planned."
 
 [[feature]]
 id = "organize.page-actions"

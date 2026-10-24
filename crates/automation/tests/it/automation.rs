@@ -4819,6 +4819,23 @@ fn the_calculation_order_is_read_fixed_and_set() {
 }
 
 #[test]
+fn page_tab_orders_are_read_and_set_per_page_through_tools() {
+    let dir = workdir("pagetabs");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc }));
+    assert_eq!(r["page_tabs"], json!(["annotations", "annotations", "annotations"]));
+    assert!(r["undo"].is_null(), "reading changes nothing: {r}");
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc, "order": "column", "pages": [1, 3] }));
+    assert_eq!(r["page_tabs"], json!(["column", "annotations", "column"]));
+    assert_eq!((r["undo"].as_str(), r["dirty"].as_bool()), (Some("Set tab order"), Some(true)));
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc, "order": "structure", "pages": [2] }));
+    assert_eq!(r["page_tabs"], json!(["column", "structure", "column"]));
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc, "order": "unspecified", "pages": [1] }));
+    assert_eq!(r["page_tabs"], json!(["annotations", "structure", "column"]));
+}
+
+#[test]
 fn tab_order_and_field_appearance_through_tools() {
     let dir = workdir("taborder");
     let mut a = auto(&dir);

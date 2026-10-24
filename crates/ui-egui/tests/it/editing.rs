@@ -6203,6 +6203,72 @@ fn organize_panel_comes_with_the_grid_and_closes_it() {
     assert!(h.query_by_label("Page properties").is_none(), "the panel is gone");
 }
 
+/// Organize pages ▸ Page properties ▸ Tab Order sets the tab order of the selected pages only,
+/// as one undo step, and opens on the order the pages have.
+#[test]
+fn page_properties_sets_the_tab_order_of_the_selected_pages() {
+    use pdfcraft_engine::TabOrder::{Annotations, Column, Row};
+    let tabs = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().tab_orders();
+    // The undo and redo labels: a new step replaces the redo step an undo left.
+    let undo = |h: &Harness<'static, PdfCraftApp>| {
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        (doc.can_undo().map(str::to_owned), doc.can_redo().map(str::to_owned))
+    };
+    let mut h = organize(3);
+    h.get_by_label("Select page 1").click();
+    h.run_steps(2);
+    h.get_by_label("Select page 3").click();
+    h.run_steps(2);
+    h.get_by_label("Page properties").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::PageProps));
+    assert_eq!(h.state().page_props_draft.as_ref().unwrap().tab_order, Some(Annotations), "opens on Unspecified, as the pages have it");
+    h.get_by_label("Use Column Order").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(tabs(&h), [Column, Annotations, Column]);
+    assert_eq!(undo(&h).0.as_deref(), Some("Set tab order"));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(tabs(&h), [Annotations; 3], "one undo step");
+
+    // Pages with different orders open with no choice made, and OK is off until one is.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetTabOrder { pages: vec![0], order: Row });
+    h.run_steps(2);
+    h.state_mut().views[0].select_pages(&[0, 1]);
+    assert!(h.state_mut().execute("page.properties"));
+    h.run_steps(3);
+    assert_eq!(h.state().page_props_draft.as_ref().unwrap().tab_order, None);
+    assert!(h.get_by_label("OK").accesskit_node().is_disabled());
+    h.get_by_label("Use Row Order").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(tabs(&h), [Row, Row, Annotations]);
+
+    // OK on the order the pages already have adds no undo step, and Cancel changes nothing.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    let before = (tabs(&h), undo(&h));
+    assert_eq!(before.1.1.as_deref(), Some("Set tab order"), "the undone step can be redone");
+    h.state_mut().views[0].select_pages(&[2]);
+    assert!(h.state_mut().execute("page.properties"));
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!((tabs(&h), undo(&h)), before);
+    assert!(h.state_mut().execute("page.properties"));
+    h.run_steps(3);
+    h.get_by_label("Use Document Structure").click();
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!((tabs(&h), undo(&h)), before);
+}
+
 /// Leaving Organize (a page opened from the grid, or the grid's Close) goes back to the
 /// workspace's panel: under the Edit tab, the Edit panel, not All tools.
 #[test]

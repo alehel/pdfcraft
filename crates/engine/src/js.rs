@@ -319,6 +319,13 @@ impl Session {
         }
         Ok(o)
     }
+
+    /// The script errors not taken yet, out of what [`Session::take_js_output`] returns; the
+    /// alerts, console lines and requests stay for that call. Until that call, a document
+    /// script's error taken here is not repeated when the document scripts run again.
+    pub fn take_js_errors(&mut self, id: DocId) -> Vec<String> {
+        self.docs.iter_mut().find(|d| d.id == id).map(|d| std::mem::take(&mut d.js_output.errors)).unwrap_or_default()
+    }
 }
 
 /// A page's words for form-field detection, in user space (underscore runs split from the

@@ -209,25 +209,25 @@ const MAX_TAG_PAGE: usize = 1000;
 impl Automation {
     pub(crate) fn accessibility_autotag_apply(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::AutoTagText).map_err(failed)?;
+        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::AutoTagText)?;
         let tags = self.accessibility_tags(a)?;
-        Ok(json!({
+        let out = json!({
             "tags": tags["tags"], "count": tags["count"],
             "note": "Text objects were tagged as paragraphs. Review heading roles, reading order and remaining accessibility findings manually.",
-        }))
+        });
+        Ok(with_warnings(out, warnings))
     }
 
     pub(crate) fn accessibility_autotag_form_fields(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::AutoTagFormFields).map_err(failed)?;
+        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::AutoTagFormFields)?;
         let report = self
             .doc(a)?
             .accessibility_check(&Options { rules: [Rule::TaggedFormFields].into(), pages: None })
             .ok_or_else(|| failed("the document can't be read"))?;
         let result = report.result(Rule::TaggedFormFields).ok_or_else(|| failed("the form field check is unavailable"))?;
-        Ok(
-            json!({ "status": status_id(result.status), "remaining_findings": result.findings.len(), "note": "Only form widgets were tagged. Review text, figures, links, reading order, and other document content separately." }),
-        )
+        let out = json!({ "status": status_id(result.status), "remaining_findings": result.findings.len(), "note": "Only form widgets were tagged. Review text, figures, links, reading order, and other document content separately." });
+        Ok(with_warnings(out, warnings))
     }
 
     pub(crate) fn accessibility_autotag_preview(&self, a: &Args) -> Result<Value> {
@@ -428,10 +428,11 @@ impl Automation {
         let rule = Rule::from_id(id).ok_or_else(|| ToolError::InvalidArgs(format!("unknown rule {id:?}")))?;
         let edit = self.doc(a)?.accessibility_fix(rule, a.opt_str("value")?).map_err(failed)?;
         let doc = self.doc(a)?.id;
-        self.session.apply(doc, edit).map_err(failed)?;
+        let warnings = self.apply_with_warnings(doc, edit)?;
         let r =
             self.doc(a)?.accessibility_check(&Options { rules: [rule].into(), pages: None }).ok_or_else(|| failed("the document can't be read"))?;
-        Ok(json!({ "rule": id, "status": status_id(r.results.iter().find(|x| x.rule == rule).map_or(Status::Skipped, |x| x.status)) }))
+        let out = json!({ "rule": id, "status": status_id(r.results.iter().find(|x| x.rule == rule).map_or(Status::Skipped, |x| x.status)) });
+        Ok(with_warnings(out, warnings))
     }
 
     pub(crate) fn accessibility_figures(&self, a: &Args) -> Result<Value> {
@@ -462,8 +463,8 @@ impl Automation {
             pdfcraft_engine::Edit::SetAltText { figure, alt: a.opt_str("alt")?.map(str::to_owned) }
         };
         let id = self.doc(a)?.id;
-        self.session.apply(id, edit).map_err(failed)?;
-        self.accessibility_figures(a)
+        let warnings = self.apply_with_warnings(id, edit)?;
+        Ok(with_warnings(self.accessibility_figures(a)?, warnings))
     }
 
     /// The structure tags, one page at a time (`offset`, `limit`), optionally only some types, pages
@@ -547,8 +548,9 @@ impl Automation {
         let generation = u16::try_from(a.int("generation")?)
             .map_err(|_| ToolError::InvalidArgs("generation must be a PDF object generation from accessibility_tags".into()))?;
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::MarkTagArtifact { object: pdfcraft_cos::ObjRef::new(object, generation) }).map_err(failed)?;
-        self.accessibility_tags(a)
+        let warnings =
+            self.apply_with_warnings(id, pdfcraft_engine::Edit::MarkTagArtifact { object: pdfcraft_cos::ObjRef::new(object, generation) })?;
+        Ok(with_warnings(self.accessibility_tags(a)?, warnings))
     }
 
     pub(crate) fn accessibility_move_tag(&mut self, a: &Args) -> Result<Value> {
@@ -569,8 +571,8 @@ impl Automation {
             other => return Err(ToolError::InvalidArgs(format!("placement must be before or after, not {other:?}"))),
         };
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::MoveTag { object, anchor, placement }).map_err(failed)?;
-        self.accessibility_tags(a)
+        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::MoveTag { object, anchor, placement })?;
+        Ok(with_warnings(self.accessibility_tags(a)?, warnings))
     }
 }
 
@@ -648,7 +650,9 @@ impl Automation {
         // Recognizing needs only permission to change the document; the words it found are
         // returned only when copying is allowed too.
         let (id, copy) = (doc.id, doc.allows_copying());
+        let mark = self.session.js_output_mark(id);
         let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
+        let warnings = self.session.take_js_output_since(id, mark).errors;
         let list: Vec<Value> = found
             .iter()
             .map(|p| match &p.skipped {
@@ -657,7 +661,7 @@ impl Automation {
                 None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page }),
             })
             .collect();
-        Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
+        Ok(with_warnings(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }), warnings))
     }
 
     /// Whether text recognition's models are installed, the directories searched for them (in
@@ -721,11 +725,18 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
 impl Automation {
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
+        let mark = self.session.js_output_mark(id);
+        let mut o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
+        // Applying the script's field changes runs the field scripts again; their output is reported with the script's.
+        let edit = self.session.take_js_output_since(id, mark);
+        o.alerts.extend(edit.alerts);
+        o.console.extend(edit.console);
+        o.requests.extend(edit.requests);
         let reqs: Vec<Value> = o.requests.iter().map(request_json).collect();
-        Ok(
+        Ok(with_warnings(
             json!({ "alerts": o.alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }),
-        )
+            edit.errors,
+        ))
     }
 
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {
@@ -736,8 +747,8 @@ impl Automation {
     pub(crate) fn js_set_document_script(&mut self, a: &Args) -> Result<Value> {
         let edit = pdfcraft_engine::Edit::SetDocumentScript { name: a.str("name")?.into(), script: a.opt_str("script")?.map(str::to_string) };
         let id = self.doc(a)?.id;
-        self.session.apply(id, edit).map_err(failed)?;
-        self.js_document_scripts(a)
+        let warnings = self.apply_with_warnings(id, edit)?;
+        Ok(with_warnings(self.js_document_scripts(a)?, warnings))
     }
 
     pub(crate) fn form_set_script(&mut self, a: &Args) -> Result<Value> {
@@ -747,8 +758,9 @@ impl Automation {
             script: a.opt_str("script")?.map(str::to_string),
         };
         let id = self.doc(a)?.id;
+        let mark = self.session.js_output_mark(id);
         self.session.apply(id, edit).map_err(failed)?;
-        let out = self.session.take_js_output(id);
+        let out = self.session.take_js_output_since(id, mark);
         Ok(json!({ "field": a.str("field")?, "event": a.str("event")?, "console": out.console, "errors": out.errors }))
     }
 
@@ -860,8 +872,8 @@ impl Automation {
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
-        self.pdfa_verify(a)
+        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::ConvertPdfA { level })?;
+        Ok(with_warnings(self.pdfa_verify(a)?, warnings))
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {
@@ -977,8 +989,10 @@ impl Automation {
 
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
+        let mark = self.session.js_output_mark(new);
         let n = self.session.mark_differences(old, new).map_err(failed)?;
-        Ok(json!({ "comments": n }))
+        let warnings = self.session.take_js_output_since(new, mark).errors;
+        Ok(with_warnings(json!({ "comments": n }), warnings))
     }
 
     pub(crate) fn form_detect_fields(&mut self, a: &Args) -> Result<Value> {
@@ -1000,10 +1014,12 @@ impl Automation {
                 v
             })
             .collect();
+        let mark = self.session.js_output_mark(id);
         if a.opt_bool("add")?.unwrap_or(true) && !found.is_empty() {
             self.session.auto_detect_fields(id, &pages).map_err(failed)?;
         }
-        Ok(json!({ "fields": list }))
+        let warnings = self.session.take_js_output_since(id, mark).errors;
+        Ok(with_warnings(json!({ "fields": list }), warnings))
     }
 
     pub(crate) fn form_actions(&self, a: &Args) -> Result<Value> {
@@ -1067,8 +1083,8 @@ impl Automation {
         let edit =
             pdfcraft_engine::Edit::SetFieldProps { name, props: Box::new(pdfcraft_engine::FieldProps { actions: Some(acts), ..Default::default() }) };
         let id = self.doc(a)?.id;
-        self.session.apply(id, edit).map_err(failed)?;
-        self.form_actions(a)
+        let warnings = self.apply_with_warnings(id, edit)?;
+        Ok(with_warnings(self.form_actions(a)?, warnings))
     }
 
     pub(crate) fn js_enabled(&mut self, a: &Args) -> Result<Value> {
@@ -1077,6 +1093,30 @@ impl Automation {
         }
         Ok(json!({ "enabled": self.session.javascript() }))
     }
+
+    /// Apply `edit` to document `id` and take out the errors it added to the document's script
+    /// output, such as the values of an XFA form that could not be written to its data.
+    fn apply_with_warnings(&mut self, id: DocId, edit: pdfcraft_engine::Edit) -> Result<Vec<String>> {
+        let mark = self.session.js_output_mark(id);
+        self.session.apply(id, edit).map_err(failed)?;
+        Ok(self.session.take_js_output_since(id, mark).errors)
+    }
+}
+
+/// `out` with `warnings` added to its `warnings` list (made when it has none).
+fn with_warnings(mut out: Value, warnings: Vec<String>) -> Value {
+    if warnings.is_empty() {
+        return out;
+    }
+    if let Some(map) = out.as_object_mut() {
+        match map.get_mut("warnings").and_then(Value::as_array_mut) {
+            Some(list) => list.extend(warnings.into_iter().map(Value::from)),
+            None => {
+                map.insert("warnings".into(), json!(warnings));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

@@ -9,3 +9,4 @@ mod find_text;
 mod form_bulk;
 mod hostile_args;
 mod optimize_content_boundaries;
+mod render_warnings;

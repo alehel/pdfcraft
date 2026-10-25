@@ -6495,3 +6495,38 @@ fn a_paragraph_selected_by_its_frame_deletes_with_one_key() {
         assert_eq!(blocks(&h).iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Page 1"], "undo restores it");
     }
 }
+
+/// Esc in an open paragraph leaves its text and selects its box, as in Acrobat, so Esc and
+/// Delete remove it without aiming for the thin frame; the unapplied draft is discarded.
+#[test]
+fn escape_in_an_open_paragraph_selects_its_box_for_delete() {
+    for draft in [None, Some("Page one")] {
+        let mut h = harness(1, |_| {});
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        let blocks = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().text_blocks(0);
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 200.0;
+        let b = blocks(&h)[0].clone();
+        click_at(
+            &mut h,
+            egui::pos2(r.left() + ((b.rect[0] + b.rect[2]) / 2.0) as f32 * k, r.top() + (300.0 - (b.rect[1] + b.rect[3]) / 2.0) as f32 * k),
+        );
+        assert!(h.state().views[0].line_editor.is_some(), "a click inside the paragraph opens it for typing");
+        if let Some(text) = draft {
+            h.state_mut().views[0].line_editor.as_mut().unwrap().text = text.into();
+            h.run_steps(1);
+        }
+        press(&mut h, Modifiers::NONE, Key::Escape);
+        assert!(h.state().views[0].line_editor.is_none(), "Esc leaves the text");
+        h.get_by_label("1 object selected");
+        assert_eq!(blocks(&h)[0].text, "Page 1", "the draft {draft:?} is discarded");
+        press(&mut h, Modifiers::NONE, Key::Delete);
+        assert!(blocks(&h).is_empty(), "Esc then Delete removes the paragraph: {:?}", blocks(&h));
+        // One undo step brings it back.
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(2);
+        assert_eq!(blocks(&h)[0].text, "Page 1");
+    }
+}

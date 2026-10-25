@@ -1728,6 +1728,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         Some(apply) => {
             let ed = view.line_editor.take()?;
             if !apply {
+                // Esc leaves the text but not the paragraph: its box is selected, as in Acrobat,
+                // so Delete removes it without aiming for the frame. The draft is discarded.
+                view.objects.select_paragraph_next(ed.page, ed.block);
                 return None;
             }
             view.applied_editor = Some(ed.clone());

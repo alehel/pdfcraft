@@ -3319,6 +3319,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut badge_hover: Option<(Pos2, String)> = None;
     let mut clicked_link: Option<LinkTarget> = None;
     let mut remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> = None;
+    let mut embedded_open: Option<(DocId, pdfcraft_render::AttachmentSource, pdfcraft_render::RemoteDestination)> = None;
     let mut canvas_action: Option<comments::CanvasAction> = None;
     let mut field_menu: Option<FieldMenu> = None;
     let mut open_props: Option<(usize, usize)> = None;
@@ -4053,6 +4054,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             LinkTarget::Uri(u) => u.clone(),
                             LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
                             LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+                            // The attachment's name, as the Attachments panel lists it.
+                            LinkTarget::EmbeddedGoTo { source, .. } => info
+                                .attachments
+                                .iter()
+                                .find(|a| a.source == *source)
+                                .map_or_else(|| crate::i18n::fmt(tl!("{s} action"), &[("s", "GoToE")]), |a| a.name.clone()),
                             LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
                         };
                         hover_text = Some((p, label));
@@ -4562,6 +4569,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
         Some(LinkTarget::SetLayers { changes, preserve_rb }) => set_layers(app, index, &changes, preserve_rb),
         Some(LinkTarget::RemoteGoTo { file, destination, .. }) => remote_open = Some((view.id, file, destination)),
+        Some(LinkTarget::EmbeddedGoTo { source, destination, .. }) => embedded_open = Some((view.id, source, destination)),
         Some(LinkTarget::Other(s)) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
         None => {}
     }
@@ -4690,6 +4698,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
+    }
+    if let Some((doc, source, destination)) = embedded_open {
+        app.open_embedded_link(doc, source, destination);
     }
 }
 

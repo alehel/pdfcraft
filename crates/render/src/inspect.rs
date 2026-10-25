@@ -338,6 +338,15 @@ pub enum LinkTarget {
         destination: RemoteDestination,
         new_window: Option<bool>,
     },
+    /// An embedded Go-To action (ISO 32000-2 §12.6.4.4, Tables 204–205) to a PDF embedded in
+    /// this document: the attachment its target dictionary names as a child (`/R /C`), by its
+    /// `/N` key in the EmbeddedFiles name tree or by its file attachment annotation (`/P`, `/A`),
+    /// and the destination `/D` in it. The caller opens it from this document's bytes.
+    EmbeddedGoTo {
+        source: AttachmentSource,
+        destination: RemoteDestination,
+        new_window: Option<bool>,
+    },
     Other(String),
 }
 
@@ -1557,6 +1566,7 @@ impl<'a> Inspector<'a> {
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
                 Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+                Some("GoToE") => self.embedded_go_to(a, text_budget).unwrap_or_else(|| LinkTarget::Other("GoToE".into())),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
@@ -1566,7 +1576,15 @@ impl<'a> Inspector<'a> {
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
         let file = self.action_file(action)?;
-        let destination = match action.get(b"D") {
+        let destination = self.remote_destination(action)?;
+        Some(LinkTarget::RemoteGoTo { launch: false, file, destination, new_window: self.new_window(action) })
+    }
+
+    /// The `/D` of a remote or embedded Go-To: a destination in another document, so an
+    /// explicit one names its page by number (§12.3.2.2). No `/D` is that document's default
+    /// view; an unusable one is `None`.
+    fn remote_destination(&self, action: &Dictionary) -> Option<RemoteDestination> {
+        Some(match action.get(b"D") {
             Err(_) => RemoteDestination::Default,
             Ok(o) => match self.resolve(o) {
                 Object::Array(items) => {
@@ -1591,8 +1609,54 @@ impl<'a> Inspector<'a> {
                 }
                 _ => return None,
             },
+        })
+    }
+
+    /// An embedded Go-To action (§12.6.4.4). Only a child of this document is opened: a target
+    /// dictionary with `/R /C` and no further `/T`, naming the file by its `/N` key in the
+    /// EmbeddedFiles name tree, or, for a file attachment annotation, by `/P` (a page number, or
+    /// a named destination giving it) and `/A` (the annotation's index in `/Annots`, or its
+    /// `/NM`) (Table 205). The parent (`/R /P`), a nested path, or a target under another root
+    /// document (`/F`) is `None`: not followed.
+    fn embedded_go_to(&self, action: &Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
+        if action.has(b"F") {
+            return None;
+        }
+        let t = self.dict(action.get(b"T").ok()?)?;
+        if self.name(t, b"R").as_deref() != Some("C") || t.has(b"T") {
+            return None;
+        }
+        let source = match t.get(b"N") {
+            Ok(n) => {
+                let Object::String(bytes, _) = self.resolve(n) else { return None };
+                // Converted as the EmbeddedFiles keys `DocInfo::attachments` lists are.
+                AttachmentSource::Document { key: spend(bytes, text_budget, text_string)? }
+            }
+            Err(_) => {
+                let page = match self.resolve(t.get(b"P").ok()?) {
+                    Object::Integer(p) => usize::try_from(*p).ok()?,
+                    named @ Object::String(..) => self.dest(named, 0)?.0,
+                    _ => return None,
+                };
+                let index = match self.resolve(t.get(b"A").ok()?) {
+                    Object::Integer(i) => usize::try_from(*i).ok()?,
+                    Object::String(nm, _) => self.annotation_named(page, nm)?,
+                    _ => return None,
+                };
+                AttachmentSource::Annotation { page, index }
+            }
         };
-        Some(LinkTarget::RemoteGoTo { launch: false, file, destination, new_window: self.new_window(action) })
+        Some(LinkTarget::EmbeddedGoTo { source, destination: self.remote_destination(action)?, new_window: self.new_window(action) })
+    }
+
+    /// The position in page `page`'s `/Annots` of the first annotation whose `/NM` is `nm`.
+    fn annotation_named(&self, page: usize, nm: &[u8]) -> Option<usize> {
+        let id = *self.page_ids.get(page)?;
+        let page = self.doc.get_dictionary(id).ok()?;
+        let Object::Array(annots) = self.resolve(page.get(b"Annots").ok()?) else { return None };
+        annots.iter().position(|a| {
+            self.dict(a).and_then(|d| d.get(b"NM").ok()).is_some_and(|n| matches!(self.resolve(n), Object::String(b, _) if b.as_slice() == nm))
+        })
     }
 
     /// The non-empty local file an action's `/F` names (a string or a file specification), shared
@@ -3468,6 +3532,72 @@ trailer << /Root 1 0 R >>
                 launch("dir/a\\b.pdf", None),
                 other(),
                 launch("c.pdf", None),
+            ]
+        );
+    }
+
+    /// Embedded Go-To actions (§12.6.4.4, Tables 204–205) to a child of this document are read
+    /// with the attachment they name; the parent, a nested path, another root document or a
+    /// malformed target stays an action that isn't followed.
+    #[test]
+    fn links_read_embedded_go_to_actions_to_attached_pdfs() {
+        let actions = [
+            "<< /S /GoToE /T << /R /C /N (inner.pdf) >> /D [2 /FitH 100] /NewWindow true >>",
+            "<< /S /GoToE /T << /R /C /P 0 /A 1 >> >>",
+            "<< /S /GoToE /T << /R /C /P 0 /A (att-1) >> /D (chapter) >>",
+            "<< /S /GoToE /T << /R /C /P (here) /A 1 >> /D [0 /Fit] >>",
+            "<< /S /GoToE /T << /R /P >> /D [0 /Fit] >>",
+            "<< /S /GoToE /T << /R /P /N (inner.pdf) >> /D [0 /Fit] >>",
+            "<< /S /GoToE /T << /R /C /N (inner.pdf) /T << /R /C /N (deeper.pdf) >> >> /D [0 /Fit] >>",
+            "<< /S /GoToE /F (other.pdf) /T << /R /C /N (inner.pdf) >> /D [0 /Fit] >>",
+            "<< /S /GoToE /T << /R /C /N /inner.pdf >> /D [0 /Fit] >>",
+            "<< /S /GoToE /T << /R /C /P 0 /A (no-such-name) >> /D [0 /Fit] >>",
+            "<< /S /GoToE /T << /R /C /P -1 /A 1 >> /D [0 /Fit] >>",
+            "<< /S /GoToE /T << /R /C /N (inner.pdf) >> /D [/Fit] >>",
+            "<< /S /GoToE >>",
+        ];
+        let mut pdf = String::from(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(here) [3 0 R /Fit]] >> >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n",
+        );
+        let annots: Vec<String> = (0..=actions.len()).map(|k| format!("{} 0 R", 30 + k)).collect();
+        pdf.push_str(&format!("3 0 obj << /Type /Page /Parent 2 0 R /Annots [{}] >> endobj\n", annots.join(" ")));
+        // Index 0 is a link; index 1 the file attachment annotation, named att-1.
+        pdf.push_str(&format!("30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A {} >> endobj\n", actions[0]));
+        pdf.push_str("31 0 obj << /Type /Annot /Subtype /FileAttachment /Rect [0 0 10 10] /NM (att-1) >> endobj\n");
+        for (k, a) in actions.iter().enumerate().skip(1) {
+            pdf.push_str(&format!("{} 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A {a} >> endobj\n", 31 + k));
+        }
+        pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+        let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+        let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+        let annotation = AttachmentSource::Annotation { page: 0, index: 1 };
+        let embedded =
+            |source: &AttachmentSource, destination, new_window| LinkTarget::EmbeddedGoTo { source: source.clone(), destination, new_window };
+        let other = || LinkTarget::Other("GoToE".into());
+        assert_eq!(
+            targets,
+            [
+                embedded(
+                    &AttachmentSource::Document { key: "inner.pdf".into() },
+                    RemoteDestination::Page { page: 2, view: DestView::FitH { top: Some(100.0) } },
+                    Some(true)
+                ),
+                // No /D: the document's default view.
+                embedded(&annotation, RemoteDestination::Default, None),
+                // /A by the annotation's /NM; a named destination in the target.
+                embedded(&annotation, RemoteDestination::Named("chapter".into()), None),
+                // /P by a named destination of this document.
+                embedded(&annotation, RemoteDestination::Page { page: 0, view: DestView::Fit }, None),
+                other(),
+                other(),
+                other(),
+                other(),
+                other(),
+                other(),
+                other(),
+                other(),
+                other(),
             ]
         );
     }

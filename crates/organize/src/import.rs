@@ -65,11 +65,11 @@ const WIDGET_KEYS: &[&[u8]] = &[
     b"AF",
 ];
 
-struct Copier<'a> {
+pub(crate) struct Copier<'a> {
     src: &'a Document,
     /// Current recursion depth, bounded by [`MAX_COPY_DEPTH`].
     depth: usize,
-    map: HashMap<ObjRef, ObjRef>,
+    pub(crate) map: HashMap<ObjRef, ObjRef>,
     /// Source page → destination page, for rewriting `/P` and destinations.
     pages: HashMap<ObjRef, ObjRef>,
     /// Destination objects that are annotation dictionaries (fixed up after copying).
@@ -77,11 +77,11 @@ struct Copier<'a> {
     /// Top-level form fields reached through widgets.
     fields: Vec<ObjRef>,
     /// Optional content groups copied: (source, destination).
-    ocgs: Vec<(ObjRef, ObjRef)>,
+    pub(crate) ocgs: Vec<(ObjRef, ObjRef)>,
 }
 
 impl<'a> Copier<'a> {
-    fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
+    pub(crate) fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
         Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() }
     }
 
@@ -111,7 +111,7 @@ impl<'a> Copier<'a> {
         Ok(())
     }
 
-    fn copy_value(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Result<Object, OrganizeError> {
+    pub(crate) fn copy_value(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Result<Object, OrganizeError> {
         if !matches!(o, Object::Ref(_) | Object::Array(_) | Object::Dict(_) | Object::Stream(_)) {
             return Ok(o.clone());
         }
@@ -185,7 +185,7 @@ impl<'a> Copier<'a> {
     }
 
     /// Rewrite `/P`, `/Dest` and GoTo actions on copied annotations.
-    fn fix_annotations(&mut self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
+    pub(crate) fn fix_annotations(&mut self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
         for &a in &std::mem::take(&mut self.annots) {
             let src_dict = dst.get(a).as_dict().cloned();
             let Some(d) = src_dict else { continue };
@@ -634,7 +634,7 @@ pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: 
 
 /// Register copied optional content groups in the destination's `/OCProperties`, keeping each
 /// layer's default visibility from the source.
-fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRef, ObjRef)]) -> Result<(), OrganizeError> {
+pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRef, ObjRef)]) -> Result<(), OrganizeError> {
     if ocgs.is_empty() {
         return Ok(());
     }

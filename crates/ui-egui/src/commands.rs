@@ -516,7 +516,8 @@ impl PdfCraftApp {
                 let n = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, |d| d.info.pages.len());
                 self.apply_edit(Edit::SetTabOrder { pages: (0..n).collect(), order });
             }
-            "comment.import" | "form.import_data" => self.import_data_dialog(),
+            "comment.import" => self.import_comments_dialog(),
+            "form.import_data" => self.import_data_dialog(),
             "comment.stamp" => {
                 self.left = crate::LeftPanel::Tool("stamp");
                 self.reveal_tools();

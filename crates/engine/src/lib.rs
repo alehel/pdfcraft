@@ -1883,7 +1883,8 @@ pub enum Edit {
         links: Vec<(usize, Vec<[f64; 4]>, String)>,
         style: LinkStyle,
     },
-    /// Import comments and/or form data (XFDF, FDF, XML, CSV, tab-delimited text).
+    /// Import comments and/or form data (XFDF, FDF, XML, CSV, tab-delimited text), or the
+    /// comments of another PDF onto the pages with the same numbers.
     ImportData {
         name: String,
         bytes: Arc<Vec<u8>>,
@@ -2920,7 +2921,11 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no web addresses were found".into())));
             }
         }
-        Edit::ImportData { bytes, .. } => {
+        Edit::ImportData { name, bytes } if bytes.starts_with(b"%PDF-") => {
+            let src = comment_source(bytes).map_err(|p| EditError::Source(format!("{name}: {p}")))?;
+            import_pdf_comments(doc, &src)?;
+        }
+        Edit::ImportData { name, bytes } => {
             // An XFA form takes XFA data files (XDP, datasets, or a data document) as its data;
             // XFDF, FDF, Acrobat's XML and tables go the usual way.
             let text = (pdfcraft_xfa::read_packets(doc).ok().flatten().is_some()).then(|| decode_data_file(bytes)).flatten();
@@ -2936,7 +2941,19 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 }
                 Some(Err(why)) => return Err(EditError::Invalid(why)),
                 _ => {
-                    pdfcraft_xfdf::import(doc, bytes)?;
+                    // A PDF with bytes before its header, within the 1,024 the reader allows, is read
+                    // as a PDF when it is not a data file. A file the PDF reader cannot open keeps
+                    // the data importer's error.
+                    let mut data = doc.clone();
+                    match pdfcraft_xfdf::import(&mut data, bytes) {
+                        Ok(_) => *doc = data,
+                        Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
+                            Ok(src) => import_pdf_comments(doc, &src)?,
+                            Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
+                            Err(p) => return Err(EditError::Source(format!("{name}: {p}"))),
+                        },
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
         }
@@ -3100,6 +3117,24 @@ fn open_source(name: &str, bytes: &Arc<Vec<u8>>) -> Result<pdfcraft_cos::Documen
 /// [`open_source`], authenticating with `password` (user or owner) for an encrypted file.
 fn open_source_with(name: &str, bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<pdfcraft_cos::Document, EditError> {
     source_document(bytes, password).map_err(|p| EditError::Source(format!("{name}: {p}")))
+}
+
+/// Import the comments of `src` onto the pages of `doc` with the same numbers.
+fn import_pdf_comments(doc: &mut pdfcraft_cos::Document, src: &pdfcraft_cos::Document) -> Result<(), EditError> {
+    if pdfcraft_organize::import_comments(doc, src)? == 0 {
+        return Err(pdfcraft_xfdf::DataError::NothingImported.into());
+    }
+    Ok(())
+}
+
+/// Parse another PDF to import comments from, whatever its permissions allow.
+fn comment_source(bytes: &Arc<Vec<u8>>) -> Result<pdfcraft_cos::Document, SourceProblem> {
+    match std::panic::catch_unwind(|| pdfcraft_cos::Document::open(bytes.clone())) {
+        Ok(Ok(d)) => Ok(d),
+        Ok(Err(pdfcraft_cos::CosError::NeedsPassword)) => Err(SourceProblem::Password),
+        Ok(Err(e)) => Err(SourceProblem::Unreadable(e.to_string())),
+        Err(_) => Err(SourceProblem::Unreadable("the file could not be read".into())),
+    }
 }
 
 /// Why a file can't be a source for Combine Files (or Insert / Replace pages).

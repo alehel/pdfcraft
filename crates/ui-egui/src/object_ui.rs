@@ -25,6 +25,9 @@ pub(crate) struct ObjectSelection {
     pub hold_editor: bool,
     blocked_page: Option<usize>,
     input_blocked: bool,
+    /// A paragraph (page, block) to select once the document is at hand: Esc in the inline
+    /// editor asks for it, and the next `prepare` selects it.
+    select_paragraph: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +65,14 @@ impl ObjectSelection {
         self.gesture = None;
         self.pending = None;
         self.blocked_page = None;
+        self.select_paragraph = None;
+    }
+
+    /// Select paragraph `block` of `page` as an object at the next `prepare`, as Acrobat does
+    /// when Esc leaves a text box: the box is then selected, so Delete removes it, the arrow keys
+    /// move it and its frame drags it, without aiming for the frame.
+    pub(crate) fn select_paragraph_next(&mut self, page: usize, block: usize) {
+        self.select_paragraph = Some((page, block));
     }
 
     pub fn prepare(&mut self, doc: &Document, enabled: bool, ctx: &egui::Context) {
@@ -105,6 +116,15 @@ impl ObjectSelection {
         }
         if self.page.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.clear();
+        }
+        // After the Escape check: the Esc that closed the editor must not clear what it selected.
+        if let Some((page, block)) = self.select_paragraph.take()
+            && let Ok(objects) = self.inventory(doc, page)
+            && let Some(object) = objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
+        {
+            self.clear();
+            self.page = Some(page);
+            self.selected.push(object);
         }
     }
 

@@ -7011,6 +7011,10 @@ mod devicen_inks;
 // with an odd byte count (vendored hayro-interpret patches 67 and 68).
 mod short_image_data;
 
+// A colour-key `/Mask` keys raw samples under an inverted `/Decode` (vendored
+// hayro-interpret patch 69).
+mod colour_key_mask;
+
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
 #[test]

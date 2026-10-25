@@ -4837,6 +4837,20 @@ fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
 }
 
 #[test]
+fn take_js_errors_leaves_the_alerts_for_take_js_output() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 2; xfa.host.messageBox('opened'); throw new Error('open failed');");
+    let mut s = Session::new();
+    let id = s.open("xfa.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let errors = s.take_js_errors(id);
+    assert!(errors.iter().any(|e| e.contains("open failed")), "{errors:?}");
+    assert!(s.take_js_errors(id).is_empty());
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert_eq!(out.alerts, ["opened"]);
+}
+
+#[test]
 fn active_xfa_without_template_scripts_does_not_initialize_pdf_fallback_scripts() {
     let template = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
 <subform name="form" layout="tb"><pageSet><pageArea name="page">

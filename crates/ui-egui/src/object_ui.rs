@@ -345,11 +345,9 @@ fn input(
 /// Whether `p` is on the frame drawn around a paragraph open for typing (`r`, screen): just
 /// outside the text, where a press would otherwise close the paragraph.
 fn on_frame(r: Rect, p: Pos2) -> bool {
-    r.expand(2.0 + FRAME_REACH).contains(p) && !r.expand(2.0).contains(p)
+    let reach = crate::edit_text_ui::FRAME_REACH;
+    r.expand(2.0 + reach).contains(p) && !r.expand(2.0).contains(p)
 }
-
-/// How far outside a paragraph's frame a press still grabs it (screen pixels).
-const FRAME_REACH: f32 = 6.0;
 
 /// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
 /// as in Acrobat. They are taken before the view turns the page with them.

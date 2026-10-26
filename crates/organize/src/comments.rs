@@ -46,9 +46,9 @@ struct Incoming {
 /// not copied.
 ///
 /// A comment named (`/NM`) like one already on its page replaces that one, which keeps its object
-/// so replies to it stay attached. A locked comment, a redaction mark or a form widget of that name
-/// is not replaced: the copy is added beside it without the name. Returns the number of comments
-/// copied.
+/// so replies to it stay attached. A locked comment, or an annotation of that name that is no
+/// comment (a link, a redaction mark, a form widget), is not replaced: the copy is added beside it
+/// without the name. Returns the number of comments copied.
 pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, OrganizeError> {
     let from = walk(src)?;
     let to = walk(dst)?;
@@ -229,7 +229,8 @@ fn page_popups(src: &Document, page: ObjRef) -> Vec<(ObjRef, ObjRef)> {
 }
 
 /// The annotation in `annots` named `nm` (compared as text, whatever the encoding), and whether it
-/// must not be replaced: a locked annotation, a redaction mark or a form widget.
+/// must not be replaced: a locked comment, or an annotation that is no comment, such as a link, a
+/// redaction mark or a form widget.
 fn named(dst: &Document, annots: &[Object], nm: &str) -> Option<(ObjRef, bool)> {
     annots.iter().find_map(|a| {
         let r = a.as_ref()?;
@@ -237,7 +238,9 @@ fn named(dst: &Document, annots: &[Object], nm: &str) -> Option<(ObjRef, bool)> 
         let name = d.get(b"NM").and_then(|n| dst.resolve(n).as_string().map(|s| s.to_text()))?;
         (name == nm).then(|| {
             let flags = d.get(b"F").and_then(|f| dst.resolve(f).as_int()).unwrap_or(0);
-            (r, flags & LOCKED != 0 || matches!(d.name(b"Subtype"), Some(b"Redact" | b"Widget")) || d.contains(b"FT"))
+            let subtype = d.get(b"Subtype").map(|s| dst.resolve(s));
+            let comment = subtype.as_deref().and_then(Object::as_name).is_some_and(|s| COMMENTS.contains(&s));
+            (r, flags & LOCKED != 0 || !comment || d.contains(b"FT"))
         })
     })
 }
@@ -450,6 +453,40 @@ mod tests {
         let (one_ref, one_dict) = by_contents(&one, "one");
         let (two_ref, two_dict) = by_contents(&one, "two");
         assert_eq!((one_dict.reference(b"IRT"), two_dict.reference(b"IRT")), (Some(*two_ref), Some(*one_ref)));
+    }
+
+    #[test]
+    fn only_a_comment_is_replaced_by_name() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /NM (link-1) /Contents (from the reviewer) /Rect [10 10 30 30] /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Square /NM (movie-1) /Contents (a square) /Rect [40 40 60 60] /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Text /NM (note-3) /Contents (newer text) /Rect [70 70 90 90] /P 3 0 R >>",
+        ]);
+        // A link and a screen annotation named like two of the comments, and a comment whose
+        // subtype is an indirect object.
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+            "<< /Type /Annot /Subtype /Link /NM (link-1) /Rect [0 0 10 10] /A << /S /URI /URI (https://example.com/) >> /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Screen /NM (movie-1) /Rect [100 100 200 200] /P 3 0 R >>",
+            "<< /Type /Annot /Subtype 7 0 R /NM (note-3) /Contents (older text) /Rect [70 70 90 90] /P 3 0 R >>",
+            "/Text",
+        ]);
+        assert_eq!(import_comments(&mut doc, &src).unwrap(), 3);
+        let one = page_annots(&doc, 0);
+        assert_eq!(one.len(), 5, "the link and the screen annotation stay, two comments are added and one replaced");
+        let (note, d) = by_contents(&one, "newer text");
+        assert_eq!((*note, text(d, b"NM").as_deref()), (ObjRef::new(6, 0), Some("note-3")), "the comment is replaced in place");
+        assert_eq!((one[0].0, one[0].1.name(b"Subtype")), (ObjRef::new(4, 0), Some(b"Link".as_slice())));
+        assert_eq!(text(&one[0].1, b"NM").as_deref(), Some("link-1"));
+        assert_eq!((one[1].0, one[1].1.name(b"Subtype")), (ObjRef::new(5, 0), Some(b"Screen".as_slice())));
+        assert_eq!(text(&one[1].1, b"NM").as_deref(), Some("movie-1"));
+        assert_eq!(text(&by_contents(&one, "from the reviewer").1, b"NM"), None, "the copy is added without the name");
+        assert_eq!(text(&by_contents(&one, "a square").1, b"NM"), None);
     }
 
     #[test]

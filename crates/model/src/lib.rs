@@ -22,7 +22,12 @@ fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
     let v: Vec<f64> =
         o.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).filter(|x| !x.is_nan()).map(|x| x.clamp(f64::MIN, f64::MAX)).collect();
-    (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    let [x0, y0, x1, y1] = <[f64; 4]>::try_from(v).ok()?;
+    let r = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+    // ±∞ clamps to ±f64::MAX. Each edge is finite, but `f64::MAX - f64::MIN` is +∞,
+    // and a later `0.0 * ∞` is NaN. A box with that span is missing; a finite span,
+    // including one edge at f64::MAX, is kept.
+    ((r[2] - r[0]).is_finite() && (r[3] - r[1]).is_finite()).then_some(r)
 }
 
 impl Page {
@@ -410,6 +415,17 @@ mod tests {
             assert_eq!(pages(&d)[0].rotation(&d), 90, "failed save must keep edits");
             assert_eq!(pages(&d)[0].display_size(&d), before);
         }
+        // ±∞ clamps to ±f64::MAX. Each edge is finite, but the span is +∞, and a later
+        // `0.0 * ∞` is NaN. Edit, print and redact subtract these edges, so the box is
+        // unusable and falls back instead of being handed out.
+        let d = doc_with(0, "", "/MediaBox [-1e400 -1e400 1e400 1e400] /CropBox [-1e400 -1e400 1e400 1e400]");
+        let p = &pages(&d)[0];
+        let c = p.crop(&d);
+        assert!((c[2] - c[0]).is_finite() && (c[3] - c[1]).is_finite(), "{c:?}");
+        let m = p.view_matrix(&d);
+        assert!(m.iter().all(|v| v.is_finite() && (0.0 * v).is_finite()), "{m:?}");
+        let (w, h) = p.display_size(&d);
+        assert!(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0, "({w}, {h})");
         // Representable huge boxes still round-trip through both full-save formats.
         let d = doc_with(0, "", "/MediaBox [0 0 1e30 2e30] /CropBox [0 0 1e30 2e30] /UserUnit 75000");
         for object_streams in [false, true] {

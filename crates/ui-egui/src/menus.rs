@@ -254,6 +254,10 @@ fn english(labeled: Labeled<'_>) -> Option<String> {
 }
 
 fn translate(english: &'static str) -> String {
+    // The bundled UI fonts do not all cover the menu's mathematical ellipsis.
+    if english == "\u{22ef}" {
+        return "...".to_owned();
+    }
     tl!(english).to_owned()
 }
 

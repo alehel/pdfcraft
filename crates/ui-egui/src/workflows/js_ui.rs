@@ -605,24 +605,6 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {
-        let date_language = |code: &str| pdfcraft_engine::dates::DATE_LANGUAGES.iter().find(|l| l.code == code).expect("date language");
-        let hindi = date_language("hi");
-        assert_eq!(date_language_picker_name(hindi, |_| true), hindi.name, "the native name is kept when it can be drawn");
-        assert_eq!(date_language_picker_name(hindi, |_| false), "Hindi", "no Devanagari face: show the English name");
-        let chinese = date_language("zh-hans");
-        assert_eq!(date_language_picker_name(chinese, |_| false), "Simplified Chinese");
-        for language in &pdfcraft_engine::dates::DATE_LANGUAGES {
-            assert!(!date_language_picker_name(language, |_| false).is_empty(), "{}", language.code);
-        }
-    }
-}
-
 fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     // Reading colours (Acrobat: Replace Document Colors): solid text and line-art paints are
     // remapped while rendering, and the page clears to the background colour. The preference
@@ -651,7 +633,7 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
                     .min_size(egui::vec2(94.0, 44.0))
                     .stroke(egui::Stroke::new(if mode == name { 2.0 } else { 1.0 }, if mode == name { t.accent } else { t.border }));
                 let response = ui.add(button);
-                response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, mode == name, tl!(label)));
+                response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, mode == name, tl!(label)));
                 if response.clicked() {
                     app.set_reading_colors(colors);
                 }
@@ -690,4 +672,22 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     });
     ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).small().color(t.text_muted));
     ui.add_space(8.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {
+        let date_language = |code: &str| pdfcraft_engine::dates::DATE_LANGUAGES.iter().find(|l| l.code == code).expect("date language");
+        let hindi = date_language("hi");
+        assert_eq!(date_language_picker_name(hindi, |_| true), hindi.name, "the native name is kept when it can be drawn");
+        assert_eq!(date_language_picker_name(hindi, |_| false), "Hindi", "no Devanagari face: show the English name");
+        let chinese = date_language("zh-hans");
+        assert_eq!(date_language_picker_name(chinese, |_| false), "Simplified Chinese");
+        for language in &pdfcraft_engine::dates::DATE_LANGUAGES {
+            assert!(!date_language_picker_name(language, |_| false).is_empty(), "{}", language.code);
+        }
+    }
 }

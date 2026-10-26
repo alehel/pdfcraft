@@ -22,7 +22,7 @@ fn preference(h: &Harness<'static, PdfCraftApp>) -> String {
 #[test]
 fn preferences_gear_is_right_of_theme_and_opens_preferences() {
     let mut h = harness();
-    let theme = h.get_by_label("Display theme: Light gray").rect();
+    let theme = h.get_by_label("Display theme: Use system setting").rect();
     let gear = h.get_by_label("Preferences").rect();
     assert!(gear.left() >= theme.right());
     h.get_by_label("Preferences").click();
@@ -30,7 +30,7 @@ fn preferences_gear_is_right_of_theme_and_opens_preferences() {
     assert!(h.query_by_label("Appearance mode").is_some());
     assert!(h.query_by_label("Light theme").is_some());
     assert!(h.query_by_label("Dark theme").is_some());
-    assert_eq!(preference(&h), "Light");
+    assert_eq!(preference(&h), "System");
 }
 
 #[test]

@@ -1087,6 +1087,9 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
     let size = egui::vec2(820.0, 520.0);
     for name in names {
         let start: String = name.chars().take(10).collect();
+        if support::skip_without_glyphs(&format!("save_prompt_fits_the_smallest_window_whatever_the_name ({start}…)"), "en", &name) {
+            continue;
+        }
         let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
@@ -1153,16 +1156,223 @@ fn cancelling_properties_discards_the_draft() {
     assert!(h.state().props_draft.is_none());
 }
 
+fn custom_properties(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, String)> {
+    let app = h.state();
+    app.session.get(app.views[0].id).unwrap().custom_info()
+}
+
+fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
+    let field = h.get_by_role_and_label(Role::TextInput, label);
+    field.focus();
+    field.type_text(text);
+    h.run_steps(2);
+}
+
+fn clear(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_by_role_and_label(Role::TextInput, label).focus();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.key_press(Key::Backspace);
+    h.run_steps(2);
+}
+
+#[test]
+fn custom_properties_are_added_in_the_custom_tab_as_one_undoable_step() {
+    let mut h = harness(1, |app| app.set_option("dialog", "custom").unwrap());
+    h.get_by_label("None");
+    type_into(&mut h, "Name:", "Project");
+    type_into(&mut h, "Value:", "Apollo");
+    h.get_by_role_and_label(Role::Button, "Add").click();
+    h.run_steps(3);
+    assert!(custom_properties(&h).is_empty(), "nothing is written before OK");
+    h.get_by_label("Project");
+    type_into(&mut h, "Name:", "Revision");
+    type_into(&mut h, "Value:", "4");
+    h.get_by_role_and_label(Role::Button, "Add").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(custom_properties(&h), [("Project".to_string(), "Apollo".to_string()), ("Revision".to_string(), "4".to_string())]);
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Change document properties"));
+    assert!(app.dialog.is_none() && app.custom_draft.is_none());
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert!(custom_properties(&h).is_empty());
+}
+
+#[test]
+fn custom_properties_are_changed_and_deleted_in_the_custom_tab() {
+    let mut h = harness(1, |app| {
+        for (key, value) in [("Project", "Apollo"), ("Revision", "4")] {
+            assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: key.into(), value: value.into() }));
+        }
+        app.set_option("dialog", "custom").unwrap();
+    });
+    h.get_by_label("Revision").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Delete").click();
+    h.run_steps(3);
+    h.get_by_label("Project").click();
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::Button, "Update").accesskit_node().is_disabled(), "the value is unchanged");
+    clear(&mut h, "Value:");
+    type_into(&mut h, "Value:", "Apollo 2");
+    h.get_by_role_and_label(Role::Button, "Update").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(custom_properties(&h), [("Project".to_string(), "Apollo 2".to_string())]);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.info_value("Revision"), None);
+    assert_eq!(doc.can_undo(), Some("Change document properties"));
+}
+
+#[test]
+fn the_custom_tab_refuses_names_a_custom_property_cannot_have() {
+    let mut h = harness(1, |app| {
+        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Project".into(), value: "Apollo".into() }));
+        app.set_option("dialog", "custom").unwrap();
+    });
+    type_into(&mut h, "Value:", "x");
+    let add_disabled = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(Role::Button, "Add").accesskit_node().is_disabled();
+    assert!(add_disabled(&h), "no name");
+    // A standard name, a name with a space, a delimiter, and a name already listed.
+    for name in ["Title", "Client name", "R&D/2", "Project"] {
+        type_into(&mut h, "Name:", name);
+        assert!(add_disabled(&h), "{name} is refused");
+        clear(&mut h, "Name:");
+    }
+    type_into(&mut h, "Name:", "Client");
+    assert!(!add_disabled(&h));
+    assert!(h.get_by_role_and_label(Role::Button, "Delete").accesskit_node().is_disabled(), "Client is not listed");
+}
+
+#[test]
+fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
+    // `/Client#20name` and `/Project#20` are valid PDF names with a space in them, which a new custom
+    // property can't have; `/Project#20` is not `/Project`. `/Dept#E9` is not UTF-8 and is listed as
+    // "Dept\u{FFFD}". `/Revision` is a number, so it isn't listed.
+    let pdf = String::from_utf8(fixture(1)).unwrap().replace(
+        "/Root 1 0 R >>\nstartxref",
+        "/Root 1 0 R /Info << /Client#20name (Acme) /Project#20 (Padded) /Dept#E9 (Sales) /Project (Apollo) /Revision 4 >> >>\nstartxref",
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
+        app.set_option("dialog", "custom").unwrap();
+        app
+    });
+    h.run_steps(4);
+    for name in ["Client name", "Project ", "Dept\u{FFFD}"] {
+        h.get_by_label(name).click();
+        h.run_steps(3);
+        for button in ["Update", "Delete"] {
+            assert!(h.get_by_role_and_label(Role::Button, button).accesskit_node().is_disabled(), "{button} is off for {name:?}");
+        }
+    }
+    clear(&mut h, "Name:");
+    type_into(&mut h, "Name:", "Revision");
+    assert!(h.get_by_role_and_label(Role::Button, "Add").accesskit_node().is_disabled(), "Add would overwrite the number");
+    assert_eq!(h.state().custom_draft.as_ref().map(|(_, d)| d.value.as_str()), Some("Sales"));
+    h.get_by_label("Project").click();
+    h.run_steps(3);
+    clear(&mut h, "Value:");
+    type_into(&mut h, "Value:", "Gemini");
+    h.get_by_role_and_label(Role::Button, "Update").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(
+        custom_properties(&h),
+        [
+            ("Client name".to_string(), "Acme".to_string()),
+            ("Project ".to_string(), "Padded".to_string()),
+            ("Dept\u{FFFD}".to_string(), "Sales".to_string()),
+            ("Project".to_string(), "Gemini".to_string())
+        ]
+    );
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert!(doc.has_info("Revision") && doc.info_value("Revision").is_none(), "the number is kept");
+    assert!(app.dialog.is_none());
+}
+
+#[test]
+fn a_custom_property_is_deleted_from_an_info_dictionary_in_the_trailer() {
+    let pdf = String::from_utf8(fixture(1))
+        .unwrap()
+        .replace("/Root 1 0 R >>\nstartxref", "/Root 1 0 R /Info << /Project (Apollo) /Revision (4) >> >>\nstartxref");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
+        app.set_option("dialog", "custom").unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Project").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Delete").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(custom_properties(&h), [("Revision".to_string(), "4".to_string())]);
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Change document properties"));
+}
+
+#[test]
+fn add_stops_at_the_256_custom_properties_the_tab_lists() {
+    let with_props = |count: usize| {
+        let entries: String = (0..count).map(|n| format!("/P{n:03} (v) ")).collect();
+        let pdf =
+            String::from_utf8(fixture(1)).unwrap().replace("/Root 1 0 R >>\nstartxref", &format!("/Root 1 0 R /Info << {entries}>> >>\nstartxref"));
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
+            app.set_option("dialog", "custom").unwrap();
+            app
+        });
+        h.run_steps(4);
+        h
+    };
+    let add_disabled = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(Role::Button, "Add").accesskit_node().is_disabled();
+
+    // 255 in the file: one more fits, a second does not.
+    let mut h = with_props(255);
+    type_into(&mut h, "Name:", "Client");
+    type_into(&mut h, "Value:", "Acme");
+    assert!(!add_disabled(&h));
+    h.get_by_role_and_label(Role::Button, "Add").click();
+    h.run_steps(3);
+    type_into(&mut h, "Name:", "Other");
+    type_into(&mut h, "Value:", "x");
+    assert!(add_disabled(&h), "the draft holds 256");
+    assert_eq!(h.state().custom_draft.as_ref().map(|(_, d)| d.props.len()), Some(256));
+
+    // 257 in the file: after a Delete a new name would still be past the 256 listed.
+    let mut h = with_props(257);
+    h.get_by_label("P000").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Delete").click();
+    h.run_steps(3);
+    type_into(&mut h, "Name:", "Client");
+    type_into(&mut h, "Value:", "Acme");
+    assert!(add_disabled(&h), "the file lists 256");
+}
+
 #[test]
 fn edit_menu_names_the_step_to_undo() {
     let mut h = harness(2, |app| {
         app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     });
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("Edit ⏵").hover(); // submenus open on hover; their labels carry the arrow
-    h.run_steps(3);
-    h.get_by_label_contains("Undo Rotate page").click(); // the label includes the shortcut
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Undo Rotate page").click();
     h.run_steps(3);
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();
@@ -3363,6 +3573,9 @@ fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
 /// as a form field does; the editor used to close with the error and the typing was lost.
 #[test]
 fn a_paragraph_whose_edit_fails_stays_open_with_its_typing() {
+    if crate::support::skip_without_glyphs("a_paragraph_whose_edit_fails_stays_open_with_its_typing", "en", "Top ก") {
+        return;
+    }
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
@@ -3488,7 +3701,7 @@ fn editing_existing_text_in_place() {
 /// paragraph editor and retypes it as "Chapter One", leaving the editor open.
 fn edit_tab_with_an_open_paragraph(h: &mut Harness<'static, PdfCraftApp>) {
     use pdfcraft_ui_egui::{Mode, QuickTool};
-    h.get_by_label("Edit").click();
+    support::outside_menus(h, "Edit").click();
     h.run_steps(3);
     assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Edit, QuickTool::EditText));
     open_the_first_line(h);
@@ -6136,6 +6349,7 @@ fn a_paragraph_running_off_its_page_edits_without_covering_the_next_page() {
         delta: egui::vec2(0.0, -300.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(4);
     let scrolled = h.state().views[0].page_screen_rect(0).unwrap();

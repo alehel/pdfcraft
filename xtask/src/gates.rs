@@ -131,7 +131,7 @@ pub fn deny(_: &[String]) -> anyhow::Result<()> {
     run_args(&["deny", "--log-level", "error", "check"])
 }
 
-fn run_args(args: &[&str]) -> anyhow::Result<()> {
+pub(crate) fn run_args(args: &[&str]) -> anyhow::Result<()> {
     let mut c = cargo();
     c.args(args);
     run(c, &format!("cargo {}", args.join(" ")))
@@ -445,7 +445,7 @@ fn run_capture_bytes(cmd: &mut Command, timeout_s: u64) -> Option<Vec<u8>> {
 }
 
 /// The words of `s`, in the order they were extracted.
-fn word_sequence(s: &str) -> Vec<String> {
+pub(crate) fn word_sequence(s: &str) -> Vec<String> {
     s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
 }
 
@@ -476,7 +476,7 @@ const MAX_ORDER_WORDS: usize = 3000;
 /// other oracle number here it is a *disagreement* with Poppler, not a verdict: the same split
 /// scores as a win on one file and a loss on another purely because `pdftotext` happens to make
 /// it in one place and not the other.
-fn order_score(a: &[String], b: &[String]) -> (f64, bool) {
+pub(crate) fn order_score(a: &[String], b: &[String]) -> (f64, bool) {
     let cut = a.len() > MAX_ORDER_WORDS || b.len() > MAX_ORDER_WORDS;
     let a = a.get(..a.len().min(MAX_ORDER_WORDS)).unwrap_or(a);
     let b = b.get(..b.len().min(MAX_ORDER_WORDS)).unwrap_or(b);
@@ -495,7 +495,7 @@ fn order_score(a: &[String], b: &[String]) -> (f64, bool) {
     (f64::from(prev[m]) / n.max(m) as f64, cut)
 }
 
-fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
+pub(crate) fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
     let common: usize = a.iter().map(|(w, n)| (*n).min(*b.get(w).unwrap_or(&0))).sum();
     let (na, nb): (usize, usize) = (a.values().sum(), b.values().sum());
     if na == 0 || nb == 0 {

@@ -89,6 +89,8 @@ impl Absent {
         match program {
             "qpdf" => "apt install qpdf / brew install qpdf",
             "pdftoppm" | "pdftotext" => "apt install poppler-utils / brew install poppler",
+            "soffice" => "apt install libreoffice-writer / brew install --cask libreoffice",
+            "pandoc" => "apt install pandoc / brew install pandoc",
             _ => "install it and put it on PATH",
         }
     }
@@ -151,6 +153,19 @@ pub fn pdftoppm() -> Result<Oracle, Absent> {
 /// against it over the corpus).
 pub fn pdftotext() -> Result<Oracle, Absent> {
     find("pdftotext", "-v")
+}
+
+/// LibreOffice: converts word-processor documents to `.docx` and PDF, and lays out our `.docx`
+/// for the Word-export round trip (`cargo xtask office-oracle`).
+pub fn soffice() -> Result<Oracle, Absent> {
+    find("soffice", "--version")
+}
+
+/// pandoc: an independent `.docx` reader, whose view of headings, lists, tables and emphasis
+/// `cargo xtask office-oracle` compares between a source document and our export of its PDF.
+/// It runs only as an external process (it is GPL), never linked.
+pub fn pandoc() -> Result<Oracle, Absent> {
+    find("pandoc", "--version")
 }
 
 /// Binds an oracle, or returns from the calling test after saying on stderr why it was skipped.
@@ -230,7 +245,7 @@ mod tests {
     /// The install hint is specific per tool, so a skip notice is actionable.
     #[test]
     fn every_known_oracle_has_an_install_hint() {
-        for p in ["qpdf", "pdftoppm", "pdftotext"] {
+        for p in ["qpdf", "pdftoppm", "pdftotext", "soffice", "pandoc"] {
             let hint = Absent::install_hint(p);
             assert!(hint.contains("install"), "{p}: {hint}");
             assert_ne!(hint, Absent::install_hint("something-else"), "{p} needs its own hint");

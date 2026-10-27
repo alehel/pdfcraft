@@ -39,6 +39,8 @@ match pdfcraft_oracle::pdftotext() {
 | `qpdf()` | qpdf | `--check` structural validation; the independent owner-password oracle |
 | `pdftoppm()` | Poppler | page pixels, for comparing against our own raster output |
 | `pdftotext()` | Poppler | text extraction (`cargo xtask text-oracle` scores word F1 and reading order against it) |
+| `soffice()` | LibreOffice | writes the Word-export fixtures as `.docx` and PDF, and lays out our `.docx` (`cargo xtask office-oracle`) |
+| `pandoc()` | pandoc | reads the source `.docx` and ours, so `office-oracle` can compare their structure |
 
 Each returns `Result<Oracle, Absent>`. `Oracle::command()` hands back a fresh `Command`;
 `Absent` renders as an actionable sentence naming the install command.

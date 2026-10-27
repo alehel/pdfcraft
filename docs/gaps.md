@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** minor (gap 8: Word export is measured by `cargo xtask office-oracle`; estimates unchanged)
+
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (gap 6 #3673: Character encoding CJK mapping routes corrected; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -180,6 +182,14 @@ update the numbers.
   floating watermark text and per-page section sizes. Exact font matching, vector rules and
   broader layout fidelity remain incomplete;
   `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned.
+  `cargo xtask office-oracle` (2026-10-27) measures Word export. It makes 14 synthetic documents
+  with LibreOffice, exports their PDFs and compares the result with the source through pandoc
+  (structure) and Poppler (layout). First reading, LibreOffice 24.2: words 1.000, reading order
+  0.966, structure 0.521, pixel disagreement 12.0%. It shows Heading 3 written as Heading 2; a
+  bold phrase mid-sentence split into its own Heading 2; the paragraph before a table read into
+  the table; no real lists (0.000), underline (0.000) or footnotes (0.000); positioned pages
+  (`images`) with no flowing structure; and header-footer pages growing from 3 to 5. A tagged
+  source PDF (`--tagged`) scores the same, so the structure tree is not used yet.
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.
 - **Gate:** lossy or missing sub-cases of the convert-and-share workflow (partial, not blocking).
   First beta items: Create PDF from Office (LibreOffice sidecar, 10–20 h) and a Word export that
@@ -397,6 +407,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Gap 8: `cargo xtask office-oracle` round-trips 14 synthetic documents (LibreOffice → PDF → our Word export) and scores structure through pandoc and layout through Poppler. First reading: structure 0.521, pixel disagreement 12.0%; the defects it found are listed under gap 8. Estimates unchanged. |
 | 2026-10-19 | minor | Gap 2: a Type 0 font whose `/ToUnicode` is the name `/Identity-H` or `/Identity-V` (WSCAD) reads its codes as Unicode, so such pages have text to select, find and edit (hayro-interpret patch 44, `view.render-cid-fonts`). Estimates unchanged. |
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |

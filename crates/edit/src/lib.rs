@@ -985,7 +985,9 @@ pub mod objects;
 pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
 
 mod flatten;
+mod shapes;
 pub use flatten::{flatten, flatten_fill_sign};
+pub use shapes::{PaintedRect, painted_rects};
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
 pub mod bidi;
@@ -993,8 +995,9 @@ pub mod indic;
 mod linebreak;
 pub mod text;
 pub use text::{
-    BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
-    clear_block, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
+    BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, ReadingParagraph, ReadingParagraphs, ReadingRun,
+    TextBlock, TextLine, TextSession, block_overlapping, clear_block, reading_blocks, reading_blocks_checked, reading_paragraphs, replace_block,
+    replace_line, rewrite_block, text_blocks, text_lines,
 };
 pub mod added;
 pub use added::{

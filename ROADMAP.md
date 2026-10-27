@@ -189,6 +189,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-10-27 (M10, Word export layout):** Export to Word keeps flowing pages' layout: inline style runs, alignment, indents, line pitch and spacing, Word lists, bordered/shaded/merged tables from drawn borders, column sections, paragraph rules, boxes and shading, word-level underline and strikethrough; HTML, RTF and PowerPoint keep the inline runs too. On a 16-document LibreOffice round trip words move 0.9 pt on average (127 pt before). Estimates unchanged.
 - **2026-10-13 (M7, free image rotation):** A selected page image has a rotate knob (Shift: 15 degree steps) and `image_edit` a `rotate_by` action; the angle is written as one undoable `cm`. Snapping to page edges while moving is in #1740; resize snapping is not done. Estimates unchanged.
 
 - **2026-10-20 (M4, initial view):** Window and interface options read indirect boolean ViewerPreferences values. Synthetic regressions cover true/false, direct/indirect preference dictionaries and save/reopen; malformed entries retain false defaults. Estimates unchanged.

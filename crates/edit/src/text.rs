@@ -2499,6 +2499,72 @@ pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBloc
     Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
 }
 
+/// Most painted rules [`reading_paragraphs`] keeps text apart at (each line is checked against each).
+const MAX_WALLS: usize = 4_096;
+
+/// A stretch of one style inside a [`ReadingParagraph`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReadingRun {
+    pub text: String,
+    pub base_font: String,
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [f64; 3],
+    /// How far its baseline sits above the row's (negative below): a superscript or subscript.
+    pub rise: f64,
+    /// The box of its first line (user space): where the run starts.
+    pub rect: [f64; 4],
+    /// The boxes of its words, in order (user space; see [`TextLine::ink`]).
+    pub words: Vec<[f64; 4]>,
+}
+
+/// A paragraph as a reader sees it, for documents that keep inline formatting (Export to Word):
+/// its runs of differing font, size, weight or colour stay in one paragraph, and the box of
+/// each visual row is kept so its alignment, indents and line spacing can be recovered.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReadingParagraph {
+    /// The runs' text joined (rows joined with a space, or directly after a hyphen).
+    pub text: String,
+    /// The paragraph's box in user space.
+    pub rect: [f64; 4],
+    pub runs: Vec<ReadingRun>,
+    /// Each visual row's box in user space, top to bottom.
+    pub rows: Vec<[f64; 4]>,
+    /// The most-used run style (by characters).
+    pub base_font: String,
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [f64; 3],
+    /// Counterclockwise baseline angle in page user space, in degrees.
+    pub rotation: f64,
+}
+
+/// A page's [`ReadingParagraph`]s, and whether reading left forms out (as
+/// [`ReadingBlocks::truncated`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReadingParagraphs {
+    pub paragraphs: Vec<ReadingParagraph>,
+    pub truncated: bool,
+}
+
+/// The paragraphs on a page with their inline formatting, including text drawn by form XObjects.
+/// Paragraphs break where the rows' spacing, size or weight changes, or where a row ends short
+/// enough that the next row's first word would have fitted on it.
+pub fn reading_paragraphs(doc: &Document, page: usize) -> Result<ReadingParagraphs, EditError> {
+    let (lines, truncated) = reading_lines(doc, page)?;
+    // Borders and rules: thin painted boxes, a bounded number of them.
+    let walls: Vec<[f64; 4]> = crate::painted_rects(doc, page)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.rect)
+        .filter(|r| (r[2] - r[0]).min(r[3] - r[1]) <= 3.0 && (r[2] - r[0]).max(r[3] - r[1]) >= 3.0)
+        .take(MAX_WALLS)
+        .collect();
+    Ok(ReadingParagraphs { paragraphs: regions::group_reading_paragraphs(&lines, &walls), truncated })
+}
+
 // An ideographic space carries intentional Japanese spacing, including paragraph indentation.
 // Keep other whitespace normalization unchanged.
 fn paragraph_separator(c: char) -> bool {

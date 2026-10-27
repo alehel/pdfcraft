@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** minor (gap 8: Word export keeps the layout of flowing pages; estimates unchanged)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (gap 6 #3673: Character encoding CJK mapping routes corrected; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -177,8 +178,10 @@ update the numbers.
   HTML, web pages and PostScript; SVG/XML/EPS/PS/JPEG 2000 export.
 - **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
-  floating watermark text and per-page section sizes. Exact font matching, vector rules and
-  broader layout fidelity remain incomplete;
+  floating watermark text and per-page section sizes. Since 2026-10-27 flowing pages keep their
+  layout (inline runs, alignment, spacing, lists, bordered and shaded tables, columns, rules and
+  boxes; 0.9 pt mean word displacement over a 16-document LibreOffice round trip). Exact font
+  matching, shapes and charts, Word headers/footers and footnotes remain incomplete;
   `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned.
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.
 - **Gate:** lossy or missing sub-cases of the convert-and-share workflow (partial, not blocking).

@@ -193,26 +193,56 @@ impl crate::Document {
                 let crop_width = f64::from(info.crop[2] - info.crop[0]);
                 let display_width = f64::from(if info.rotation % 180 == 0 { info.width } else { info.height });
                 let unit = if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 };
-                let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
+                let reading = pdfcraft_edit::reading_paragraphs(cos, i).unwrap_or_default();
                 if reading.truncated {
                     truncated.push(i);
                 }
+                let heavy = |name: &str| {
+                    let f = name.to_ascii_lowercase();
+                    (f.contains("bold") || f.contains("black") || f.contains("heavy"), f.contains("italic") || f.contains("oblique"))
+                };
                 let blocks = reading
-                    .blocks
+                    .paragraphs
                     .into_iter()
                     .filter(|b| !b.text.trim().is_empty())
                     .map(|b| {
-                        let f = b.base_font.to_ascii_lowercase();
+                        let (bold, italic) = heavy(&b.base_font);
+                        let runs = b
+                            .runs
+                            .into_iter()
+                            .map(|r| {
+                                let (rb, ri) = heavy(&r.base_font);
+                                pdfcraft_export::Run {
+                                    font: pdfcraft_export::family(&r.base_font),
+                                    text: r.text,
+                                    size: r.size * unit,
+                                    bold: r.bold || rb,
+                                    italic: r.italic || ri,
+                                    color: r.color,
+                                    rise: r.rise * unit,
+                                    rect: visible_rect(r.rect),
+                                    words: r.words.iter().map(|w| visible_rect(*w)).collect(),
+                                }
+                            })
+                            .collect();
                         pdfcraft_export::Block {
                             text: b.text,
                             rect: visible_rect(b.rect),
                             size: b.size * unit,
-                            bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
-                            italic: f.contains("italic") || f.contains("oblique"),
+                            bold: b.bold || bold,
+                            italic: b.italic || italic,
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
+                            font: pdfcraft_export::family(&b.base_font),
+                            runs,
+                            lines: b.rows.iter().map(|r| visible_rect(*r)).collect(),
                         }
                     })
+                    .collect();
+                let shapes = pdfcraft_edit::painted_rects(cos, i)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|s| pdfcraft_export::Shape { rect: visible_rect(s.rect), color: s.color, stroked: s.stroked })
                     .collect();
                 let images = pdfcraft_edit::reading_images(cos, i)
                     .unwrap_or_default()
@@ -230,7 +260,7 @@ impl crate::Document {
                     .collect();
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
                 let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background }
+                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, shapes }
             })
             .collect();
         (pages, truncated)

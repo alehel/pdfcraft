@@ -9,13 +9,33 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod pptx;
+mod word;
 mod zip;
 
 pub use pptx::pptx;
+pub use word::family;
 pub use zip::Zip;
 
+/// A stretch of one style inside a [`Block`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Run {
+    pub text: String,
+    /// Font family ("Liberation Serif"), empty when unknown.
+    pub font: String,
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [f64; 3],
+    /// Baseline shift above the row (points; negative below): superscripts and subscripts.
+    pub rise: f64,
+    /// Where the run starts on the page: the box of its first piece ([x0, y0, x1, y1], y up).
+    pub rect: [f64; 4],
+    /// The boxes of its words in order, when known (one per whitespace-separated word).
+    pub words: Vec<[f64; 4]>,
+}
+
 /// A paragraph of a page.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Block {
     pub text: String,
     /// [x0, y0, x1, y1] on the displayed page in points (y up).
@@ -28,6 +48,47 @@ pub struct Block {
     pub color: [f64; 3],
     /// Counterclockwise baseline angle in user space (degrees).
     pub rotation: f64,
+    /// Font family of the paragraph's main style, empty when unknown.
+    pub font: String,
+    /// The text in its style runs; empty means one run in the block's own style.
+    pub runs: Vec<Run>,
+    /// Each visual row's box, top to bottom; empty when unknown (then `rect` is one row).
+    pub lines: Vec<[f64; 4]>,
+}
+
+impl Block {
+    /// The style runs, or one run in the block's style when it has none.
+    pub fn runs(&self) -> Vec<Run> {
+        if self.runs.is_empty() {
+            vec![Run {
+                text: self.text.clone(),
+                font: self.font.clone(),
+                size: self.size,
+                bold: self.bold,
+                italic: self.italic,
+                color: self.color,
+                rise: 0.0,
+                rect: self.rect,
+                words: Vec::new(),
+            }]
+        } else {
+            self.runs.clone()
+        }
+    }
+
+    /// The rows' boxes, or the block's box as its one row.
+    pub fn rows(&self) -> Vec<[f64; 4]> {
+        if self.lines.is_empty() { vec![self.rect] } else { self.lines.clone() }
+    }
+}
+
+/// A rectangle the page paints in one colour: a filled box, or the area a stroked horizontal or
+/// vertical line covers (table borders, rules, underlines).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shape {
+    pub rect: [f64; 4],
+    pub color: [f64; 3],
+    pub stroked: bool,
 }
 
 /// An image of a page.
@@ -52,6 +113,8 @@ pub struct Page {
     /// The colour the whole page is painted before its content (a page background), as sRGB
     /// components in 0..=1; `None` for a page with no background of its own.
     pub background: Option<[f64; 3]>,
+    /// Filled boxes and straight lines the page paints, in painting order.
+    pub shapes: Vec<Shape>,
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header
@@ -145,9 +208,12 @@ fn continuations(blocks: &[Block]) -> Vec<bool> {
         })
         .collect()
 }
+/// Most characters a single block spanning a table's columns (a header band, a totals row) may
+/// have and still join the table; longer is a sentence above or below it.
+const MAX_BAND_CHARS: usize = 60;
 /// A cell is short: taller blocks are body text (or a multi-column layout), not table cells.
 fn is_cell_like(b: &Block) -> bool {
-    (b.rect[3] - b.rect[1]) <= b.size * 5.0 && !b.text.trim().is_empty()
+    (b.rect[3] - b.rect[1]) <= b.size * 5.0 && b.lines.len() <= 3 && !b.text.trim().is_empty()
 }
 
 /// Detect tables in a page's blocks from their text layout: columns are left edges shared by
@@ -286,7 +352,10 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     // the table; other single-column rows (captions, following text) stay paragraphs.
     let spans_run = |edges: &[f64], bi: usize| -> bool {
         let b = &blocks[bi];
-        edges.iter().any(|e| (*e - b.rect[0]).abs() <= COL_TOL) && edges.iter().any(|e| *e > b.rect[0] + COL_TOL && *e < b.rect[2] - COL_TOL)
+        // A header band or a totals row is a label, not a sentence running across the columns.
+        b.text.chars().count() <= MAX_BAND_CHARS
+            && edges.iter().any(|e| (*e - b.rect[0]).abs() <= COL_TOL)
+            && edges.iter().any(|e| *e > b.rect[0] + COL_TOL && *e < b.rect[2] - COL_TOL)
     };
     let run_edges = |run: &[Vec<(usize, usize)>]| -> Vec<f64> {
         let mut es: Vec<f64> =
@@ -342,7 +411,15 @@ fn items(pages: &[Page]) -> Vec<Item<'_>> {
         if i > 0 {
             out.push(Item::PageBreak);
         }
-        let (tables, consumed) = tables(&p.blocks);
+        // Tables drawn with borders first; the text-only finder looks at what they leave.
+        let (ruled, taken) = word::ruled_tables(p);
+        let rest: Vec<Block> = p.blocks.iter().zip(&taken).map(|(b, t)| if *t { Block::default() } else { b.clone() }).collect();
+        let (mut tables, mut consumed) = tables(&rest);
+        for (c, t) in consumed.iter_mut().zip(&taken) {
+            *c |= *t;
+        }
+        tables.extend(ruled.iter().map(|t| t.plain(&p.blocks)));
+        let consumed: Vec<bool> = consumed.into_iter().zip(&p.blocks).map(|(c, b)| c || b.text.trim().is_empty()).collect();
         // Blocks and images by their top edge, top to bottom.
         let mut parts: Vec<(f64, f64, Item)> = p
             .blocks
@@ -405,7 +482,21 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
     for it in items(pages) {
         match it {
             Item::Para(b, lvl) => {
-                let mut t = esc(&b.text);
+                // The paragraph's own style is on the element; runs that differ are marked up inline.
+                let mut t = String::new();
+                for r in b.runs() {
+                    let mut piece = esc(&word::readable(&r.text));
+                    if r.italic && !b.italic {
+                        piece = format!("<em>{piece}</em>");
+                    }
+                    if r.bold && !b.bold {
+                        piece = format!("<strong>{piece}</strong>");
+                    }
+                    if rgb8(r.color) != rgb8(b.color) {
+                        piece = format!("<span style=\"color:#{}\">{piece}</span>", hex(r.color).unwrap_or_else(|| "000000".into()));
+                    }
+                    t.push_str(&piece);
+                }
                 if b.italic {
                     t = format!("<em>{t}</em>");
                 }
@@ -480,15 +571,20 @@ fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> 
 
 /// One Word table: explicit absent borders (alignment alone cannot prove PDF rules), a grid sized
 /// from the detected column edges, `gridSpan` for spanning cells, empty cells for holes.
-fn docx_table(t: &Table) -> String {
+/// `indent` is how far right of the text margin the first column starts (points); cells have
+/// no padding, so each column's text starts where it did on the page.
+fn docx_table(t: &Table, indent: f64) -> String {
     let mut edges = t.cols.clone();
     edges.push(t.rect[2]);
     let widths: Vec<i64> = edges.windows(2).map(|w| ((w[1] - w[0]).max(20.0) * 20.0).round().clamp(60.0, 31680.0) as i64).collect();
-    let mut s = String::from("<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>");
+    let mut s =
+        format!("<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblInd w:w=\"{}\" w:type=\"dxa\"/><w:tblBorders>", word::twips(indent));
     for edge in ["top", "left", "bottom", "right", "insideH", "insideV"] {
         s.push_str(&format!("<w:{edge} w:val=\"nil\"/>"));
     }
-    s.push_str("</w:tblBorders></w:tblPr><w:tblGrid>");
+    s.push_str(
+        "</w:tblBorders><w:tblCellMar><w:left w:w=\"0\" w:type=\"dxa\"/><w:right w:w=\"0\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr><w:tblGrid>",
+    );
     for w in &widths {
         s.push_str(&format!("<w:gridCol w:w=\"{w}\"/>"));
     }
@@ -655,14 +751,48 @@ fn word_page_size(page: &Page) -> (i64, i64) {
     (twips(page.width), twips(page.height))
 }
 
-fn section(page: &Page) -> String {
+/// A section with the page's size. `margins` (left, right, top, bottom in points) are where a
+/// flowing page's content sat; without them the margins are an inch, less on small pages.
+/// `starts_page` is false for a section that continues the page (columns that change), whose
+/// `columns` are each one's left and right edge.
+fn section(page: &Page, margins: Option<[f64; 4]>, starts_page: bool, columns: &[[f64; 2]]) -> String {
     let (pw, ph) = word_page_size(page);
     let (mx, my) = ((pw / 8).min(1440), (ph / 8).min(1440));
+    let [left, right, top, bottom] = match margins {
+        Some([l, r, t, b]) => {
+            let tw = |pt: f64, limit: i64| word::twips(pt.max(0.0)).clamp(0, limit.max(0));
+            // At least an inch (or a third of a small page) stays for text each way. The bottom
+            // margin is kept small, so text that sets a little taller than in the source still
+            // fits on its page.
+            let (min_w, min_h) = (1440.min(pw / 3), 1440.min(ph / 3));
+            let left = tw(l, pw - min_w);
+            let top = tw(t, ph - min_h);
+            [left, tw(r, pw - min_w - left), top, tw(b.min(36.0) * 0.5, ph - min_h - top)]
+        }
+        None => [mx, mx, my, my],
+    };
     format!(
-        "<w:sectPr><w:type w:val=\"nextPage\"/><w:pgSz w:w=\"{pw}\" w:h=\"{ph}\"/><w:pgMar w:top=\"{my}\" w:right=\"{mx}\" w:bottom=\"{my}\" w:left=\"{mx}\" w:header=\"{}\" w:footer=\"{}\" w:gutter=\"0\"/></w:sectPr>",
-        my / 2,
-        my / 2
+        "<w:sectPr><w:type w:val=\"{}\"/><w:pgSz w:w=\"{pw}\" w:h=\"{ph}\"/><w:pgMar w:top=\"{top}\" w:right=\"{right}\" w:bottom=\"{bottom}\" w:left=\"{left}\" w:header=\"{}\" w:footer=\"{}\" w:gutter=\"0\"/>{}</w:sectPr>",
+        if starts_page { "nextPage" } else { "continuous" },
+        top / 2,
+        bottom / 2,
+        word::cols_xml(columns)
     )
+}
+
+/// The font family most of the document's characters are set in (empty when none is known).
+fn main_font(pages: &[Page]) -> String {
+    let mut by: Vec<(String, usize)> = Vec::new();
+    for r in pages.iter().flat_map(|p| &p.blocks).flat_map(|b| b.runs()) {
+        if r.font.is_empty() {
+            continue;
+        }
+        match by.iter_mut().find(|e| e.0 == r.font) {
+            Some(e) => e.1 += r.text.len(),
+            None => by.push((r.font.clone(), r.text.len())),
+        }
+    }
+    by.into_iter().max_by_key(|e| e.1).map(|e| e.0).unwrap_or_default()
 }
 
 /// The page colour of a Word document: Word has one background for the whole document, so it
@@ -678,66 +808,49 @@ fn word_background(pages: &[Page]) -> Option<String> {
 pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut body = String::new();
     let mut media: Vec<(String, &Image)> = Vec::new();
-    // Word needs a paragraph between adjacent tables and after the last one in the body.
-    let mut after_table = false;
-    let run = |b: &Block| run_xml(&b.text, b.size, b.bold, b.italic, b.color);
     let mut shape_id = 0usize;
+    let mut lists = word::Lists::new();
+    let ratio = word::pitch_ratio(pages);
+    let body_text = body_size(pages);
     for (page_index, page) in pages.iter().enumerate() {
-        let (pw, _) = word_page_size(page);
-        let text_w = (pw - 2 * (pw / 8).min(1440)) as f64 / 20.0;
-        if positioned(page) {
-            body.push_str(&positioned_page(page, &mut media, &mut shape_id));
-            after_table = false;
+        let (segments, margins) = if positioned(page) {
+            let xml = positioned_page(page, &mut media, &mut shape_id);
+            (vec![word::Segment { xml, columns: Vec::new(), ends_in_table: false, lead: 0.0 }], None)
         } else {
-            for it in items(std::slice::from_ref(page)) {
-                match &it {
-                    Item::Para(b, lvl) => {
-                        let style = match lvl {
-                            1 => "<w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr>",
-                            2 => "<w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr>",
-                            _ => "",
-                        };
-                        body.push_str(&format!("<w:p>{style}{}</w:p>", run(b)));
-                    }
-                    Item::Table(t) => {
-                        if after_table {
-                            body.push_str("<w:p/>");
-                        }
-                        body.push_str(&docx_table(t));
-                    }
-                    Item::Img(im) => {
-                        if room_for(&media, im) {
-                            let n = media.len() + 1;
-                            let name = format!("image{n}.{}", im.ext);
-                            // Size on the page, at most the text width.
-                            let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
-                            let k = (text_w / w).min(1.0);
-                            let (cx, cy) = (emu(w * k), emu(h * k));
-                            body.push_str(&format!("<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"{cx}\" cy=\"{cy}\"/>"));
-                            body.push_str(&picture_xml(n, &name, (cx, cy), None));
-                            body.push_str("</wp:inline></w:drawing></w:r></w:p>");
-                            media.push((name, im));
-                        }
-                    }
-                    Item::PageBreak => body.push_str("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"),
+            word::flow_page(page, ratio, body_text, &mut media, &mut lists)
+        };
+        let last_page = page_index + 1 == pages.len();
+        let count = segments.len().max(1);
+        for k in 0..count {
+            let seg = segments.get(k);
+            body.push_str(seg.map_or("", |s| s.xml.as_str()));
+            // Each section carries this source page's size; the first on a page starts it, the
+            // others (a change in columns) continue it. Word needs a paragraph after a table
+            // before a section ends, and the last section must be a direct child of the body
+            // (OOXML 17.6.17).
+            let sect = section(page, margins, k == 0, seg.map_or(&[][..], |s| s.columns.as_slice()));
+            let ends_in_table = seg.is_some_and(|s| s.ends_in_table);
+            if last_page && k + 1 == count {
+                if ends_in_table || page.blocks.is_empty() && page.images.is_empty() {
+                    body.push_str("<w:p><w:pPr><w:spacing w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr></w:p>");
                 }
-                after_table = matches!(it, Item::Table(_));
+                body.push_str(&sect);
+            } else {
+                // The space the next part on this page leaves above itself goes in a paragraph
+                // of its own: the one carrying the section's properties takes no height in some
+                // readers (LibreOffice).
+                let lead = segments.get(k + 1).map_or(0.0, |s| s.lead);
+                if lead >= 1.0 {
+                    body.push_str(&format!(
+                        "<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"{}\" w:lineRule=\"exact\"/></w:pPr></w:p>",
+                        word::twips(lead - 1.0).max(20)
+                    ));
+                }
+                body.push_str(&format!(
+                    "<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/>{sect}</w:pPr></w:p>"
+                ));
             }
         }
-        // Section breaks carry this source page's size and create exactly one next page.
-        // The last section must be a direct child of the body (OOXML 17.6.17).
-        if page_index + 1 < pages.len() {
-            body.push_str(&format!(
-                "<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/>{}</w:pPr></w:p>",
-                section(page)
-            ));
-        } else {
-            if after_table || page.blocks.is_empty() && page.images.is_empty() {
-                body.push_str("<w:p><w:pPr><w:spacing w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr></w:p>");
-            }
-            body.push_str(&section(page));
-        }
-        after_table = false;
     }
     // Word shows a document background only when its settings say so (`settings.xml` below).
     let page_colour = word_background(pages);
@@ -761,6 +874,12 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
             "<Override PartName=\"/word/settings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml\"/>",
         );
     }
+    let numbering = lists.xml();
+    if numbering.is_some() {
+        types.push_str(
+            "<Override PartName=\"/word/numbering.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/>",
+        );
+    }
     types.push_str("</Types>");
     let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
 <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\
@@ -778,12 +897,27 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
     if page_colour.is_some() {
         doc_rels.push_str("<Relationship Id=\"rIdSettings\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings\" Target=\"settings.xml\"/>");
     }
+    if numbering.is_some() {
+        doc_rels.push_str("<Relationship Id=\"rIdNumbering\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering\" Target=\"numbering.xml\"/>");
+    }
     doc_rels.push_str("</Relationships>");
-    let styles = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
+    // The document's default font: the family most of its text is set in.
+    let font = main_font(pages);
+    let defaults = if font.is_empty() {
+        String::new()
+    } else {
+        let f = esc(&font);
+        format!(
+            "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"{f}\" w:hAnsi=\"{f}\" w:cs=\"{f}\" w:eastAsia=\"{f}\"/></w:rPr></w:rPrDefault></w:docDefaults>"
+        )
+    };
+    let styles = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">{defaults}\
 <w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:pPr><w:spacing w:after=\"120\"/></w:pPr></w:style>\
-<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"240\"/><w:outlineLvl w:val=\"0\"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>\
-<w:style w:type=\"paragraph\" w:styleId=\"Heading2\"><w:name w:val=\"heading 2\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"200\"/><w:outlineLvl w:val=\"1\"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>\
-</w:styles>";
+<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"240\"/><w:outlineLvl w:val=\"0\"/></w:pPr></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Heading2\"><w:name w:val=\"heading 2\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"200\"/><w:outlineLvl w:val=\"1\"/></w:pPr></w:style>\
+</w:styles>"
+    );
     let core = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>{}</dc:title></cp:coreProperties>",
         esc(title)
@@ -795,6 +929,9 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
     z.add("word/document.xml", doc.as_bytes(), true);
     z.add("word/styles.xml", styles.as_bytes(), true);
     z.add("word/_rels/document.xml.rels", doc_rels.as_bytes(), true);
+    if let Some(n) = &numbering {
+        z.add("word/numbering.xml", n.as_bytes(), true);
+    }
     if page_colour.is_some() {
         z.add("word/settings.xml", b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:displayBackgroundShape/></w:settings>", true);
     }
@@ -839,7 +976,10 @@ pub fn rtf(pages: &[Page]) -> String {
     };
     for it in &items {
         match it {
-            Item::Para(b, _) => note(b.color),
+            Item::Para(b, _) => {
+                note(b.color);
+                b.runs().iter().for_each(|r| note(r.color));
+            }
             Item::Table(t) => t.rows.iter().flatten().for_each(|c| note(c.color)),
             Item::Img(_) | Item::PageBreak => {}
         }
@@ -868,7 +1008,28 @@ pub fn rtf(pages: &[Page]) -> String {
                     fmt.push_str("\\i");
                 }
                 fmt.push_str(&cf(b.color));
-                s.push_str(&format!("{{\\pard{fmt} {}\\par}}\n", rtf_text(&b.text)));
+                // Runs that differ from the paragraph's style, each in a group of its own.
+                let mut body = String::new();
+                for r in b.runs() {
+                    let mut rf = String::new();
+                    if r.bold != b.bold {
+                        rf.push_str(if r.bold { "\\b" } else { "\\b0" });
+                    }
+                    if r.italic != b.italic {
+                        rf.push_str(if r.italic { "\\i" } else { "\\i0" });
+                    }
+                    if rgb8(r.color) != rgb8(b.color) {
+                        let c = cf(r.color);
+                        rf.push_str(if c.is_empty() { "\\cf0" } else { &c });
+                    }
+                    let text = rtf_text(&word::readable(&r.text));
+                    if rf.is_empty() {
+                        body.push_str(&text);
+                    } else {
+                        body.push_str(&format!("{{{rf} {text}}}"));
+                    }
+                }
+                s.push_str(&format!("{{\\pard{fmt} {body}\\par}}\n"));
             }
             Item::Table(t) => {
                 let mut edges = t.cols.clone();
@@ -920,6 +1081,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         Page {
             width: 612.0,
@@ -938,6 +1100,7 @@ mod tests {
                 rotation: 0.0,
             }],
             background: None,
+            shapes: Vec::new(),
         }
     }
 
@@ -1002,6 +1165,7 @@ mod tests {
             italic: false,
             color: [0.8; 3],
             rotation: 0.0,
+            ..Default::default()
         });
         p.images = page().images;
         let xml = part(&docx(&[p], "Invoice"), "word/document.xml");
@@ -1088,6 +1252,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         });
         let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
         assert!(xml.contains(">Total 4.50\tGBP</w:t>"), "{xml}");
@@ -1110,8 +1275,10 @@ mod tests {
         let xml = part(&docx(&[p.clone()], "Colour"), "word/document.xml");
         assert!(xml.contains("<w:color w:val=\"0D3B2E\"/>"), "{xml}");
         assert!(xml.contains("<w:color w:val=\"00FF00\"/>"), "out-of-range values clamp: {xml}");
-        // Black text keeps Word's default colour.
-        assert_eq!(xml.matches("<w:color ").count(), 2, "{xml}");
+        // Black text keeps Word's default colour (each coloured paragraph names its colour on
+        // its run and its paragraph mark).
+        assert!(!xml.contains("<w:color w:val=\"000000\""), "{xml}");
+        assert_eq!(xml.matches("<w:color ").count(), 4, "{xml}");
         let h = html(&[p.clone()], "Colour");
         assert!(h.contains("<h1 style=\"color:#0D3B2E\">Annual Report</h1>"), "{h}");
         assert!(h.contains("<p style=\"color:#00FF00\">"), "{h}");
@@ -1130,6 +1297,30 @@ mod tests {
         assert!(html(&[t], "Grid").contains("style=\"color:#FF0000\""));
     }
 
+    /// A bold, coloured phrase inside a sentence keeps its style inside the paragraph in every
+    /// format.
+    #[test]
+    fn inline_runs_survive_every_format() {
+        let run = |text: &str, bold: bool, color: [f64; 3]| Run { text: text.into(), size: 11.0, bold, color, ..Run::default() };
+        let mut p = page();
+        p.blocks[3].runs = vec![
+            run("Results were ", false, [0.0; 3]),
+            run("well ahead", true, [0.0; 3]),
+            run(" of target and ", false, [0.0; 3]),
+            run("rising", false, [1.0, 0.0, 0.0]),
+        ];
+        p.blocks[3].text = "Results were well ahead of target and rising".into();
+        let h = html(std::slice::from_ref(&p), "Runs");
+        assert!(h.contains("<p>Results were <strong>well ahead</strong> of target and <span style=\"color:#FF0000\">rising</span></p>"), "{h}");
+        let r = rtf(std::slice::from_ref(&p));
+        assert!(r.contains("Results were {\\b well ahead} of target and {\\cf1 rising}\\par"), "{r}");
+        let slide = part(&pptx(std::slice::from_ref(&p), "Runs"), "ppt/slides/slide1.xml");
+        let bold_run = slide.split("<a:t>well ahead</a:t>").next().and_then(|r| r.rsplit("<a:r>").next()).unwrap_or_default();
+        assert!(bold_run.contains("b=\"1\""), "{slide}");
+        let xml = part(&docx(&[p], "Runs"), "word/document.xml");
+        assert!(xml.contains("<w:b/><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/></w:rPr><w:t xml:space=\"preserve\">well ahead</w:t>"), "{xml}");
+    }
+
     #[test]
     fn rtf_escapes_and_sizes() {
         let mut p = page();
@@ -1141,6 +1332,7 @@ mod tests {
             italic: true,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         });
         let r = rtf(&[p]);
         assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
@@ -1158,6 +1350,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         Page {
             width: 612.0,
@@ -1181,10 +1374,12 @@ mod tests {
                     italic: false,
                     color: [0.0; 3],
                     rotation: 0.0,
+                    ..Default::default()
                 },
             ],
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         }
     }
 
@@ -1203,7 +1398,7 @@ mod tests {
         assert!(d.windows(b"word/document.xml".len()).any(|w| w == b"word/document.xml"));
         let (tables, _) = tables(&p.blocks);
         assert_eq!(tables.len(), 1);
-        let table_xml = docx_table(&tables[0]);
+        let table_xml = docx_table(&tables[0], 0.0);
         assert!(table_xml.contains("<w:tblGrid>"));
         assert!(table_xml.contains("<w:gridSpan w:val=\"2\"/>"), "{table_xml}");
         assert_eq!(table_xml.matches("<w:tr>").count(), 4);
@@ -1233,7 +1428,16 @@ mod tests {
             .map(|i| {
                 let (row, col) = (i / 2, i / 2 + i % 2);
                 let (x, y) = (10.0 + col as f64 * 20.0, 10_000.0 - row as f64 * 14.0);
-                Block { text: "x".into(), rect: [x, y, x + 8.0, y + 12.0], size: 11.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0 }
+                Block {
+                    text: "x".into(),
+                    rect: [x, y, x + 8.0, y + 12.0],
+                    size: 11.0,
+                    bold: false,
+                    italic: false,
+                    color: [0.0; 3],
+                    rotation: 0.0,
+                    ..Default::default()
+                }
             })
             .collect();
         let started = std::time::Instant::now();
@@ -1260,12 +1464,14 @@ mod tests {
                             italic: false,
                             color: [0.0; 3],
                             rotation: 0.0,
+                            ..Default::default()
                         }
                     })
                 })
                 .collect(),
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         };
         let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
         assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
@@ -1274,7 +1480,7 @@ mod tests {
     }
 
     fn block(t: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
-        Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0 }
+        Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0, ..Default::default() }
     }
 
     /// #2806: a sentence whose link is set in another colour or font runs on as separate blocks
@@ -1301,6 +1507,7 @@ mod tests {
             ],
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         };
         let h = html(std::slice::from_ref(&p), "Regulations");
         assert!(!h.contains("<table>"), "running text became a table: {h}");
@@ -1320,7 +1527,7 @@ mod tests {
             blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
             blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, shapes: Vec::new() };
         let h = html(std::slice::from_ref(&p), "Event");
         assert!(!h.contains("<table>"), "sentences became a table: {h}");
         assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
@@ -1337,7 +1544,7 @@ mod tests {
             blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
             blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, shapes: Vec::new() };
         let h = html(std::slice::from_ref(&p), "Prizes");
         assert!(h.contains("<table>"), "the prize table was lost: {h}");
         assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
@@ -1353,6 +1560,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         let p = Page {
             width: 612.0,
@@ -1365,6 +1573,7 @@ mod tests {
             ],
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         };
         let h = html(&[p], "Paper");
         assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");

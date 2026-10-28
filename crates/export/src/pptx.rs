@@ -174,8 +174,10 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
                     let mut paras_xml = String::new();
                     let mut est_h_pt = 0.0;
                     while let Some((_, _, SlideBodyItem::Para(b))) = items.get(i) {
-                        let run = run_drawingml(&b.text, b.size, b.bold, b.italic, b.color);
-                        paras_xml.push_str(&format!("<a:p>{run}</a:p>"));
+                        // The paragraph's style runs (a bold phrase inside a sentence).
+                        let runs: String =
+                            b.runs().iter().map(|r| run_drawingml(&crate::word::readable(&r.text), r.size, r.bold, r.italic, r.color)).collect();
+                        paras_xml.push_str(&format!("<a:p>{runs}</a:p>"));
                         let lines = (b.text.len() as f64 / 60.0).ceil().max(1.0);
                         est_h_pt += (b.size.max(10.0) * 1.3) * lines + 6.0;
                         i += 1;
@@ -369,6 +371,7 @@ mod tests {
                     italic: false,
                     color: [0.1, 0.2, 0.3],
                     rotation: 0.0,
+                    ..Default::default()
                 },
                 Block {
                     text: "Revenue grew 25% year over year across all regions.".into(),
@@ -378,6 +381,7 @@ mod tests {
                     italic: false,
                     color: [0.0; 3],
                     rotation: 0.0,
+                    ..Default::default()
                 },
                 Block {
                     text: "Operational expenses remained flat.".into(),
@@ -387,6 +391,7 @@ mod tests {
                     italic: true,
                     color: [0.0; 3],
                     rotation: 0.0,
+                    ..Default::default()
                 },
             ],
             images: vec![Image {
@@ -397,6 +402,7 @@ mod tests {
                 rotation: 0.0,
             }],
             background: None,
+            shapes: Vec::new(),
         }
     }
 
@@ -510,6 +516,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         let table_page = Page {
             width: 612.0,
@@ -524,6 +531,7 @@ mod tests {
             ],
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         };
         let bytes = pptx(&[sample_page(), table_page], "Two");
         let parts = entries(&bytes);
@@ -611,6 +619,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         let mut blocks = vec![huge("Title", f64::MAX, 500.0)];
         for k in 0..40 {
@@ -621,7 +630,7 @@ mod tests {
         let images = (0..40)
             .map(|k| Image { ext: "png", bytes: vec![0; 4], rect: [0.0, -1e300, 1e-300, 1e300 - k as f64], size: [1.0, 1.0], rotation: 0.0 })
             .collect();
-        let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, background: None };
+        let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, background: None, shapes: Vec::new() };
         let bytes = pptx(&[p], "Hostile");
         let slide = part(&bytes, "ppt/slides/slide1.xml");
         assert!(slide.contains("Title") && slide.contains("<p:pic>"), "the slide is still written");
@@ -676,6 +685,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         let p = Page {
             width: 720.0,
@@ -690,6 +700,7 @@ mod tests {
                     italic: false,
                     color: [0.0; 3],
                     rotation: 0.0,
+                    ..Default::default()
                 },
                 // Table where one cell has a very large number (e.g. 36 pt callout in the table)
                 cell("Metric", 72.0, 400.0, 100.0, 12.0),
@@ -701,6 +712,7 @@ mod tests {
             ],
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         };
         let bytes = pptx(&[p], "Table Check");
         let slide_xml = part(&bytes, "ppt/slides/slide1.xml");

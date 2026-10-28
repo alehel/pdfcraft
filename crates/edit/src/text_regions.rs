@@ -66,7 +66,7 @@ pub(super) fn is_centred(block: &TextBlock, lines: &[TextLine], page_centre: f64
 }
 
 pub(super) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
-    group_layout(lines, true)
+    group_layout(lines, true, true, &[])
 }
 
 /// Exporters currently represent a block with one style. Keep their style boundaries until
@@ -74,6 +74,226 @@ pub(super) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
 /// Dotted-leader entries stay on one row and use the title run's style.
 pub(super) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     let mut blocks = Vec::new();
+    reading_slices(lines, |slice| blocks.extend(group_layout(slice, false, false, &[])));
+    blocks
+}
+
+/// The paragraphs of a page with their style runs ([`super::reading_paragraphs`]).
+/// `walls` are thin rectangles the page paints (table borders, rules): text on either side of
+/// one never joins.
+pub(super) fn group_reading_paragraphs(lines: &[TextLine], walls: &[[f64; 4]]) -> Vec<ReadingParagraph> {
+    let split = split_at_walls(lines, walls);
+    let mut paragraphs = Vec::new();
+    reading_slices(&split, |slice| paragraphs.extend(paragraphs_of(slice, walls)));
+    paragraphs
+}
+
+/// Lines cut where a wall stands between two of their words: one text object can run across
+/// table cells (a producer drawing a whole row in one `BT`). A line is cut only when its words
+/// and their boxes ([`TextLine::ink`]) correspond one to one.
+fn split_at_walls(lines: &[TextLine], walls: &[[f64; 4]]) -> Vec<TextLine> {
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        let words: Vec<&str> = line.text.split_whitespace().collect();
+        if walls.is_empty() || !line.upright() || words.len() < 2 || words.len() != line.ink.len() {
+            out.push(line.clone());
+            continue;
+        }
+        let mut start = 0;
+        let piece = |from: usize, to: usize, out: &mut Vec<TextLine>| {
+            let (Some(ws), Some(inks)) = (words.get(from..to), line.ink.get(from..to)) else { return };
+            let Some(x0) = inks.first().map(|r| r[0]) else { return };
+            let x1 = inks.iter().map(|r| r[2]).fold(f64::NEG_INFINITY, f64::max);
+            let mut l = line.clone();
+            l.text = ws.join(" ");
+            l.ink = inks.to_vec();
+            l.rect = [x0, line.rect[1], x1, line.rect[3]];
+            l.frame = [x0, line.frame[1], x1, line.frame[3]];
+            l.origin.x = x0;
+            out.push(l);
+        };
+        for k in 1..words.len() {
+            let (Some(a), Some(b)) = (line.ink.get(k - 1), line.ink.get(k)) else { continue };
+            let (a, b) = ([a[0], line.rect[1], a[2], line.rect[3]], [b[0], line.rect[1], b[2], line.rect[3]]);
+            if walled(a, b, walls) {
+                piece(start, k, &mut out);
+                start = k;
+            }
+        }
+        if start == 0 {
+            out.push(line.clone());
+        } else {
+            piece(start, words.len(), &mut out);
+        }
+    }
+    out
+}
+
+/// The line in a row that shows the most characters: its size and baseline are the row's.
+fn dominant<'a>(row: &[usize], lines: &'a [TextLine]) -> Option<&'a TextLine> {
+    row.iter().filter_map(|i| lines.get(*i)).max_by_key(|l| l.text.trim().chars().count())
+}
+
+/// Whether every line of a row is bold (a heading set in the body size).
+fn all_bold(row: &[usize], lines: &[TextLine]) -> bool {
+    row.iter().filter_map(|i| lines.get(*i)).all(|l| l.bold || base_font_is_bold(&l.base_font))
+}
+
+fn base_font_is_bold(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.contains("bold") || n.contains("black") || n.contains("heavy")
+}
+
+/// Whether the rows of one visual region (`seg`, the paragraph so far) end before `row`: the
+/// size, weight or line spacing changes, or the last row ended short enough that `row`'s first
+/// word would have fitted on it. `right` is the region's right edge in the rows' frame.
+fn paragraph_ends(lines: &[TextLine], seg: &[Vec<usize>], row: &[usize], right: f64) -> bool {
+    let (Some(prev), Some(first)) = (seg.last(), row.first()) else { return true };
+    let (Some(p), Some(d)) = (dominant(prev, lines), dominant(row, lines)) else { return true };
+    let size = p.size.max(d.size).max(1.0);
+    if (p.size - d.size).abs() > 0.1 * size || all_bold(prev, lines) != all_bold(row, lines) {
+        return true;
+    }
+    let gap = p.frame_origin().1 - d.frame_origin().1;
+    let pitch = seg.len().checked_sub(2).and_then(|i| seg.get(i)).and_then(|r| dominant(r, lines)).map(|r| r.frame_origin().1 - p.frame_origin().1);
+    match pitch {
+        Some(pitch) if (gap - pitch).abs() > 0.15 * pitch.abs().max(1.0) => return true,
+        None if gap > 1.75 * size => return true,
+        _ => {}
+    }
+    // The first word of `row` would have fitted at the end of the row before it: that row ended
+    // its paragraph (a short last line), as wrapping only moves on a word that does not fit.
+    let Some(pr) = frame_row_rect(prev, lines) else { return true };
+    let word = lines.get(*first).filter(|l| l.upright()).and_then(|l| l.ink.first()).map(|w| w[2] - w[0]);
+    word.is_some_and(|w| w.is_finite() && right - pr[2] > w + 0.5 * size)
+}
+
+/// Split each visual region of `lines` into paragraphs and give each its style runs.
+fn paragraphs_of(lines: &[TextLine], walls: &[[f64; 4]]) -> Vec<ReadingParagraph> {
+    let mut out = Vec::new();
+    for block in group_layout(lines, true, false, walls) {
+        let right = block.rows.iter().filter_map(|r| frame_row_rect(r, lines)).map(|r| r[2]).fold(f64::NEG_INFINITY, f64::max);
+        let mut seg: Vec<Vec<usize>> = Vec::new();
+        for row in block.rows {
+            if !seg.is_empty() && paragraph_ends(lines, &seg, &row, right) {
+                out.extend(paragraph(lines, &std::mem::take(&mut seg)));
+            }
+            seg.push(row);
+        }
+        out.extend(paragraph(lines, &seg));
+    }
+    out
+}
+
+/// One paragraph from its rows: runs of one style, rows joined by a space (or directly after
+/// a hyphen), words a producer placed apart without a space character separated by one.
+fn paragraph(lines: &[TextLine], rows: &[Vec<usize>]) -> Option<ReadingParagraph> {
+    let same = |a: &ReadingRun, l: &TextLine, rise: f64| {
+        a.base_font == l.base_font
+            && (a.size - l.size).abs() < 0.01
+            && a.bold == l.bold
+            && a.italic == l.italic
+            && a.color == l.color
+            && (a.rise - rise).abs() < 0.5
+    };
+    let mut runs: Vec<ReadingRun> = Vec::new();
+    let mut boxes = Vec::new();
+    for (ri, row) in rows.iter().enumerate() {
+        let Some(base) = dominant(row, lines).map(|l| l.frame_origin().1) else { continue };
+        if ri > 0
+            && let Some(last) = runs.last_mut()
+        {
+            if last.text.ends_with('-') {
+                last.text.pop();
+            } else {
+                last.text.push(' ');
+            }
+        }
+        let mut prev: Option<&TextLine> = None;
+        let mut fresh = true;
+        let count = row.len();
+        for (k, line) in row.iter().filter_map(|i| lines.get(*i)).enumerate() {
+            let mut t = line.text.as_str();
+            if k == 0 {
+                t = t.trim_start_matches(paragraph_separator);
+            }
+            if k + 1 == count {
+                t = t.trim_end_matches(paragraph_separator);
+            }
+            if let (Some(p), Some(last)) = (prev, runs.last_mut())
+                && !last.text.ends_with(char::is_whitespace)
+                && !t.starts_with(char::is_whitespace)
+                && line.frame_rect()[0] - p.frame_rect()[2] > line.size * 0.12
+            {
+                last.text.push(' ');
+            }
+            prev = Some(line);
+            if t.is_empty() {
+                continue;
+            }
+            let rise = line.frame_origin().1 - base;
+            let rise = if rise.abs() < 0.5 { 0.0 } else { rise };
+            // Each row starts a run of its own, so the rows can still be told apart.
+            match runs.last_mut() {
+                Some(last) if !fresh && same(last, line, rise) => {
+                    last.text.push_str(t);
+                    last.words.extend(line.ink.iter().copied());
+                }
+                _ => runs.push(ReadingRun {
+                    text: t.to_string(),
+                    base_font: line.base_font.clone(),
+                    size: line.size,
+                    bold: line.bold,
+                    italic: line.italic,
+                    color: line.color,
+                    rise,
+                    rect: line.rect,
+                    words: line.ink.clone(),
+                }),
+            }
+            fresh = false;
+        }
+        if let Some(r) = row_rect(row, lines) {
+            boxes.push(r);
+        }
+    }
+    if let Some(last) = runs.last_mut() {
+        let trimmed = last.text.trim_end_matches(paragraph_separator).len();
+        last.text.truncate(trimmed);
+    }
+    runs.retain(|r| !r.text.is_empty());
+    let rect = boxes.iter().copied().reduce(union)?;
+    // The most-used style, by characters: the paragraph's own.
+    let mut weights: Vec<(usize, usize)> = Vec::new();
+    for (i, r) in runs.iter().enumerate() {
+        let n = r.text.chars().count();
+        match weights.iter_mut().find(|(j, _)| {
+            runs.get(*j)
+                .is_some_and(|o| o.base_font == r.base_font && o.size == r.size && o.bold == r.bold && o.italic == r.italic && o.color == r.color)
+        }) {
+            Some(w) => w.1 += n,
+            None => weights.push((i, n)),
+        }
+    }
+    let main = weights.iter().max_by_key(|w| w.1).and_then(|w| runs.get(w.0))?.clone();
+    let rotation = rows.first().and_then(|r| r.first()).and_then(|i| lines.get(*i)).map_or(0.0, |l| l.rotation());
+    Some(ReadingParagraph {
+        text: runs.iter().map(|r| r.text.as_str()).collect(),
+        rect,
+        rows: boxes,
+        base_font: main.base_font,
+        size: main.size,
+        bold: main.bold,
+        italic: main.italic,
+        color: main.color,
+        rotation,
+        runs,
+    })
+}
+
+/// Calls `each` on the stretches of `lines` to group, with dotted-leader contents entries as
+/// single rows of their own.
+fn reading_slices(lines: &[TextLine], mut each: impl FnMut(&[TextLine])) {
     let mut start = 0;
     let mut offset = 0;
     for row in lines.chunk_by(|a, b| same_plane(a, b) && (a.origin.baseline - b.origin.baseline).abs() < a.size.min(b.size) * 0.2) {
@@ -92,17 +312,16 @@ pub(super) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
         {
             // Tab leaders are a single reading row, even when the title, dots and page
             // number are separate text objects far apart. Do not merge neighbouring entries.
-            blocks.extend(group_layout(lines.get(start..offset).unwrap_or_default(), false));
+            each(lines.get(start..offset).unwrap_or_default());
             let mut line = first.clone();
             line.text = text;
             line.rect = row.iter().map(|line| line.rect).reduce(union).unwrap_or(first.rect);
-            blocks.extend(group_layout(std::slice::from_ref(&line), false));
+            each(std::slice::from_ref(&line));
             start = offset + row.len();
         }
         offset += row.len();
     }
-    blocks.extend(group_layout(lines.get(start..).unwrap_or_default(), false));
-    blocks
+    each(lines.get(start..).unwrap_or_default());
 }
 
 /// Dotted leaders end in a page number, with a title before the dots. A dot in an article
@@ -188,14 +407,40 @@ fn starts_list_item(row: &[usize], lines: &[TextLine]) -> bool {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.trim_start()).find(|t| !t.is_empty()).is_some_and(opens_with_marker)
 }
 
-fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
+/// Whether a painted wall (a thin rectangle: a cell border, a rule) stands between two upright
+/// boxes: between `a` and `b` side by side, or between `a` above and `b` below. A rule inside
+/// either box, such as an underline, does not separate them.
+fn walled(a: [f64; 4], b: [f64; 4], walls: &[[f64; 4]]) -> bool {
+    walls.iter().any(|w| {
+        let (cx, cy) = ((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0);
+        let beside = {
+            let (lo, hi) = (a[1].max(b[1]), a[3].min(b[3]));
+            let mid = (lo + hi) / 2.0;
+            w[2] - w[0] < w[3] - w[1] && cx >= a[2] - 0.5 && cx <= b[0] + 0.5 && w[1] <= mid && w[3] >= mid
+        };
+        let below = {
+            let (lo, hi) = (a[0].max(b[0]), a[2].min(b[2]));
+            let mid = (lo + hi) / 2.0;
+            w[3] - w[1] < w[2] - w[0] && cy <= a[1] + 0.5 && cy >= b[3] - 0.5 && w[0] <= mid && w[2] >= mid
+        };
+        beside || below
+    })
+}
+
+/// `mixed` lets lines of different styles share a block. `scans_apart` keeps OCR text (invisible
+/// lines over a scan) apart: words join only across a word space and rows never join, as the
+/// scan fixes where each sits (editing); otherwise OCR rows flow into paragraphs (export).
+fn group_layout(lines: &[TextLine], mixed: bool, scans_apart: bool, walls: &[[f64; 4]]) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let joins = rows.last().and_then(|r| r.last()).and_then(|i| lines.get(*i)).is_some_and(|prev| {
             let gap = line.frame_rect()[0] - prev.frame_rect()[2];
             // OCR words (invisible text over a scan) join only across a word space: a wider gap
             // is a table cell or a tab stop, which a rewrite would close up.
-            let scanned = !mixed || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));
+            // Mixed-style grouping also keeps visible text (a stamp, a page number) out of an OCR
+            // row, even when OCR rows flow together.
+            let alike = invisible(prev) == invisible(line);
+            let scanned = if scans_apart { alike && (!invisible(line) || gap < prev.size.max(line.size) * 0.6) } else { !mixed || alike };
             scanned
                 && (mixed || same_style(prev, line))
                 && same_plane(prev, line)
@@ -213,6 +458,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                         && (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.max(line.size) * 0.5))
                 && gap >= -prev.size.min(line.size) * 0.2
                 && gap < prev.size.max(line.size) * 1.5
+                && (walls.is_empty() || !(prev.upright() && line.upright() && walled(prev.rect, line.rect, walls)))
                 // Separate same-style text objects that merely touch or overlap, with no space
                 // between them, are separate labels (for example a paragraph dragged against
                 // another, #594). Style runs and words separated by a space or gap still join.
@@ -255,13 +501,15 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 || ((pr[0] + pr[2] - frame[0] - frame[2]) / 2.0).abs() < tol
                 || (pr[2] - frame[2]).abs() < tol
                 || hanging;
-            // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
-            (!mixed || !(invisible(prev) || invisible(first)))
+            // Editing keeps OCR lines apart: the scan fixes where each one is, so they never rewrap
+            // together. Export lets them flow, but keeps a visible row (a stamp) out of OCR rows.
+            (if scans_apart { !(invisible(prev) || invisible(first)) } else { !mixed || invisible(prev) == invisible(first) })
                 && (mixed || same_style(prev, first))
                 && same_plane(prev, first)
                 // The rewrite sets every row in the first one's horizontal scale.
                 && (prev.origin.state.scale - first.origin.state.scale).abs() < 1e-6
                 && aligned
+                && (walls.is_empty() || !(prev.upright() && first.upright() && walled(pr, frame, walls)))
                 && first.size.min(prev.size) >= first.size.max(prev.size) * 0.4
                 && gap > first.size.min(prev.size) * 0.8
                 && gap < first.size.max(prev.size) * 2.5

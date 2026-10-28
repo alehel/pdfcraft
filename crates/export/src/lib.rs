@@ -9,13 +9,33 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod pptx;
+mod word;
 mod zip;
 
 pub use pptx::pptx;
+pub use word::family;
 pub use zip::Zip;
 
+/// A stretch of one style inside a [`Block`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Run {
+    pub text: String,
+    /// Font family ("Liberation Serif"), empty when unknown.
+    pub font: String,
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [f64; 3],
+    /// Baseline shift above the row (points; negative below): superscripts and subscripts.
+    pub rise: f64,
+    /// Where the run starts on the page: the box of its first piece ([x0, y0, x1, y1], y up).
+    pub rect: [f64; 4],
+    /// The boxes of its words in order, when known (one per whitespace-separated word).
+    pub words: Vec<[f64; 4]>,
+}
+
 /// A paragraph of a page.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Block {
     pub text: String,
     /// [x0, y0, x1, y1] on the displayed page in points (y up).
@@ -28,6 +48,47 @@ pub struct Block {
     pub color: [f64; 3],
     /// Counterclockwise baseline angle in user space (degrees).
     pub rotation: f64,
+    /// Font family of the paragraph's main style, empty when unknown.
+    pub font: String,
+    /// The text in its style runs; empty means one run in the block's own style.
+    pub runs: Vec<Run>,
+    /// Each visual row's box, top to bottom; empty when unknown (then `rect` is one row).
+    pub lines: Vec<[f64; 4]>,
+}
+
+impl Block {
+    /// The style runs, or one run in the block's style when it has none.
+    pub fn runs(&self) -> Vec<Run> {
+        if self.runs.is_empty() {
+            vec![Run {
+                text: self.text.clone(),
+                font: self.font.clone(),
+                size: self.size,
+                bold: self.bold,
+                italic: self.italic,
+                color: self.color,
+                rise: 0.0,
+                rect: self.rect,
+                words: Vec::new(),
+            }]
+        } else {
+            self.runs.clone()
+        }
+    }
+
+    /// The rows' boxes, or the block's box as its one row.
+    pub fn rows(&self) -> Vec<[f64; 4]> {
+        if self.lines.is_empty() { vec![self.rect] } else { self.lines.clone() }
+    }
+}
+
+/// A rectangle the page paints in one colour: a filled box, or the area a stroked horizontal or
+/// vertical line covers (table borders, rules, underlines).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shape {
+    pub rect: [f64; 4],
+    pub color: [f64; 3],
+    pub stroked: bool,
 }
 
 /// An image of a page.
@@ -52,6 +113,8 @@ pub struct Page {
     /// The colour the whole page is painted before its content (a page background), as sRGB
     /// components in 0..=1; `None` for a page with no background of its own.
     pub background: Option<[f64; 3]>,
+    /// Filled boxes and straight lines the page paints, in painting order.
+    pub shapes: Vec<Shape>,
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header
@@ -147,7 +210,7 @@ fn continuations(blocks: &[Block]) -> Vec<bool> {
 }
 /// A cell is short: taller blocks are body text (or a multi-column layout), not table cells.
 fn is_cell_like(b: &Block) -> bool {
-    (b.rect[3] - b.rect[1]) <= b.size * 5.0 && !b.text.trim().is_empty()
+    (b.rect[3] - b.rect[1]) <= b.size * 5.0 && b.lines.len() <= 3 && !b.text.trim().is_empty()
 }
 
 /// Detect tables in a page's blocks from their text layout: columns are left edges shared by
@@ -405,7 +468,29 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
     for it in items(pages) {
         match it {
             Item::Para(b, lvl) => {
-                let mut t = esc(&b.text);
+                // The paragraph's own style is on the element; runs that differ are marked up inline.
+                let mut t = String::new();
+                for r in b.runs() {
+                    let mut piece = esc(&word::readable(&r.text));
+                    if r.italic && !b.italic {
+                        piece = format!("<em>{piece}</em>");
+                    }
+                    if r.bold && !b.bold {
+                        piece = format!("<strong>{piece}</strong>");
+                    }
+                    // A plain run inside a bold or italic paragraph, which the element wraps whole, or
+                    // inside a heading, which browsers set bold.
+                    if !r.italic && b.italic {
+                        piece = format!("<span style=\"font-style:normal\">{piece}</span>");
+                    }
+                    if !r.bold && (b.bold || lvl > 0) {
+                        piece = format!("<span style=\"font-weight:normal\">{piece}</span>");
+                    }
+                    if rgb8(r.color) != rgb8(b.color) {
+                        piece = format!("<span style=\"color:#{}\">{piece}</span>", hex(r.color).unwrap_or_else(|| "000000".into()));
+                    }
+                    t.push_str(&piece);
+                }
                 if b.italic {
                     t = format!("<em>{t}</em>");
                 }
@@ -665,6 +750,21 @@ fn section(page: &Page) -> String {
     )
 }
 
+/// The font family most of the document's characters are set in (empty when none is known).
+fn main_font(pages: &[Page]) -> String {
+    let mut by: Vec<(String, usize)> = Vec::new();
+    for r in pages.iter().flat_map(|p| &p.blocks).flat_map(|b| b.runs()) {
+        if r.font.is_empty() {
+            continue;
+        }
+        match by.iter_mut().find(|e| e.0 == r.font) {
+            Some(e) => e.1 += r.text.len(),
+            None => by.push((r.font.clone(), r.text.len())),
+        }
+    }
+    by.into_iter().max_by_key(|e| e.1).map(|e| e.0).unwrap_or_default()
+}
+
 /// The page colour of a Word document: Word has one background for the whole document, so it
 /// is written only when every page has the same, non-white background (#2992).
 fn word_background(pages: &[Page]) -> Option<String> {
@@ -680,7 +780,6 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut media: Vec<(String, &Image)> = Vec::new();
     // Word needs a paragraph between adjacent tables and after the last one in the body.
     let mut after_table = false;
-    let run = |b: &Block| run_xml(&b.text, b.size, b.bold, b.italic, b.color);
     let mut shape_id = 0usize;
     for (page_index, page) in pages.iter().enumerate() {
         let (pw, _) = word_page_size(page);
@@ -689,6 +788,7 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
             body.push_str(&positioned_page(page, &mut media, &mut shape_id));
             after_table = false;
         } else {
+            let underlines = word::Underlines::new(page);
             for it in items(std::slice::from_ref(page)) {
                 match &it {
                     Item::Para(b, lvl) => {
@@ -697,7 +797,7 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
                             2 => "<w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr>",
                             _ => "",
                         };
-                        body.push_str(&format!("<w:p>{style}{}</w:p>", run(b)));
+                        body.push_str(&format!("<w:p>{style}{}</w:p>", word::block_runs_xml(b, &underlines)));
                     }
                     Item::Table(t) => {
                         if after_table {
@@ -779,11 +879,23 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
         doc_rels.push_str("<Relationship Id=\"rIdSettings\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings\" Target=\"settings.xml\"/>");
     }
     doc_rels.push_str("</Relationships>");
-    let styles = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
+    // The document's default font: the family most of its text is set in.
+    let font = main_font(pages);
+    let defaults = if font.is_empty() {
+        String::new()
+    } else {
+        let f = esc(&font);
+        format!(
+            "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"{f}\" w:hAnsi=\"{f}\" w:cs=\"{f}\" w:eastAsia=\"{f}\"/></w:rPr></w:rPrDefault></w:docDefaults>"
+        )
+    };
+    let styles = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">{defaults}\
 <w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:pPr><w:spacing w:after=\"120\"/></w:pPr></w:style>\
-<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"240\"/><w:outlineLvl w:val=\"0\"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>\
-<w:style w:type=\"paragraph\" w:styleId=\"Heading2\"><w:name w:val=\"heading 2\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"200\"/><w:outlineLvl w:val=\"1\"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>\
-</w:styles>";
+<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"240\"/><w:outlineLvl w:val=\"0\"/></w:pPr></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Heading2\"><w:name w:val=\"heading 2\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"200\"/><w:outlineLvl w:val=\"1\"/></w:pPr></w:style>\
+</w:styles>"
+    );
     let core = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>{}</dc:title></cp:coreProperties>",
         esc(title)
@@ -839,7 +951,10 @@ pub fn rtf(pages: &[Page]) -> String {
     };
     for it in &items {
         match it {
-            Item::Para(b, _) => note(b.color),
+            Item::Para(b, _) => {
+                note(b.color);
+                b.runs().iter().for_each(|r| note(r.color));
+            }
             Item::Table(t) => t.rows.iter().flatten().for_each(|c| note(c.color)),
             Item::Img(_) | Item::PageBreak => {}
         }
@@ -868,7 +983,28 @@ pub fn rtf(pages: &[Page]) -> String {
                     fmt.push_str("\\i");
                 }
                 fmt.push_str(&cf(b.color));
-                s.push_str(&format!("{{\\pard{fmt} {}\\par}}\n", rtf_text(&b.text)));
+                // Runs that differ from the paragraph's style, each in a group of its own.
+                let mut body = String::new();
+                for r in b.runs() {
+                    let mut rf = String::new();
+                    if r.bold != b.bold {
+                        rf.push_str(if r.bold { "\\b" } else { "\\b0" });
+                    }
+                    if r.italic != b.italic {
+                        rf.push_str(if r.italic { "\\i" } else { "\\i0" });
+                    }
+                    if rgb8(r.color) != rgb8(b.color) {
+                        let c = cf(r.color);
+                        rf.push_str(if c.is_empty() { "\\cf0" } else { &c });
+                    }
+                    let text = rtf_text(&word::readable(&r.text));
+                    if rf.is_empty() {
+                        body.push_str(&text);
+                    } else {
+                        body.push_str(&format!("{{{rf} {text}}}"));
+                    }
+                }
+                s.push_str(&format!("{{\\pard{fmt} {body}\\par}}\n"));
             }
             Item::Table(t) => {
                 let mut edges = t.cols.clone();
@@ -920,6 +1056,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         Page {
             width: 612.0,
@@ -938,6 +1075,7 @@ mod tests {
                 rotation: 0.0,
             }],
             background: None,
+            shapes: Vec::new(),
         }
     }
 
@@ -1002,6 +1140,7 @@ mod tests {
             italic: false,
             color: [0.8; 3],
             rotation: 0.0,
+            ..Default::default()
         });
         p.images = page().images;
         let xml = part(&docx(&[p], "Invoice"), "word/document.xml");
@@ -1088,6 +1227,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         });
         let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
         assert!(xml.contains(">Total 4.50\tGBP</w:t>"), "{xml}");
@@ -1130,6 +1270,57 @@ mod tests {
         assert!(html(&[t], "Grid").contains("style=\"color:#FF0000\""));
     }
 
+    /// A bold, coloured phrase inside a sentence keeps its style inside the paragraph in every
+    /// format.
+    #[test]
+    fn inline_runs_survive_every_format() {
+        let run = |text: &str, bold: bool, color: [f64; 3]| Run { text: text.into(), size: 11.0, bold, color, ..Run::default() };
+        let mut p = page();
+        p.blocks[3].runs = vec![
+            run("Results were ", false, [0.0; 3]),
+            run("well ahead", true, [0.0; 3]),
+            run(" of target and ", false, [0.0; 3]),
+            run("rising", false, [1.0, 0.0, 0.0]),
+        ];
+        p.blocks[3].text = "Results were well ahead of target and rising".into();
+        let h = html(std::slice::from_ref(&p), "Runs");
+        assert!(h.contains("<p>Results were <strong>well ahead</strong> of target and <span style=\"color:#FF0000\">rising</span></p>"), "{h}");
+        let r = rtf(std::slice::from_ref(&p));
+        assert!(r.contains("Results were {\\b well ahead} of target and {\\cf1 rising}\\par"), "{r}");
+        let slide = part(&pptx(std::slice::from_ref(&p), "Runs"), "ppt/slides/slide1.xml");
+        let bold_run = slide.split("<a:t>well ahead</a:t>").next().and_then(|r| r.rsplit("<a:r>").next()).unwrap_or_default();
+        assert!(bold_run.contains("b=\"1\""), "{slide}");
+        let xml = part(&docx(&[p], "Runs"), "word/document.xml");
+        assert!(xml.contains("<w:b/><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/></w:rPr><w:t xml:space=\"preserve\">well ahead</w:t>"), "{xml}");
+    }
+
+    /// A plain phrase inside a bold or italic paragraph stays plain in HTML.
+    #[test]
+    fn html_keeps_a_plain_phrase_inside_a_bold_paragraph() {
+        let run = |text: &str, bold: bool, italic: bool| Run { text: text.into(), size: 11.0, bold, italic, ..Run::default() };
+        let mut p = page();
+        let b = &mut p.blocks[3];
+        (b.bold, b.italic) = (true, true);
+        b.runs = vec![run("Mostly bold ", true, true), run("plain", false, false), run(" text, long enough to stay body text here.", true, true)];
+        b.text = b.runs.iter().map(|r| r.text.as_str()).collect();
+        let h = html(&[p], "Runs");
+        assert!(h.contains("<span style=\"font-weight:normal\"><span style=\"font-style:normal\">plain</span></span>"), "{h}");
+    }
+
+    /// A plain phrase inside a heading, which browsers set bold, stays plain, whether the
+    /// heading is mostly bold or set in a regular weight.
+    #[test]
+    fn html_keeps_a_plain_phrase_inside_a_heading() {
+        let run = |text: &str, bold: bool| Run { text: text.into(), size: 24.0, bold, ..Run::default() };
+        let mut p = page();
+        p.blocks[1].runs = vec![run("Annual ", true), run("Report", false)];
+        let h = html(std::slice::from_ref(&p), "Heading");
+        assert!(h.contains("<h1>Annual <span style=\"font-weight:normal\">Report</span></h1>"), "{h}");
+        p.blocks[1].bold = false;
+        let h = html(&[p], "Heading");
+        assert!(h.contains("<h1><strong>Annual </strong><span style=\"font-weight:normal\">Report</span></h1>"), "{h}");
+    }
+
     #[test]
     fn rtf_escapes_and_sizes() {
         let mut p = page();
@@ -1141,6 +1332,7 @@ mod tests {
             italic: true,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         });
         let r = rtf(&[p]);
         assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
@@ -1158,6 +1350,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         Page {
             width: 612.0,
@@ -1181,10 +1374,12 @@ mod tests {
                     italic: false,
                     color: [0.0; 3],
                     rotation: 0.0,
+                    ..Default::default()
                 },
             ],
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         }
     }
 
@@ -1233,7 +1428,16 @@ mod tests {
             .map(|i| {
                 let (row, col) = (i / 2, i / 2 + i % 2);
                 let (x, y) = (10.0 + col as f64 * 20.0, 10_000.0 - row as f64 * 14.0);
-                Block { text: "x".into(), rect: [x, y, x + 8.0, y + 12.0], size: 11.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0 }
+                Block {
+                    text: "x".into(),
+                    rect: [x, y, x + 8.0, y + 12.0],
+                    size: 11.0,
+                    bold: false,
+                    italic: false,
+                    color: [0.0; 3],
+                    rotation: 0.0,
+                    ..Default::default()
+                }
             })
             .collect();
         let started = std::time::Instant::now();
@@ -1260,12 +1464,14 @@ mod tests {
                             italic: false,
                             color: [0.0; 3],
                             rotation: 0.0,
+                            ..Default::default()
                         }
                     })
                 })
                 .collect(),
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         };
         let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
         assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
@@ -1274,7 +1480,7 @@ mod tests {
     }
 
     fn block(t: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
-        Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0 }
+        Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0, ..Default::default() }
     }
 
     /// #2806: a sentence whose link is set in another colour or font runs on as separate blocks
@@ -1301,6 +1507,7 @@ mod tests {
             ],
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         };
         let h = html(std::slice::from_ref(&p), "Regulations");
         assert!(!h.contains("<table>"), "running text became a table: {h}");
@@ -1320,7 +1527,7 @@ mod tests {
             blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
             blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, shapes: Vec::new() };
         let h = html(std::slice::from_ref(&p), "Event");
         assert!(!h.contains("<table>"), "sentences became a table: {h}");
         assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
@@ -1337,7 +1544,7 @@ mod tests {
             blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
             blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, shapes: Vec::new() };
         let h = html(std::slice::from_ref(&p), "Prizes");
         assert!(h.contains("<table>"), "the prize table was lost: {h}");
         assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
@@ -1353,6 +1560,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            ..Default::default()
         };
         let p = Page {
             width: 612.0,
@@ -1365,9 +1573,37 @@ mod tests {
             ],
             images: Vec::new(),
             background: None,
+            shapes: Vec::new(),
         };
         let h = html(&[p], "Paper");
         assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");
+    }
+
+    /// Four-row paragraphs side by side are prose in columns even when their rows are tight
+    /// enough to fit a cell's height.
+    #[test]
+    fn short_paragraphs_of_several_rows_are_not_table_cells() {
+        let para = |t: &str, x: f64, top: f64| {
+            let lines: Vec<[f64; 4]> = (0..4).map(|i| [x, top - 13.0 * (i + 1) as f64, x + 200.0, top - 13.0 * i as f64 - 2.0]).collect();
+            Block { text: t.into(), rect: [x, top - 52.0, x + 200.0, top - 2.0], size: 11.0, lines, ..Default::default() }
+        };
+        let p = Page {
+            width: 612.0,
+            height: 792.0,
+            blocks: vec![
+                para("Left column text of the page, long enough to be a flowing paragraph.", 72.0, 600.0),
+                para("Right column text of the page, long enough to be a flowing paragraph.", 320.0, 600.0),
+                para("Second left block, still a flowing paragraph of four rows, not a cell.", 72.0, 530.0),
+                para("Second right block, still a flowing paragraph of four rows, not a cell.", 320.0, 530.0),
+                para("Third left block, again a flowing paragraph of four rows, not a cell.", 72.0, 460.0),
+                para("Third right block, again a flowing paragraph of four rows, not a cell.", 320.0, 460.0),
+            ],
+            images: Vec::new(),
+            background: None,
+            shapes: Vec::new(),
+        };
+        let h = html(&[p], "Paper");
+        assert!(!h.contains("<table>"), "four-row paragraphs must stay paragraphs: {h}");
     }
 
     /// #1936: every picture Word is told to draw (`r:embed`) names a relationship whose target is a

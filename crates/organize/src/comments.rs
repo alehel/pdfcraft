@@ -469,6 +469,28 @@ mod tests {
     }
 
     #[test]
+    fn a_layer_hidden_by_the_base_state_stays_hidden() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R] /D << /BaseState /OFF >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+            "<< >>",
+            "<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /OC 6 0 R /P 3 0 R >>",
+            "<< /Type /OCG /Name (Review) >>",
+        ]);
+        let mut doc = original();
+        import_comments(&mut doc, &src).unwrap();
+        let (_, square) =
+            page_annots(&doc, 0).into_iter().find(|(_, d)| d.name(b"Subtype") == Some(b"Square".as_slice()) && d.contains(b"OC")).unwrap();
+        let layer = square.reference(b"OC").unwrap();
+        let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        let props = doc.resolve(catalog.get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
+        let config = props.get(b"D").and_then(Object::as_dict).cloned().unwrap();
+        assert_eq!(config.get(b"OFF"), Some(&Object::Array(vec![Object::Ref(layer)])), "the layer stays hidden");
+        assert_eq!(config.get(b"ON"), Some(&Object::Array(vec![])));
+    }
+
+    #[test]
     fn a_long_thread_goes_with_its_first_comment_and_a_loop_of_replies_stays() {
         // Page 1: replies 6, 7, … each answering the next, the last answering the square on page 3,
         // which the document has no page for. Then two replies that answer each other.

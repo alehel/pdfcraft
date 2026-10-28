@@ -436,14 +436,18 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     if ocgs.is_empty() {
         return Ok(());
     }
-    let src_off: Vec<Object> = src
+    let src_config: Dict = src
         .root()
         .and_then(|r| src.get(r).as_dict().cloned())
         .and_then(|c| c.get(b"OCProperties").map(|o| src.resolve(o)))
         .and_then(|o| o.as_dict().and_then(|d| d.get(b"D")).map(|d| src.resolve(d)))
-        .and_then(|d| d.as_dict().and_then(|d| d.get(b"OFF")).map(|o| src.resolve(o)))
-        .and_then(|o| o.as_array().cloned())
+        .and_then(|d| d.as_dict().cloned())
         .unwrap_or_default();
+    let src_list = |k: &[u8]| src_config.get(k).map(|v| src.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let (src_on, src_off) = (src_list(b"ON"), src_list(b"OFF"));
+    // With `/BaseState /OFF`, a layer is hidden unless `/ON` lists it (§8.11.4.3, Table 101).
+    let base_off = src_config.get(b"BaseState").map(|b| src.resolve(b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
+    let hidden = |r: &Object| src_off.contains(r) || (base_off && !src_on.contains(r));
     let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
     let catalog = dst.get(root).as_dict().cloned().ok_or(OrganizeError::NoPageTree)?;
     let (props_ref, mut props) = match catalog.get(b"OCProperties") {
@@ -462,7 +466,7 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
         }
         all.push(r.clone());
         order.push(r.clone());
-        if src_off.contains(&Object::Ref(*from)) { off.push(r) } else { on.push(r) }
+        if hidden(&Object::Ref(*from)) { off.push(r) } else { on.push(r) }
     }
     props.set(b"OCGs".to_vec(), Object::Array(all));
     config.set(b"ON".to_vec(), Object::Array(on));

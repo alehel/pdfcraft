@@ -258,6 +258,11 @@ impl Document {
         self.editor.as_ref().map(|e| pdfcraft_forms::calculation_order(&e.cos, &self.form)).unwrap_or_default()
     }
 
+    /// Page properties ▸ Tab order: each page's tab order, in page order.
+    pub fn tab_orders(&self) -> Vec<TabOrder> {
+        self.editor.as_ref().map(|e| pdfcraft_forms::tab_orders(&e.cos)).unwrap_or_default()
+    }
+
     /// Add alternate text: the figures, in document order.
     pub fn figures(&self) -> Vec<a11y::Figure> {
         self.editor.as_ref().map(|e| a11y::figures(&e.cos)).unwrap_or_default()

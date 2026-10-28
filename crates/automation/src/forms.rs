@@ -600,17 +600,23 @@ impl Automation {
             };
             let mut out = self.apply(a, Edit::MoveInTabOrder { name: field.to_owned(), earlier })?;
             out["tab_order"] = self.tab_sequence(a)?;
+            out["page_tabs"] = self.page_tabs(a)?;
             return Ok(out);
         }
-        let order = match a.str("order")? {
-            "row" | "rows" => pdfcraft_engine::TabOrder::Row,
-            "column" | "columns" => pdfcraft_engine::TabOrder::Column,
-            "structure" => pdfcraft_engine::TabOrder::Structure,
-            "annotations" | "unspecified" => pdfcraft_engine::TabOrder::Annotations,
-            o => return Err(bad(format!("unknown order {o:?} (row, column, structure, annotations)"))),
+        let order = match a.opt_str("order")? {
+            None => None,
+            Some("row" | "rows") => Some(pdfcraft_engine::TabOrder::Row),
+            Some("column" | "columns") => Some(pdfcraft_engine::TabOrder::Column),
+            Some("structure") => Some(pdfcraft_engine::TabOrder::Structure),
+            Some("annotations" | "unspecified") => Some(pdfcraft_engine::TabOrder::Annotations),
+            Some(o) => return Err(bad(format!("unknown order {o:?} (row, column, structure, annotations)"))),
         };
-        let mut out = self.apply(a, Edit::SetTabOrder { pages, order })?;
+        let mut out = match order {
+            Some(order) => self.apply(a, Edit::SetTabOrder { pages, order })?,
+            None => json!({}),
+        };
         out["tab_order"] = self.tab_sequence(a)?;
+        out["page_tabs"] = self.page_tabs(a)?;
         Ok(out)
     }
 
@@ -669,6 +675,22 @@ impl Automation {
         seq.sort();
         seq.dedup_by(|x, y| x.1 == y.1);
         Ok(json!(seq.iter().map(|x| x.1).collect::<Vec<_>>()))
+    }
+
+    /// Each page's tab order (Page properties ▸ Tab order), in page order.
+    fn page_tabs(&self, a: &Args) -> Result<Value> {
+        let names: Vec<&str> = self
+            .doc(a)?
+            .tab_orders()
+            .into_iter()
+            .map(|o| match o {
+                pdfcraft_engine::TabOrder::Row => "row",
+                pdfcraft_engine::TabOrder::Column => "column",
+                pdfcraft_engine::TabOrder::Structure => "structure",
+                pdfcraft_engine::TabOrder::Annotations => "annotations",
+            })
+            .collect();
+        Ok(json!(names))
     }
 
     pub(crate) fn form_delete_field(&mut self, a: &Args) -> Result<Value> {

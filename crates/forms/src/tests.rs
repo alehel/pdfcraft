@@ -1876,6 +1876,73 @@ fn tab_order_follows_the_page_setting() {
 }
 
 #[test]
+fn rows_and_columns_tab_right_to_left_in_a_document_bound_on_the_right() {
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    // A (50,700)  B (300,700)
+    // C (50,600)  D (300,600)
+    for (name, x, y) in [("C", 50.0, 600.0), ("A", 50.0, 700.0), ("D", 300.0, 600.0), ("B", 300.0, 700.0)] {
+        add_field(&mut doc, 0, [x, y, x + 200.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let order = |doc: &Document| -> String {
+        let mut all: Vec<(usize, String)> = fields(doc).into_iter().map(|f| (f.widgets[0].tab, f.name)).collect();
+        all.sort();
+        all.into_iter().map(|x| x.1).collect()
+    };
+    let root = doc.root().unwrap();
+    let mut prefs = pdfcraft_cos::Dict::new();
+    prefs.set(b"Direction".to_vec(), Object::name("R2L"));
+    let prefs = doc.add(prefs);
+    doc.update_dict(root, |c| c.set(b"ViewerPreferences".to_vec(), Object::Ref(prefs))).unwrap();
+    set_tab_order(&mut doc, &[0], TabOrder::Row).unwrap();
+    assert_eq!(order(&doc), "BADC", "rows top to bottom, each right to left");
+    set_tab_order(&mut doc, &[0], TabOrder::Column).unwrap();
+    assert_eq!(order(&doc), "BDAC", "columns right to left, each top to bottom");
+    assert_eq!(order(&reopen(&doc)), "BDAC");
+    set_tab_order(&mut doc, &[0], TabOrder::Annotations).unwrap();
+    assert_eq!(order(&doc), "CADB", "unspecified keeps annotation order");
+    doc.update_dict(prefs, |p| p.set(b"Direction".to_vec(), Object::name("L2R"))).unwrap();
+    set_tab_order(&mut doc, &[0], TabOrder::Row).unwrap();
+    assert_eq!(order(&doc), "ABCD", "bound on the left");
+}
+
+#[test]
+fn tab_orders_are_read_for_each_page() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Tabs /C >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Tabs /S >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Tabs /W >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Tabs 8 0 R >>".into(),
+        "/R".into(),
+    ]);
+    use TabOrder::{Annotations, Column, Row, Structure};
+    assert_eq!(tab_orders(&doc), [Column, Annotations, Structure, Annotations, Row], "no /Tabs, or an unknown name: unspecified");
+    set_tab_order(&mut doc, &[1], Row).unwrap();
+    set_tab_order(&mut doc, &[0, 4], Annotations).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(tab_orders(&doc), [Annotations, Row, Structure, Annotations, Annotations]);
+}
+
+#[test]
+fn an_indirect_tabs_value_orders_the_page() {
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (name, x, y) in [("C", 50.0, 600.0), ("A", 50.0, 700.0), ("D", 300.0, 600.0), ("B", 300.0, 700.0)] {
+        add_field(&mut doc, 0, [x, y, x + 200.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let column = doc.add(Object::name("C"));
+    let page = page_refs(&doc)[0];
+    doc.update_dict(page, |p| p.set(b"Tabs".to_vec(), Object::Ref(column))).unwrap();
+    let mut all: Vec<(usize, String)> = fields(&doc).into_iter().map(|f| (f.widgets[0].tab, f.name)).collect();
+    all.sort();
+    assert_eq!(all.into_iter().map(|x| x.1).collect::<String>(), "ACBD", "columns, as a direct /C orders them");
+    assert_eq!(tab_orders(&doc), [TabOrder::Column]);
+}
+
+#[test]
 fn options_tab_flags_alignment_and_defaults() {
     let mut doc = one_page();
     let text = add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, None).unwrap();

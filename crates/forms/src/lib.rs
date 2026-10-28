@@ -46,7 +46,7 @@ pub use read::{Fields, acroform, adopted_page_fields, fields, fields_with_adopte
 #[cfg(test)]
 use read::{MAX_SCRIPT_BYTES, PageWalk, enumerate, form_reads};
 use read::{script, script_budget};
-pub use tab_order::{TabOrder, move_in_tab_order, set_tab_order};
+pub use tab_order::{TabOrder, move_in_tab_order, set_tab_order, tab_orders};
 #[cfg(test)]
 use values::has_password_flag;
 use values::write_value;

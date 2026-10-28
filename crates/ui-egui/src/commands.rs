@@ -355,6 +355,20 @@ impl PdfCraftApp {
                 }
                 self.dialog = Some(Dialog::NumberPages);
             }
+            "page.properties" => {
+                if let Some(i) = active
+                    && let Some(doc) = self.session.get(self.views[i].id)
+                {
+                    let pages = self.views[i].target_pages();
+                    let orders = doc.tab_orders();
+                    let mut theirs = pages.iter().map(|p| orders.get(*p).copied());
+                    let first = theirs.next().flatten();
+                    let before = if theirs.all(|o| o == first) { first } else { None };
+                    let generation = doc.edit_generation();
+                    self.page_props_draft = Some(crate::PagePropsDraft { doc: self.views[i].id, generation, pages, before, tab_order: before });
+                    self.dialog = Some(Dialog::PageProps);
+                }
+            }
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
             "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
             "bookmark.from_text_styles" => self.bookmark_action(crate::panels::BmAction::FromTextStyles),

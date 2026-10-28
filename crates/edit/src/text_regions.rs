@@ -501,8 +501,9 @@ fn group_layout(lines: &[TextLine], mixed: bool, scans_apart: bool, walls: &[[f6
                 || ((pr[0] + pr[2] - frame[0] - frame[2]) / 2.0).abs() < tol
                 || (pr[2] - frame[2]).abs() < tol
                 || hanging;
-            // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
-            (!scans_apart || !(invisible(prev) || invisible(first)))
+            // Editing keeps OCR lines apart: the scan fixes where each one is, so they never rewrap
+            // together. Export lets them flow, but keeps a visible row (a stamp) out of OCR rows.
+            (if scans_apart { !(invisible(prev) || invisible(first)) } else { !mixed || invisible(prev) == invisible(first) })
                 && (mixed || same_style(prev, first))
                 && same_plane(prev, first)
                 // The rewrite sets every row in the first one's horizontal scale.

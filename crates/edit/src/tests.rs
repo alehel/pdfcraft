@@ -6455,3 +6455,24 @@ fn reading_paragraphs_keep_visible_text_out_of_ocr_rows() {
     let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
     assert_eq!(texts, ["Scanned words of the row", "PAID"]);
 }
+
+/// A visible line under OCR rows stays a paragraph of its own in export.
+#[test]
+fn reading_paragraphs_keep_a_visible_row_out_of_ocr_rows() {
+    let doc = helvetica_page(
+        "BT 3 Tr /F1 11 Tf 72 700 Td (The first scanned row of a paragraph is the longest one here) Tj ET BT 0 Tr /F1 11 Tf 72 687 Td (RECEIVED 2026-10-01) Tj ET",
+    );
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["The first scanned row of a paragraph is the longest one here", "RECEIVED 2026-10-01"]);
+}
+
+/// Editing's lines are as they were: words drawn as separate text objects with an invisible
+/// space between them are one line, and so is a run that switches to invisible text.
+#[test]
+fn editing_lines_join_across_an_invisible_space() {
+    let doc = helvetica_page("BT /F1 11 Tf 72 700 Td (Hello) Tj ET BT 3 Tr /F1 11 Tf 99 700 Td ( ) Tj ET BT 0 Tr /F1 11 Tf 102 700 Td (world) Tj ET");
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let read: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(read.len(), 1, "an invisible space joins either way: {read:?}");
+}

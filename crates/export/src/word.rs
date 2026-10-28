@@ -15,6 +15,9 @@ pub(crate) struct Frame {
 
 /// A line's pitch as a multiple of its font size, when a page gives no paragraph to measure.
 const DEFAULT_PITCH: f64 = 1.15;
+/// Most cells a grid framing the page's text has (a border with rules under the header, over
+/// the footer and down the middle); a grid with more is a table.
+const MAX_FRAME_CELLS: usize = 6;
 /// Most rows a table rebuilt from its borders may have.
 const MAX_RULED_ROWS: usize = 500;
 /// Most rules looked at on one page when rebuilding tables (pairs of them are compared).
@@ -398,8 +401,8 @@ fn clusters(mut values: Vec<f64>, tol: f64) -> Vec<f64> {
 
 /// Tables whose grid the page draws: rules that cross each other, two or more each way. Each
 /// block whose middle lies in a cell goes into it (and is consumed); a filled box covering most
-/// of a cell is its shading. A grid whose cells hold several paragraphs each frames the text
-/// instead, and is returned as such.
+/// of a cell is its shading. A grid that frames the page's text is not a table; its rules are
+/// returned so they are not read as boxes or rules either.
 pub(crate) fn ruled_tables(page: &Page) -> Ruled {
     let mut consumed = vec![false; page.blocks.len()];
     let mut frames = Vec::new();
@@ -529,12 +532,25 @@ pub(crate) fn ruled_tables(page: &Page) -> Ruled {
             }
         }
         let filled = rows.iter().flatten().filter(|c| !c.blocks.is_empty()).count();
-        // A frame around the text (a page border, perhaps with a rule under the header or down
-        // the middle) is not a table: its cells hold several paragraphs each, where a table's
-        // hold a value or two. Its rules are then left out of the boxes and rules found later.
-        let paragraphs =
-            rows.iter().flatten().flat_map(|c| &c.blocks).filter(|i| page.blocks.get(**i).is_some_and(|b| !b.text.trim().is_empty())).count();
-        let frame_like = filled > 0 && paragraphs > 3 * filled;
+        // A frame around the text (a page border, perhaps with rules under the header, over the
+        // footer or down the middle) is not a table. It is told by its geometry: few cells,
+        // covering most of the page and holding most of its text. Its rules are then left out
+        // of the boxes and rules found later.
+        let page_area = page.width * page.height;
+        let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+        let texts: Vec<&Block> = page.blocks.iter().filter(|b| !b.text.trim().is_empty()).collect();
+        let enclosed = texts
+            .iter()
+            .filter(|b| {
+                let (cx, cy) = ((b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0);
+                cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1
+            })
+            .count();
+        let frame_like = rows.iter().flatten().count() <= MAX_FRAME_CELLS
+            && page_area.is_finite()
+            && area(rect) >= page_area * 0.5
+            && !texts.is_empty()
+            && enclosed * 5 >= texts.len() * 4;
         if frame_like {
             frames.extend(hs.iter().map(|r| [r.from, r.at, r.to, r.at]));
             frames.extend(vs.iter().map(|r| [r.at, r.from, r.at, r.to]));
@@ -552,7 +568,6 @@ pub(crate) fn ruled_tables(page: &Page) -> Ruled {
         }
         // Shading: the last filled box (painted on top) covering most of a cell. The fills over
         // the table are picked once, topmost first and a bounded number, then each row's.
-        let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
         let table_area = area(rect);
         let overlaps = |a: &[f64; 4], b: &[f64; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
         let fills: Vec<&Shape> = page
@@ -2094,6 +2109,102 @@ mod tests {
             Run { text: "Item text".into(), size: 11.0, rect: row(90.0, 140.0), words: vec![row(90.0, 112.0), row(115.0, 140.0)], ..Run::default() },
         ];
         assert_eq!(hanging(split), "360");
+    }
+
+    /// A box (one ruled rectangle) around several paragraphs keeps its border; a ruled table
+    /// whose cells hold an address each stays a bordered table; a framed page with only a few
+    /// paragraphs is not a table, and a real table inside it stays one.
+    #[test]
+    fn boxes_address_tables_and_short_framed_pages() {
+        let ln = |x0: f64, y0: f64, x1: f64, y1: f64| line(x0, y0, x1, y1);
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![ln(x0, y0, x1, y0), ln(x0, y1, x1, y1), ln(x0, y0, x0, y1), ln(x1, y0, x1, y1)];
+        let body = |n: usize, x: f64, top: f64| -> Vec<Block> {
+            (0..n).map(|i| para(&format!("Line {i} at {x}"), x, x + 150.0, top - 14.0 * i as f64, 1, x + 150.0)).collect()
+        };
+
+        // A sidebar box around five paragraphs.
+        let mut blocks = body(5, 110.0, 690.0);
+        blocks.push(para("Text outside the box, long enough to set the page's text area.", 72.0, 540.0, 500.0, 1, 540.0));
+        let xml = part(&docx(&[page(blocks, rect(100.0, 610.0, 300.0, 700.0))], "Box"), "word/document.xml");
+        assert_eq!(xml.matches("<w:pBdr>").count(), 5, "{xml}");
+
+        // Sender | recipient, four lines each, ruled.
+        let mut shapes = rect(100.0, 620.0, 500.0, 700.0);
+        shapes.push(ln(300.0, 620.0, 300.0, 700.0));
+        let mut blocks = body(4, 105.0, 695.0);
+        blocks.extend(body(4, 305.0, 695.0));
+        blocks.push(para("A closing paragraph below the addresses.", 72.0, 540.0, 500.0, 1, 540.0));
+        let xml = part(&docx(&[page(blocks, shapes)], "Addresses"), "word/document.xml");
+        assert!(xml.contains("<w:tbl>") && xml.contains("<w:insideV w:val=\"single\""), "{xml}");
+
+        // A page border and a header rule around three paragraphs and a real 2×2 table.
+        let mut shapes = rect(36.0, 36.0, 576.0, 756.0);
+        shapes.push(ln(36.0, 720.0, 576.0, 720.0));
+        shapes.extend([700.0, 680.0, 660.0].iter().map(|y| ln(100.0, *y, 400.0, *y)));
+        shapes.extend([100.0, 250.0, 400.0].iter().map(|x| ln(*x, 660.0, *x, 700.0)));
+        let mut blocks = vec![para("Report title", 72.0, 300.0, 748.0, 1, 300.0)];
+        for (t, x, top) in [("A", 105.0, 696.0), ("B", 255.0, 696.0), ("C", 105.0, 676.0), ("D", 255.0, 676.0)] {
+            blocks.push(para(t, x, x + 20.0, top, 1, x + 20.0));
+        }
+        blocks.push(para("Body paragraph 0.", 72.0, 540.0, 600.0, 2, 300.0));
+        let p = page(blocks, shapes);
+        let xml = part(&docx(std::slice::from_ref(&p), "Short frame"), "word/document.xml");
+        assert_eq!(xml.matches("<w:tbl>").count(), 1, "only the real table: {xml}");
+        assert_eq!(xml.matches("<w:gridCol ").count(), 2, "{xml}");
+        assert!(!xml.contains("<w:pBdr>"), "the frame draws no boxes: {xml}");
+        let h = html(&[p], "Short frame");
+        assert!(h.contains("<td>A</td><td>B</td>") && h.contains("<p>Body paragraph 0.</p>"), "{h}");
+
+        // A page border and a header rule around three paragraphs.
+        let mut shapes = rect(36.0, 36.0, 576.0, 756.0);
+        shapes.push(ln(36.0, 720.0, 576.0, 720.0));
+        let mut blocks = vec![para("Report title", 72.0, 300.0, 748.0, 1, 300.0)];
+        blocks.extend((0..3).map(|i| para(&format!("Body paragraph {i}."), 72.0, 540.0, 600.0 - 40.0 * i as f64, 2, 300.0)));
+        let xml = part(&docx(&[page(blocks, shapes)], "Three"), "word/document.xml");
+        assert!(!xml.contains("<w:tbl>") && !xml.contains("<w:pBdr>"), "{xml}");
+    }
+
+    /// A box around a box is sized to every paragraph inside it, the inner box's too.
+    #[test]
+    fn an_outer_box_is_sized_to_everything_inside_it() {
+        let ln = |x0: f64, y0: f64, x1: f64, y1: f64| line(x0, y0, x1, y1);
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![ln(x0, y0, x1, y0), ln(x0, y1, x1, y1), ln(x0, y0, x0, y1), ln(x1, y0, x1, y1)];
+        let mut shapes = rect(100.0, 600.0, 400.0, 700.0);
+        shapes.extend(rect(120.0, 604.0, 380.0, 632.0));
+        let blocks = vec![
+            para("In the outer box only", 110.0, 300.0, 690.0, 1, 300.0),
+            para("In the inner box", 130.0, 300.0, 625.0, 1, 300.0),
+            para("Text outside both boxes, long enough to set the page's text area.", 72.0, 540.0, 500.0, 1, 540.0),
+        ];
+        let xml = part(&docx(&[page(blocks, shapes)], "Nested"), "word/document.xml");
+        let outer = xml.split(">In the outer box only<").next().and_then(|p| p.rsplit("<w:p>").next()).unwrap_or_default().to_string();
+        let bottom = outer
+            .split("<w:bottom ")
+            .nth(1)
+            .and_then(|b| b.split("w:space=\"").nth(1))
+            .and_then(|v| v.split('"').next())
+            .unwrap_or_default()
+            .to_string();
+        // The outer box's lowest text is the inner box's paragraph, a few points above it.
+        assert!(bottom.parse::<i64>().is_ok_and(|v| v < 20), "bottom space {bottom}: {xml}");
+    }
+
+    /// A marker drawn as touching pieces ("1" and ".") is dropped with both its boxes, so the
+    /// words after it keep their underline.
+    #[test]
+    fn a_marker_in_pieces_leaves_the_words_after_it_matched() {
+        let row = |x0: f64, x1: f64| [x0, 689.0, x1, 700.0];
+        let mut b = para("1. see the handbook", 72.0, 300.0, 700.0, 1, 300.0);
+        b.runs = vec![Run {
+            text: "1. see the handbook".into(),
+            size: 11.0,
+            rect: row(72.0, 200.0),
+            words: vec![row(72.0, 77.0), row(77.0, 80.0), row(90.0, 107.0), row(110.0, 127.0), row(130.0, 180.0)],
+            ..Run::default()
+        }];
+        let xml = part(&docx(&[page(vec![b], vec![line(130.0, 690.0, 180.0, 690.0)])], "Item"), "word/document.xml");
+        let run_of = |w: &str| xml.split(&format!(">{w}")).next().and_then(|r| r.rsplit("<w:r>").next()).unwrap_or_default().to_string();
+        assert!(run_of("handbook").contains("<w:u ") && !run_of("see ").contains("<w:u "), "{xml}");
     }
 
     /// An empty page keeps Word's default margins.

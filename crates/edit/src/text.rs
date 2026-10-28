@@ -1404,17 +1404,18 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
         && same(&[a.scale, a.rise], &[b.scale, b.rise])
         && a.fill.len() == b.fill.len()
         && a.fill.iter().zip(&b.fill).all(|(a, b)| a.op == b.op && a.operands == b.operands)
-        // Invisible text (an OCR layer) and visible text (a stamp on the same line) are
-        // different lines, even when their text objects otherwise match.
-        && (a.render_mode == 3) == (b.render_mode == 3)
 }
 
 /// The line `s` continues, or a new one: `last` is the previous run of the same stream
 /// (`bt`, baseline, end x, size).
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
+    // Reading keeps invisible text (an OCR layer) and visible text (a stamp on its line) in
+    // separate lines, even within one text object; a space drawn either way joins either.
+    let visibility_matches =
+        |l: &TextLine| s.text.trim().is_empty() || l.text.trim().is_empty() || (l.origin.state.render_mode == 3) == (s.state.render_mode == 3);
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
-        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order && visibility_matches(l))
             && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
             && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
             && (s.text.trim().is_empty()

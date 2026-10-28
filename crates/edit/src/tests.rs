@@ -6355,3 +6355,150 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
         ]
     );
 }
+
+/// A page in Helvetica (`/F1`) and Helvetica-Bold (`/F2`) with `content` and nothing else.
+fn helvetica_page(content: &str) -> Document {
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        &stream("", content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+    ])
+}
+
+/// Export to Word keeps a bold phrase inside its sentence: one paragraph with three runs over
+/// two rows, where reading blocks (one style each) split it apart.
+#[test]
+fn reading_paragraphs_keep_a_bold_phrase_inside_its_sentence() {
+    let doc = helvetica_page(
+        "BT /F1 11 Tf 72 700 Td (Overall, results were ) Tj /F2 11 Tf (well ahead) Tj /F1 11 Tf ( of target, and the score rose) Tj ET \
+         BT /F1 11 Tf 72 687 Td (for the third quarter running.) Tj ET",
+    );
+    let read = text::reading_paragraphs(&doc, 0).unwrap();
+    assert_eq!(read.paragraphs.len(), 1, "{:?}", read.paragraphs.iter().map(|p| &p.text).collect::<Vec<_>>());
+    let p = &read.paragraphs[0];
+    assert_eq!(p.text, "Overall, results were well ahead of target, and the score rose for the third quarter running.");
+    assert_eq!(p.rows.len(), 2);
+    let bold: Vec<&str> = p.runs.iter().filter(|r| r.base_font.contains("Bold")).map(|r| r.text.as_str()).collect();
+    assert_eq!(bold, ["well ahead"]);
+    assert!(!p.base_font.contains("Bold"), "the paragraph's own style is its main one: {}", p.base_font);
+    assert!(p.runs.iter().all(|r| r.words.len() == r.text.split_whitespace().count()), "{:?}", p.runs);
+    assert!(text::reading_blocks(&doc, 0).unwrap().len() > 1, "blocks keep one style each");
+}
+
+/// A heading, a paragraph whose short last row ends it, and the next paragraph set at the same
+/// pitch with no space between: three paragraphs, not one.
+#[test]
+fn reading_paragraphs_break_at_a_heading_and_a_short_last_row() {
+    let doc = helvetica_page(
+        "BT /F2 11 Tf 72 720 Td (Summary) Tj ET \
+         BT /F1 11 Tf 72 706 Td (The committee reviewed the figures and agreed that the process) Tj 0 -13 Td (works.) Tj 0 -13 Td (Teams reported that the templates saved time.) Tj ET",
+    );
+    let read = text::reading_paragraphs(&doc, 0).unwrap();
+    let texts: Vec<&str> = read.paragraphs.iter().map(|p| p.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        ["Summary", "The committee reviewed the figures and agreed that the process works.", "Teams reported that the templates saved time."]
+    );
+}
+
+/// A producer can draw a whole table row in one text object; a drawn cell border between two
+/// of its words keeps the cells apart (without it, the words are one paragraph).
+#[test]
+fn reading_paragraphs_split_text_at_a_cell_border() {
+    let row = "BT /F1 11 Tf 72 700 Td (Standard widget) Tj 90 0 Td (W-100) Tj ET";
+    let unruled = helvetica_page(row);
+    let texts = |doc: &Document| text::reading_paragraphs(doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect::<Vec<_>>();
+    assert_eq!(texts(&unruled), ["Standard widget W-100"]);
+    let ruled = helvetica_page(&format!("0.5 w 158 690 m 158 715 l S {row}"));
+    assert_eq!(texts(&ruled), ["Standard widget", "W-100"]);
+}
+
+/// Filled boxes and horizontal or vertical strokes come back with their colours; slanted
+/// lines and curves are left out, and hostile matrices don't break reading.
+#[test]
+fn painted_rects_report_fills_and_straight_strokes() {
+    let doc = helvetica_page(
+        "0 0 1 rg 10 10 100 50 re f 1 0 0 RG 2 w 10 200 m 300 200 l S 0 G 50 50 m 80 90 l S \
+         q 2 0 0 2 0 0 cm 0.5 g 100 100 10 10 re f Q 20 300 m 40 320 60 300 80 320 c S \
+         q 1e300 0 0 1e300 0 0 cm 1 1 1 1 re f 0 0 m 1 0 l S Q",
+    );
+    let rects = crate::painted_rects(&doc, 0).unwrap();
+    let find = |r: [f64; 4]| rects.iter().find(|s| s.rect.iter().zip(&r).all(|(a, b)| (a - b).abs() < 1e-6));
+    let fill = find([10.0, 10.0, 110.0, 60.0]).expect("the blue box");
+    assert_eq!((fill.color, fill.stroked), ([0.0, 0.0, 1.0], false));
+    let rule = find([10.0, 199.0, 300.0, 201.0]).expect("the red rule, as wide as its stroke");
+    assert_eq!((rule.color, rule.stroked), ([1.0, 0.0, 0.0], true));
+    assert!(find([200.0, 200.0, 220.0, 220.0]).is_some(), "the scaled grey box: {rects:?}");
+    // The slanted line, the curve and the shapes under the overflowing matrix add nothing.
+    assert_eq!(rects.len(), 3, "{rects:?}");
+}
+
+/// OCR text (invisible, over a scan) flows into paragraphs for export, as reading blocks do;
+/// editing keeps each scanned row apart, since the scan fixes where it sits.
+#[test]
+fn reading_paragraphs_let_ocr_rows_flow_into_a_paragraph() {
+    let doc = helvetica_page(
+        "BT 3 Tr /F1 11 Tf 72 700 Td (The first scanned row of a paragraph is the longest one here) Tj 0 -13 Td (and the second row continues it.) Tj ET",
+    );
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["The first scanned row of a paragraph is the longest one here and the second row continues it."]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2, "editing keeps OCR rows apart");
+}
+
+/// A visible stamp on an OCR row's line stays out of the OCR paragraph in export.
+#[test]
+fn reading_paragraphs_keep_visible_text_out_of_ocr_rows() {
+    let doc = helvetica_page("BT 3 Tr /F1 11 Tf 72 700 Td (Scanned words of the row) Tj ET BT 0 Tr /F1 11 Tf 205 700 Td (PAID) Tj ET");
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["Scanned words of the row", "PAID"]);
+}
+
+/// A visible line under OCR rows stays a paragraph of its own in export.
+#[test]
+fn reading_paragraphs_keep_a_visible_row_out_of_ocr_rows() {
+    let doc = helvetica_page(
+        "BT 3 Tr /F1 11 Tf 72 700 Td (The first scanned row of a paragraph is the longest one here) Tj ET BT 0 Tr /F1 11 Tf 72 687 Td (RECEIVED 2026-10-01) Tj ET",
+    );
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["The first scanned row of a paragraph is the longest one here", "RECEIVED 2026-10-01"]);
+}
+
+/// Editing's lines are as they were: words drawn as separate text objects with an invisible
+/// space between them are one line, and so is a run that switches to invisible text.
+#[test]
+fn editing_lines_join_across_an_invisible_space() {
+    let doc = helvetica_page("BT /F1 11 Tf 72 700 Td (Hello) Tj ET BT 3 Tr /F1 11 Tf 99 700 Td ( ) Tj ET BT 0 Tr /F1 11 Tf 102 700 Td (world) Tj ET");
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let read: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(read.len(), 1, "an invisible space joins either way: {read:?}");
+}
+
+/// A line opened by a space drawn the other way (invisible before visible words) is as visible
+/// as its words: the space doesn't make it OCR text, so its words stay one paragraph.
+#[test]
+fn reading_a_line_opened_by_an_invisible_space() {
+    let doc = helvetica_page("BT /F1 11 Tf 72 700 Td 3 Tr ( ) Tj 0 Tr 6 0 Td (Hello) Tj 30 0 Td (world) Tj ET");
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["Hello world"]);
+}
+
+/// Reading splits a switch from invisible to visible text inside one text object.
+#[test]
+fn reading_splits_a_visibility_switch_inside_one_text_object() {
+    let doc = helvetica_page("BT /F1 11 Tf 72 700 Td 3 Tr (Scanned words of the row) Tj 0 Tr 140 0 Td (PAID) Tj ET");
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["Scanned words of the row", "PAID"]);
+}
+
+/// An invisible space between visible words, each its own text object, joins their reading line.
+#[test]
+fn reading_lines_join_across_an_invisible_space() {
+    let doc = helvetica_page("BT /F1 11 Tf 72 700 Td (Hello) Tj ET BT 3 Tr /F1 11 Tf 99 700 Td ( ) Tj ET BT 0 Tr /F1 11 Tf 102 700 Td (world) Tj ET");
+    let (lines, _) = text::reading_lines(&doc, 0).unwrap();
+    let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts.len(), 1, "{texts:?}");
+}

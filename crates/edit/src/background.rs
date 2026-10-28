@@ -18,7 +18,7 @@ type Quad = [(f64, f64); 4];
 
 /// The colour space a fill colour is given in.
 #[derive(Clone, Copy, PartialEq)]
-enum Space {
+pub(crate) enum Space {
     Gray,
     Rgb,
     Cmyk,
@@ -149,12 +149,12 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
 }
 
 /// CMYK to RGB, as a plain conversion without colour management.
-fn cmyk([c, m, y, k]: [f64; 4]) -> Rgb {
+pub(crate) fn cmyk([c, m, y, k]: [f64; 4]) -> Rgb {
     [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]
 }
 
 /// The colour `sc`/`scn` sets in `space`, if it is a plain one.
-fn colour(space: Space, op: &Op) -> Option<Rgb> {
+pub(crate) fn colour(space: Space, op: &Op) -> Option<Rgb> {
     match (space, op.operands.len()) {
         (Space::Gray, 1) => op.nums::<1>().map(|[g]| [g; 3]),
         (Space::Rgb, 3) => op.nums::<3>(),

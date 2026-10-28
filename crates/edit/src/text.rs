@@ -1409,9 +1409,14 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 /// The line `s` continues, or a new one: `last` is the previous run of the same stream
 /// (`bt`, baseline, end x, size).
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
+    // Reading keeps invisible text (an OCR layer) and visible text (a stamp on its line) in
+    // separate lines, even within one text object. A space drawn either way joins the line it
+    // follows; a line is as visible as its first show, so text never joins a line opened by a
+    // space drawn the other way (that blank line is dropped).
+    let visibility_matches = |l: &TextLine| s.text.trim().is_empty() || (l.origin.state.render_mode == 3) == (s.state.render_mode == 3);
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
-        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order && visibility_matches(l))
             && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
             && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
             && (s.text.trim().is_empty()
@@ -1559,7 +1564,7 @@ pub(crate) fn form_call(
 /// [`text_lines`] leaves out because it can only rewrite the page's own streams). Lines from a
 /// form carry a stream number past the page's streams, one per form drawn. The flag is `true`
 /// when forms past [`MAX_FORM_DEPTH`] or [`MAX_FORM_VISITS`] were left unread.
-fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), EditError> {
+pub(crate) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), EditError> {
     struct Walk<'a> {
         doc: &'a Document,
         lines: Vec<TextLine>,
@@ -2497,6 +2502,72 @@ pub struct ReadingBlocks {
 pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBlocks, EditError> {
     let (lines, truncated) = reading_lines(doc, page)?;
     Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
+}
+
+/// Most painted rules [`reading_paragraphs`] keeps text apart at (each line is checked against each).
+const MAX_WALLS: usize = 4_096;
+
+/// A stretch of one style inside a [`ReadingParagraph`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReadingRun {
+    pub text: String,
+    pub base_font: String,
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [f64; 3],
+    /// How far its baseline sits above the row's (negative below): a superscript or subscript.
+    pub rise: f64,
+    /// The box of its first line (user space): where the run starts.
+    pub rect: [f64; 4],
+    /// The boxes of its words, in order (user space; see [`TextLine::ink`]).
+    pub words: Vec<[f64; 4]>,
+}
+
+/// A paragraph as a reader sees it, for documents that keep inline formatting (Export to Word):
+/// its runs of differing font, size, weight or colour stay in one paragraph, and the box of
+/// each visual row is kept so its alignment, indents and line spacing can be recovered.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReadingParagraph {
+    /// The runs' text joined (rows joined with a space, or directly after a hyphen).
+    pub text: String,
+    /// The paragraph's box in user space.
+    pub rect: [f64; 4],
+    pub runs: Vec<ReadingRun>,
+    /// Each visual row's box in user space, top to bottom.
+    pub rows: Vec<[f64; 4]>,
+    /// The most-used run style (by characters).
+    pub base_font: String,
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [f64; 3],
+    /// Counterclockwise baseline angle in page user space, in degrees.
+    pub rotation: f64,
+}
+
+/// A page's [`ReadingParagraph`]s, and whether reading left forms out (as
+/// [`ReadingBlocks::truncated`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReadingParagraphs {
+    pub paragraphs: Vec<ReadingParagraph>,
+    pub truncated: bool,
+}
+
+/// The paragraphs on a page with their inline formatting, including text drawn by form XObjects.
+/// Paragraphs break where the rows' spacing, size or weight changes, or where a row ends short
+/// enough that the next row's first word would have fitted on it.
+pub fn reading_paragraphs(doc: &Document, page: usize) -> Result<ReadingParagraphs, EditError> {
+    let (lines, truncated) = reading_lines(doc, page)?;
+    // Borders and rules: thin painted boxes, a bounded number of them.
+    let walls: Vec<[f64; 4]> = crate::painted_rects(doc, page)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.rect)
+        .filter(|r| (r[2] - r[0]).min(r[3] - r[1]) <= 3.0 && (r[2] - r[0]).max(r[3] - r[1]) >= 3.0)
+        .take(MAX_WALLS)
+        .collect();
+    Ok(ReadingParagraphs { paragraphs: regions::group_reading_paragraphs(&lines, &walls), truncated })
 }
 
 // An ideographic space carries intentional Japanese spacing, including paragraph indentation.

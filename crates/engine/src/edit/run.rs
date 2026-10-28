@@ -2,6 +2,8 @@ use super::{
     AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
     image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
+use crate::SourceProblem;
+use crate::sources::{comment_source, import_pdf_comments};
 
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
 pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), EditError> {
@@ -664,7 +666,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no web addresses were found".into())));
             }
         }
-        Edit::ImportData { bytes, .. } => {
+        Edit::ImportData { name, bytes } if bytes.starts_with(b"%PDF-") => {
+            let src = comment_source(bytes).map_err(|p| EditError::Source(format!("{name}: {p}")))?;
+            import_pdf_comments(doc, &src)?;
+        }
+        Edit::ImportData { name, bytes } => {
             // An XFA form takes XFA data files (XDP, datasets, or a data document) as its data;
             // XFDF, FDF, Acrobat's XML and tables go the usual way.
             let text = (pdfcraft_xfa::read_packets(doc).ok().flatten().is_some()).then(|| decode_data_file(bytes)).flatten();
@@ -678,9 +684,21 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     cx.xfa_out.console.push(format!("Imported XFA data: {} node(s)", r.nodes));
                     xfa_after_data_change(doc, cx, true)?;
                 }
-                Some(Err(why)) => return Err(EditError::Invalid(why)),
+                Some(Err(why)) if !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => return Err(EditError::Invalid(why)),
                 _ => {
-                    pdfcraft_xfdf::import(doc, bytes)?;
+                    // A PDF with bytes before its header, within the 1,024 the reader allows, is read
+                    // as a PDF when it is not a data file. A file the PDF reader cannot open keeps
+                    // the data importer's error.
+                    let mut data = doc.clone();
+                    match pdfcraft_xfdf::import(&mut data, bytes) {
+                        Ok(_) => *doc = data,
+                        Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
+                            Ok(src) => import_pdf_comments(doc, &src)?,
+                            Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
+                            Err(p) => return Err(EditError::Source(format!("{name}: {p}"))),
+                        },
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
         }

@@ -522,7 +522,8 @@ pub enum Edit {
         links: Vec<(usize, Vec<[f64; 4]>, String)>,
         style: LinkStyle,
     },
-    /// Import comments and/or form data (XFDF, FDF, XML, CSV, tab-delimited text).
+    /// Import comments and/or form data (XFDF, FDF, XML, CSV, tab-delimited text), or the
+    /// comments of another PDF onto the pages with the same numbers.
     ImportData {
         name: String,
         bytes: Arc<Vec<u8>>,

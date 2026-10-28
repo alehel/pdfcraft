@@ -543,7 +543,8 @@ impl PdfCraftApp {
             }
             "edit.links_from_urls" => self.links_from_urls(),
             "edit.remove_links" => self.remove_all_links(),
-            "comment.import" | "form.import_data" => self.import_data_dialog(),
+            "comment.import" => self.import_comments_dialog(),
+            "form.import_data" => self.import_data_dialog(),
             "comment.stamp" => {
                 self.left = crate::LeftPanel::Tool("stamp");
                 self.reveal_tools();

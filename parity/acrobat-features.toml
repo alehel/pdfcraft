@@ -4264,11 +4264,11 @@ title = "Import comments from another PDF"
 area = "E"
 tier = "P2"
 milestone = "M5"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["comment.import"]
+tools = ["doc_import_data"]
+evidence = ["crates/organize/src/comments.rs::comments_of_another_pdf_land_on_the_pages_with_the_same_numbers", "crates/organize/src/comments.rs::a_reply_on_an_earlier_page_reaches_its_comment_by_name", "crates/organize/src/comments.rs::a_comment_keeps_its_layer_and_the_layer_its_visibility", "crates/organize/src/comments.rs::a_long_thread_goes_with_its_first_comment_and_a_loop_of_replies_stays", "crates/organize/src/comments.rs::a_pdf_without_comments_copies_none", "crates/engine/src/tests.rs::importing_a_pdf_copies_its_comments", "crates/ui-egui/tests/it/pickers.rs::import_comments_takes_the_comments_of_another_pdf"]
+notes = "Import comments accepts a PDF beside XFDF and FDF. Each comment goes onto the page with the same number, at the same place, with its appearance, pop-up and replies; comments on pages past the document's last page are left out. A same-named comment is replaced, as with XFDF and FDF. Not yet: redaction marks are not copied, and a PDF that needs a password is refused."
 
 [[feature]]
 id = "comment.summarize"

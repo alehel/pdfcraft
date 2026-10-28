@@ -27,8 +27,15 @@ fn new_text_typed(v: &crate::DocView) -> bool {
     v.content.draft.as_ref().is_some_and(|d| d.index.is_none() && !d.text.trim().is_empty())
 }
 
-/// Keeps the pages (or comment) the user acted on selected, where they now are.
-fn select_after_edit(view: &mut crate::DocView, edit: Edit, info: &pdfcraft_render::DocInfo, quick_tool: crate::QuickTool) {
+/// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
+/// is a deleted annotation's page's annotations before the delete (empty for other edits).
+fn select_after_edit(
+    view: &mut crate::DocView,
+    edit: Edit,
+    info: &pdfcraft_render::DocInfo,
+    annots_before: &[pdfcraft_render::Annotation],
+    quick_tool: crate::QuickTool,
+) {
     match edit {
         Edit::MovePages { pages, to } => {
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
@@ -64,7 +71,7 @@ fn select_after_edit(view: &mut crate::DocView, edit: Edit, info: &pdfcraft_rend
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
-        Edit::DeleteAnnotation { .. } => view.comments.selected = None,
+        Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (page, index)),
         _ => {}
     }
 }
@@ -110,6 +117,12 @@ impl PdfCraftApp {
         } else {
             (None, 0, false)
         };
+        // A deletion moves the comments after it on the page: these say where the selected one,
+        // and the one open in the panel's editor, went.
+        let annots_before = match (&edit, self.session.get(id)) {
+            (Edit::DeleteAnnotation { page, .. }, Some(d)) => d.info.annotations.iter().filter(|a| a.page == *page).cloned().collect(),
+            _ => Vec::new(),
+        };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
@@ -153,7 +166,7 @@ impl PdfCraftApp {
                     view.comments.comment_added();
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                select_after_edit(view, edit, info, self.quick_tool);
+                select_after_edit(view, edit, info, &annots_before, self.quick_tool);
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }

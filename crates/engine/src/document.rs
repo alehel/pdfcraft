@@ -305,6 +305,13 @@ impl Document {
         self.config.hide_comments
     }
 
+    /// Whether `Edit::DeleteAnnotation` would delete the annotation at `(page, index)`: the
+    /// engine's own check (it, and every reply that would go with it, unlocked), for a Delete
+    /// command to ask before it is offered.
+    pub fn annotation_deletable(&self, page: usize, index: usize) -> bool {
+        self.editor.as_ref().is_some_and(|e| pdfcraft_annot::deletable(&e.cos, page, index).is_ok())
+    }
+
     pub fn can_undo(&self) -> Option<&str> {
         self.undo_label().map(Label::as_str)
     }

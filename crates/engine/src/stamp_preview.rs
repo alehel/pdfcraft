@@ -73,7 +73,7 @@ impl Document {
                 return Ok(None);
             }
             let mut background = editor.cos.clone();
-            pdfcraft_annot::delete_annotation(&mut background, page, index).map_err(|e| e.to_string())?;
+            pdfcraft_annot::lift_annotation(&mut background, page, index).map_err(|e| e.to_string())?;
             // The page beneath as it is displayed: comments without an appearance get theirs.
             let background = pdfcraft_annot::with_missing_appearances(&background).unwrap_or(background);
             let write = |cos: &pdfcraft_cos::Document| write_incremental(cos, &SaveOptions::default()).map(Arc::new).map_err(|e| e.to_string());

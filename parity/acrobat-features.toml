@@ -3967,8 +3967,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_reply"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_reply_and_shift_enter_adds_a_line", "crates/annot/src/tests.rs::replies_and_status_thread_onto_the_parent"]
-notes = "multiline reply field: Enter or Ctrl+Enter (also Command+Enter) posts, Shift+Enter adds a newline; empty replies are not posted"
+evidence = ["crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_reply_and_shift_enter_adds_a_line", "crates/annot/src/tests.rs::replies_and_status_thread_onto_the_parent", "crates/ui-egui/tests/it/comments.rs::one_reply_is_deleted_from_its_menu_and_the_thread_stays"]
+notes = "multiline reply field: Enter or Ctrl+Enter (also Command+Enter) posts, Shift+Enter adds a newline; empty replies are not posted. On the selected card each reply has its own \"…\" menu (Edit, Copy text, Delete); a Replace Text caret, half of its comment, has none. Missing: Set status on a reply from its menu, @mentions"
 
 [[feature]]
 id = "comment.set-status"
@@ -4003,8 +4003,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_delete"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::comments_are_selected_moved_and_deleted_with_the_select_tool", "crates/annot/src/tests.rs::delete_takes_popup_and_reply_chain"]
-notes = "deletes the pop-up and the reply thread"
+evidence = ["crates/ui-egui/tests/it/comments.rs::comments_are_selected_moved_and_deleted_with_the_select_tool", "crates/annot/src/tests.rs::delete_takes_popup_and_reply_chain", "crates/ui-egui/tests/it/comments.rs::one_reply_is_deleted_from_its_menu_and_the_thread_stays", "crates/ui-egui/src/tools/comments/tests.rs::a_kept_comment_is_found_where_a_delete_moved_it", "crates/automation/tests/it/automation.rs::deleting_a_reply_keeps_its_comment_and_the_other_replies", "crates/annot/src/tests.rs::a_locked_reply_keeps_what_it_answers", "crates/engine/src/tests.rs::a_stamp_with_a_locked_reply_still_has_its_drag_layers"]
+notes = "deletes the pop-up and the reply thread. One reply is deleted from its own \"…\" in the Comments panel (comment_delete with the reply's id, or page and index), with its pop-up and the replies to it: the comment and its other replies stay, one undo step, and the card stays selected. A locked reply can't be deleted, nor the comment or reply it answers while it is locked (their Delete is greyed out; a stamp or signature with a locked reply still drags with its live preview)."
 
 [[feature]]
 id = "comment.keyboard-nudge"
@@ -4039,8 +4039,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/it/automation.rs::comments_through_tools", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line"]
-notes = "double-click a comment or card, or Edit in the menus; Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines)"
+evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/it/automation.rs::comments_through_tools", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line", "crates/ui-egui/tests/it/comments.rs::one_reply_is_deleted_from_its_menu_and_the_thread_stays"]
+notes = "double-click a comment or card, or Edit in the menus (a reply from its own \"…\" menu); Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines)"
 
 [[feature]]
 id = "comment.copy-comment-text"
@@ -4051,8 +4051,8 @@ milestone = "M5"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/comments.rs::comments_take_checkmarks_lock_hide_and_summarize"]
-notes = "card and canvas context menus"
+evidence = ["crates/ui-egui/tests/it/comments.rs::comments_take_checkmarks_lock_hide_and_summarize", "crates/ui-egui/tests/it/comments.rs::one_reply_is_deleted_from_its_menu_and_the_thread_stays"]
+notes = "card, reply and canvas context menus"
 
 [[feature]]
 id = "comment.filter-comments"

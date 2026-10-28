@@ -2720,3 +2720,6 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	ตัวเลือกของการตอบกลับนี้

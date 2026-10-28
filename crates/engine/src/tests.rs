@@ -3245,6 +3245,24 @@ fn comment_text(s: &Session, id: DocId) -> Vec<String> {
     t
 }
 
+/// A stamp whose reply is locked can still be dragged, so its layers are still prepared: the page
+/// beneath is drawn on a copy, where locks don't count. Deleting the stamp is what they refuse.
+#[test]
+fn a_stamp_with_a_locked_reply_still_has_its_drag_layers() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::Mark { rect: [30.0, 60.0, 130.0, 66.0], mark: FillMark::Line }, "")).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "Approved".into(), author: "Bob".into() }).unwrap();
+    let reply = s.get(id).unwrap().info.annotations.iter().find(|a| a.parent == Some((0, 0))).expect("the reply").index;
+    s.apply(id, Edit::LockAnnotation { page: 0, index: reply, locked: true }).unwrap();
+    let doc = s.get(id).unwrap();
+    let background = doc.stamp_preview(0, 0).unwrap().expect("the line is a stamp").render_background(1.0).unwrap();
+    let px = |p: &pdfcraft_render::RenderedPage, x: u32, y: u32| -> [u8; 4] {
+        p.rgba[(((300 - y) * p.width + x) * 4) as usize..][..4].try_into().unwrap()
+    };
+    assert!((30..=130).all(|x| px(&background, x, 63) == [255, 255, 255, 255]), "the page beneath has no line");
+    assert!(s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).is_err(), "the locked reply keeps the stamp");
+}
+
 /// A dragged stamp's layers: the page without it (its text and other comments kept) and the
 /// stamp alone on a transparent page. Preparing them changes nothing in the document.
 #[test]

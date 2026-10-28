@@ -233,8 +233,8 @@ struct PageAnnots {
 }
 
 impl PageAnnots {
-    /// The `/Annots` of `page`.
-    fn read(dst: &Document, page: ObjRef) -> Self {
+    /// The `/Annots` of `page`, with inline annotation dictionaries made indirect objects.
+    fn read(dst: &mut Document, page: ObjRef) -> Self {
         let list: Vec<Object> = dst
             .get(page)
             .as_dict()
@@ -242,6 +242,13 @@ impl PageAnnots {
             .map(|a| dst.resolve(&a))
             .and_then(|a| a.as_array().cloned())
             .unwrap_or_default();
+        let list: Vec<Object> = list
+            .into_iter()
+            .map(|a| match a {
+                Object::Dict(_) => Object::Ref(dst.add(a)),
+                a => a,
+            })
+            .collect();
         let (mut members, mut names, mut popups) = (HashSet::new(), HashMap::<String, Vec<ObjRef>>::new(), HashMap::<ObjRef, Vec<ObjRef>>::new());
         for r in list.iter().filter_map(Object::as_ref) {
             members.insert(r);
@@ -583,6 +590,25 @@ mod tests {
         let (first, d) = by_contents(&one, "first");
         assert_eq!((*first, text(d, b"NM").as_deref()), (ObjRef::new(4, 0), Some("twin")));
         assert_eq!(text(&by_contents(&one, "second").1, b"NM"), None, "the second copy is added without the name");
+    }
+
+    #[test]
+    fn an_inline_comment_is_replaced_by_name() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /NM (inline) /Contents (newer text) /Rect [10 10 30 30] /P 3 0 R >>",
+        ]);
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [<< /Type /Annot /Subtype /Text /NM (inline) /Contents (older text) /Rect [10 10 30 30] >>] >>",
+        ]);
+        assert_eq!(import_comments(&mut doc, &src).unwrap(), 1);
+        let one = page_annots(&doc, 0);
+        assert_eq!(one.len(), 1, "the inline comment is replaced, not kept beside the copy");
+        assert_eq!(text(&by_contents(&one, "newer text").1, b"NM").as_deref(), Some("inline"));
     }
 
     #[test]

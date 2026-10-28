@@ -1795,6 +1795,7 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         app.view_draft = None;
         app.custom_draft = None;
         app.bulk_field_props = None;
+        app.unmarked_page = Default::default();
     } else {
         app.dialog = Some(req.next.unwrap_or(dialog));
     }

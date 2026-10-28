@@ -219,6 +219,7 @@ impl PdfCraftApp {
             protect_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
+            unmarked_page: Default::default(),
             export_draft: Default::default(),
             export_status: None,
             signature: None,

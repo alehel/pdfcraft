@@ -398,8 +398,9 @@ fn clusters(mut values: Vec<f64>, tol: f64) -> Vec<f64> {
 
 /// Tables whose grid the page draws: rules that cross each other, two or more each way. Each
 /// block whose middle lies in a cell goes into it (and is consumed); a filled box covering most
-/// of a cell is its shading. A grid that frames the page's text is not a table; its rules are
-/// returned so they are not read as boxes or rules either.
+/// of a cell is its shading. A grid that frames the page's text is not a table, though a
+/// table drawn against its border inside it is; the frame's rules are returned so they are not
+/// read as boxes or rules either. A grid of one cell (a box) is not a table either.
 pub(crate) fn ruled_tables(page: &Page) -> Ruled {
     let mut consumed = vec![false; page.blocks.len()];
     let mut frames = Vec::new();
@@ -527,14 +528,14 @@ pub(crate) fn ruled_tables(page: &Page) -> Ruled {
                 }
             }
         }
-        // A frame around the text (a page border, perhaps with rules under the header, over the
-        // footer or down the middle) is not a table. It covers most of the page and holds most
-        // of its text, and has rows that are one cell across (the header, the footer, the body
-        // under a border). Those rows are not table rows, and neither is a lone row of columns
-        // between them; a run of two or more rows of cells inside it (a table drawn against the
-        // border) still is. A grid filling the page whose every row has cells (a SWOT grid, a
-        // form) stays a table. The frame's rules are left out of the boxes and rules found later.
-        let page_area = page.width * page.height;
+        // A frame around the text (a page border, perhaps with rules under a header, over a
+        // footer or down the middle) is not a table. It covers most of the page, holds most of
+        // its text, and has one tall row (at least a quarter of its height): the body. A grid
+        // of several tall rows (a SWOT grid, a form) or of short rows only (a long table) is a
+        // table. In a frame, only a run of two or more short rows of cells (a table drawn
+        // against the border) stays a table; its other rows go back to the flow, and its rules
+        // are left out of the boxes and rules found later.
+        let page_area = page.width.max(0.0) * page.height.max(0.0);
         let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
         let texts = page.blocks.iter().filter(|b| !b.text.trim().is_empty()).count();
         let enclosed = page
@@ -547,22 +548,21 @@ pub(crate) fn ruled_tables(page: &Page) -> Ruled {
             })
             .count();
         let encloses_page = page_area.is_finite() && page_area > 0.0 && area(rect) >= page_area * 0.5 && texts > 0 && enclosed * 5 >= texts * 4;
-        let across = |row: &Vec<RuledCell>| row.len() == 1;
-        let framed = encloses_page && rows.iter().any(across);
+        let tall: Vec<bool> = ys.windows(2).map(|w| w[0] - w[1] >= (y1 - y0) / 4.0).collect();
+        let framed = encloses_page && tall.iter().filter(|t| **t).count() == 1;
         let runs: Vec<std::ops::Range<usize>> = if framed {
             frames.extend(hs.iter().map(|r| [r.from, r.at, r.to, r.at]));
             frames.extend(vs.iter().map(|r| [r.at, r.from, r.at, r.to]));
+            let short_cells = |i: usize| !tall.get(i).copied().unwrap_or(true) && rows.get(i).is_some_and(|r| r.len() >= 2);
             let mut out = Vec::new();
             let mut start: Option<usize> = None;
             for i in 0..=rows.len() {
-                if rows.get(i).is_none_or(across) {
-                    if let Some(s) = start.take()
-                        && i - s >= 2
-                    {
-                        out.push(s..i);
-                    }
-                } else if start.is_none() {
-                    start = Some(i);
+                if short_cells(i) {
+                    start.get_or_insert(i);
+                } else if let Some(s) = start.take()
+                    && i - s >= 2
+                {
+                    out.push(s..i);
                 }
             }
             out
@@ -617,20 +617,26 @@ pub(crate) struct Ruled {
     pub frames: Vec<[f64; 4]>,
 }
 
-/// Cells merged down across the edge of a table cut from a grid start or end there: a
-/// continuation in its first row, or a merge with no continuation below, is a plain cell.
+/// Cells merged down across the edge of a table cut from a grid (a merge from a frame row
+/// above it, or into one below) start or end at the edge: a continuation in the first row opens
+/// the merge when the row below continues it and is a plain cell otherwise, and a merge with no
+/// continuation below is a plain cell.
 fn unmerge_ends(rows: &mut [Vec<RuledCell>]) {
+    let continues = |row: Option<&Vec<RuledCell>>, x: f64| row.is_some_and(|r| r.iter().any(|c| c.rect[0] == x && c.vmerge == Some(false)));
+    let second: Vec<f64> = rows.get(1).map_or_else(Vec::new, |r| r.iter().filter(|c| c.vmerge == Some(false)).map(|c| c.rect[0]).collect());
     if let Some(first) = rows.first_mut() {
         for c in first.iter_mut().filter(|c| c.vmerge == Some(false)) {
-            c.vmerge = None;
+            c.vmerge = second.contains(&c.rect[0]).then_some(true);
         }
     }
     for i in 0..rows.len() {
-        let continued: Vec<f64> =
-            rows.get(i + 1).map_or_else(Vec::new, |next| next.iter().filter(|c| c.vmerge == Some(false)).map(|c| c.rect[0]).collect());
+        let below: Vec<f64> = rows.get(i + 1).map_or_else(Vec::new, |r| r.iter().map(|c| c.rect[0]).collect());
+        let next = rows.get(i + 1).cloned();
         if let Some(row) = rows.get_mut(i) {
-            for c in row.iter_mut().filter(|c| c.vmerge == Some(true) && !continued.contains(&c.rect[0])) {
-                c.vmerge = None;
+            for c in row.iter_mut().filter(|c| c.vmerge == Some(true)) {
+                if !below.contains(&c.rect[0]) || !continues(next.as_ref(), c.rect[0]) {
+                    c.vmerge = None;
+                }
             }
         }
     }
@@ -2286,6 +2292,368 @@ mod tests {
         let xml = part(&docx(&[empty], "No size"), "word/document.xml");
         let table = xml.split("<w:tbl>").nth(1).and_then(|t| t.split("</w:tbl>").next()).unwrap_or_default().to_string();
         assert!(table.contains(">Title<") && table.contains(">D<"), "the whole grid is the table: {xml}");
+    }
+
+    /// Every ruled-grid layout the reviews raised, with what Word export must make of it:
+    /// how many tables, which text sits in one and which in the flow, and how many paragraph
+    /// boxes. Tables are the default; a grid is a frame only around the page's text with one
+    /// tall body row.
+    #[test]
+    fn ruled_grid_matrix() {
+        let ln = |x0: f64, y0: f64, x1: f64, y1: f64| line(x0, y0, x1, y1);
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![ln(x0, y0, x1, y0), ln(x0, y1, x1, y1), ln(x0, y0, x0, y1), ln(x1, y0, x1, y1)];
+        let cell = |t: &str, x: f64, top: f64| para(t, x, x + 60.0, top, 1, x + 60.0);
+        let prose = |t: &str, x: f64, top: f64| para(t, x, x + 200.0, top, 4, x + 120.0);
+        // Lines down the page under `top`, `n` of them `step` apart.
+        let column = |label: &str, x: f64, top: f64, n: usize, step: f64| -> Vec<Block> {
+            (0..n).map(|i| cell(&format!("{label}{i}"), x, top - step * i as f64)).collect()
+        };
+        // A full-width grid: horizontal rules at `ys`, vertical rules at `xs` from the first to the last y.
+        let grid = |xs: &[f64], ys: &[f64]| -> Vec<Shape> {
+            let (x0, x1) = (xs.first().copied().unwrap_or(0.0), xs.last().copied().unwrap_or(0.0));
+            let (top, bottom) = (ys.first().copied().unwrap_or(0.0), ys.last().copied().unwrap_or(0.0));
+            ys.iter().map(|y| ln(x0, *y, x1, *y)).chain(xs.iter().map(|x| ln(*x, bottom, *x, top))).collect()
+        };
+        let border = || rect(36.0, 36.0, 576.0, 756.0);
+        struct Case {
+            name: &'static str,
+            shapes: Vec<Shape>,
+            blocks: Vec<Block>,
+            tables: usize,
+            inside: &'static [&'static str],
+            outside: &'static [&'static str],
+            boxes: usize,
+        }
+        // Small tables and boxes.
+        let mut cases = vec![Case {
+            name: "small one-column table",
+            shapes: grid(&[100.0, 300.0], &[700.0, 680.0, 660.0, 640.0]),
+            blocks: vec![cell("Row one", 105.0, 696.0), cell("Row two", 105.0, 676.0), cell("Row three", 105.0, 656.0)],
+            tables: 1,
+            inside: &["Row one", "Row three"],
+            outside: &[],
+            boxes: 0,
+        }];
+        cases.push(Case {
+            name: "2x2 table, a cell of six lines",
+            shapes: grid(&[100.0, 200.0, 400.0], &[700.0, 680.0, 580.0]),
+            blocks: [vec![cell("Name", 105.0, 696.0), cell("Notes", 205.0, 696.0), cell("Ada", 105.0, 676.0)], column("Note", 205.0, 676.0, 6, 15.0)]
+                .concat(),
+            tables: 1,
+            inside: &["Name", "Note5"],
+            outside: &[],
+            boxes: 0,
+        });
+        cases.push(Case {
+            name: "sidebar box around five paragraphs",
+            shapes: rect(100.0, 610.0, 300.0, 700.0),
+            blocks: [
+                column("Side", 110.0, 690.0, 5, 14.0),
+                vec![para("Outside the box, long enough to set the text area.", 72.0, 540.0, 500.0, 1, 540.0)],
+            ]
+            .concat(),
+            tables: 0,
+            inside: &[],
+            outside: &["Side0"],
+            boxes: 5,
+        });
+        cases.push(Case {
+            name: "sender | recipient, four lines each",
+            shapes: grid(&[100.0, 300.0, 500.0], &[700.0, 620.0]),
+            blocks: [
+                column("From", 105.0, 695.0, 4, 14.0),
+                column("To", 305.0, 695.0, 4, 14.0),
+                vec![para("A closing paragraph.", 72.0, 540.0, 500.0, 1, 540.0)],
+            ]
+            .concat(),
+            tables: 1,
+            inside: &["From0", "To3"],
+            outside: &["A closing paragraph."],
+            boxes: 0,
+        });
+        cases.push(Case {
+            name: "label sheet, 2x2 addresses",
+            shapes: grid(&[100.0, 300.0, 500.0], &[700.0, 620.0, 540.0]),
+            blocks: [
+                column("A", 105.0, 695.0, 4, 14.0),
+                column("B", 305.0, 695.0, 4, 14.0),
+                column("C", 105.0, 615.0, 4, 14.0),
+                column("D", 305.0, 615.0, 4, 14.0),
+            ]
+            .concat(),
+            tables: 1,
+            inside: &["A0", "D3"],
+            outside: &[],
+            boxes: 0,
+        });
+        // Grids filling the page that are tables.
+        let mut swot = grid(&[72.0, 306.0, 540.0], &[720.0, 410.0, 100.0]);
+        swot.retain(|_| true);
+        cases.push(Case {
+            name: "SWOT grid",
+            shapes: swot,
+            blocks: [(80.0, 710.0), (314.0, 710.0), (80.0, 400.0), (314.0, 400.0)]
+                .iter()
+                .flat_map(|(x, t)| [cell("Strengths", *x, *t), prose("A point about it.", *x, t - 20.0)])
+                .collect(),
+            tables: 1,
+            inside: &["Strengths", "A point about it."],
+            outside: &[],
+            boxes: 0,
+        });
+        cases.push(Case {
+            name: "2x3 form",
+            shapes: grid(&[72.0, 306.0, 540.0], &[720.0, 513.0, 306.0, 100.0]),
+            blocks: [(80.0, 710.0), (314.0, 710.0), (80.0, 503.0), (314.0, 503.0), (80.0, 296.0), (314.0, 296.0)]
+                .iter()
+                .map(|(x, t)| cell("Label", *x, *t))
+                .collect(),
+            tables: 1,
+            inside: &["Label"],
+            outside: &[],
+            boxes: 0,
+        });
+        let rows20: Vec<f64> = (0..=20).map(|i| 740.0 - 30.0 * i as f64).collect();
+        cases.push(Case {
+            name: "page-filling one-column table",
+            shapes: grid(&[72.0, 540.0], &rows20),
+            blocks: column("Item", 80.0, 736.0, 20, 30.0),
+            tables: 1,
+            inside: &["Item0", "Item19"],
+            outside: &[],
+            boxes: 0,
+        });
+        // Group rows: a full-width row over each data row, three columns.
+        let mut shapes: Vec<Shape> = rows20.iter().map(|y| ln(72.0, *y, 540.0, *y)).collect();
+        shapes.extend([ln(72.0, 140.0, 72.0, 740.0), ln(540.0, 140.0, 540.0, 740.0)]);
+        let mut blocks = Vec::new();
+        for g in 0..10 {
+            let (top, data) = (740.0 - 60.0 * g as f64, 710.0 - 60.0 * g as f64);
+            shapes.extend([ln(228.0, data - 30.0, 228.0, data), ln(384.0, data - 30.0, 384.0, data)]);
+            blocks.push(cell(&format!("Group{g}"), 80.0, top - 4.0));
+            blocks.extend([80.0, 236.0, 392.0].iter().map(|x| cell(&format!("Data{g}"), *x, data - 4.0)));
+        }
+        cases.push(Case { name: "table with group rows", shapes, blocks, tables: 1, inside: &["Group0", "Group9", "Data9"], outside: &[], boxes: 0 });
+        // A title row over a 20-row table, and a totals row under it.
+        let mut shapes = grid(&[72.0, 306.0, 540.0], &rows20[1..]);
+        shapes.extend([ln(72.0, 740.0, 540.0, 740.0), ln(72.0, 710.0, 72.0, 740.0), ln(540.0, 710.0, 540.0, 740.0)]);
+        let mut blocks = vec![cell("Title", 80.0, 736.0)];
+        blocks.extend(column("Left", 80.0, 706.0, 19, 30.0));
+        blocks.extend(column("Right", 314.0, 706.0, 19, 30.0));
+        cases.push(Case { name: "title row over a table", shapes, blocks, tables: 1, inside: &["Title", "Left18"], outside: &[], boxes: 0 });
+        let mut shapes = grid(&[72.0, 306.0, 540.0], &rows20[..20]);
+        shapes.extend([ln(72.0, 140.0, 540.0, 140.0), ln(72.0, 140.0, 72.0, 170.0), ln(540.0, 140.0, 540.0, 170.0)]);
+        let mut blocks = column("Left", 80.0, 736.0, 19, 30.0);
+        blocks.extend(column("Right", 314.0, 736.0, 19, 30.0));
+        blocks.push(cell("Totals", 80.0, 166.0));
+        cases.push(Case { name: "totals row under a table", shapes, blocks, tables: 1, inside: &["Totals", "Left0"], outside: &[], boxes: 0 });
+        // A section row across the middle of a two-column table.
+        let mut shapes: Vec<Shape> = rows20.iter().map(|y| ln(72.0, *y, 540.0, *y)).collect();
+        shapes.extend([ln(72.0, 140.0, 72.0, 740.0), ln(540.0, 140.0, 540.0, 740.0), ln(306.0, 470.0, 306.0, 740.0), ln(306.0, 140.0, 306.0, 440.0)]);
+        let mut blocks: Vec<Block> = (0..20)
+            .filter(|i| *i != 9)
+            .flat_map(|i| [cell(&format!("L{i}"), 80.0, 736.0 - 30.0 * i as f64), cell(&format!("R{i}"), 314.0, 736.0 - 30.0 * i as f64)])
+            .collect();
+        blocks.push(cell("Section", 80.0, 466.0));
+        cases.push(Case { name: "section row in a table", shapes, blocks, tables: 1, inside: &["Section", "L0", "R19"], outside: &[], boxes: 0 });
+        // Frames around the page's text.
+        let body =
+            |n: usize, x: f64, top: f64| -> Vec<Block> { (0..n).map(|i| prose(&format!("Body {x} {i}."), x, top - 50.0 * i as f64)).collect() };
+        let title = || cell("Report title", 72.0, 748.0);
+        cases.push(Case {
+            name: "page border alone",
+            shapes: border(),
+            blocks: body(8, 72.0, 700.0),
+            tables: 0,
+            inside: &[],
+            outside: &["Body 72 0."],
+            boxes: 0,
+        });
+        for n in [3usize, 8] {
+            let mut shapes = border();
+            shapes.push(ln(36.0, 720.0, 576.0, 720.0));
+            cases.push(Case {
+                name: "border and header rule",
+                shapes,
+                blocks: [vec![title()], body(n, 72.0, 700.0)].concat(),
+                tables: 0,
+                inside: &[],
+                outside: &["Report title", "Body 72 0."],
+                boxes: 0,
+            });
+        }
+        let mut shapes = border();
+        shapes.extend([ln(36.0, 720.0, 576.0, 720.0), ln(36.0, 80.0, 576.0, 80.0)]);
+        let blocks = [vec![title()], body(8, 72.0, 700.0), vec![cell("Page 1", 72.0, 70.0)]].concat();
+        cases.push(Case {
+            name: "border, header and footer rules",
+            shapes,
+            blocks,
+            tables: 0,
+            inside: &[],
+            outside: &["Report title", "Page 1"],
+            boxes: 0,
+        });
+        let mut shapes = border();
+        shapes.push(ln(306.0, 36.0, 306.0, 756.0));
+        cases.push(Case {
+            name: "border and a column rule",
+            shapes,
+            blocks: [body(12, 50.0, 740.0), body(12, 320.0, 740.0)].concat(),
+            tables: 0,
+            inside: &[],
+            outside: &["Body 50 0.", "Body 320 0."],
+            boxes: 0,
+        });
+        let mut shapes = border();
+        shapes.extend([ln(36.0, 720.0, 576.0, 720.0), ln(306.0, 36.0, 306.0, 720.0)]);
+        cases.push(Case {
+            name: "border, header and column rules",
+            shapes,
+            blocks: [vec![title()], body(8, 50.0, 700.0), body(8, 320.0, 690.0)].concat(),
+            tables: 0,
+            inside: &[],
+            outside: &["Report title", "Body 50 0."],
+            boxes: 0,
+        });
+        let mut shapes = border();
+        shapes.extend([ln(36.0, 720.0, 576.0, 720.0), ln(306.0, 36.0, 306.0, 756.0)]);
+        cases.push(Case {
+            name: "border, header rule and a column rule through the header",
+            shapes,
+            blocks: [vec![title()], body(8, 50.0, 700.0), body(8, 320.0, 690.0)].concat(),
+            tables: 0,
+            inside: &[],
+            outside: &["Report title", "Body 50 0."],
+            boxes: 0,
+        });
+        // Tables inside frames.
+        let mut shapes = border();
+        shapes.push(ln(36.0, 720.0, 576.0, 720.0));
+        shapes.extend(grid(&[100.0, 250.0, 400.0], &[700.0, 680.0, 660.0]));
+        let blocks =
+            [vec![title(), cell("A", 105.0, 696.0), cell("B", 255.0, 696.0), cell("C", 105.0, 676.0), cell("D", 255.0, 676.0)], body(1, 72.0, 600.0)]
+                .concat();
+        cases.push(Case {
+            name: "frame around a table clear of it",
+            shapes,
+            blocks,
+            tables: 1,
+            inside: &["A", "D"],
+            outside: &["Report title", "Body 72 0."],
+            boxes: 0,
+        });
+        let mut shapes = border();
+        shapes.push(ln(36.0, 720.0, 576.0, 720.0));
+        shapes.extend([650.0, 630.0, 610.0].iter().map(|y| ln(36.0, *y, 576.0, *y)));
+        shapes.extend([200.0, 400.0].iter().map(|x| ln(*x, 610.0, *x, 650.0)));
+        let mut blocks = vec![title(), para("Body text above the table.", 72.0, 500.0, 700.0, 2, 300.0)];
+        for (r, top) in [(0, 646.0), (1, 626.0)] {
+            blocks.extend([40.0, 205.0, 405.0].iter().map(|x| cell(&format!("Cell {r}"), *x, top)));
+        }
+        blocks.extend(body(3, 72.0, 580.0));
+        cases.push(Case {
+            name: "frame around a table against it",
+            shapes,
+            blocks,
+            tables: 1,
+            inside: &["Cell 0", "Cell 1"],
+            outside: &["Report title", "Body text above the table.", "Body 72 0."],
+            boxes: 0,
+        });
+        // A large grid around little of the page's text, and a page with no size.
+        let mut shapes = rect(36.0, 200.0, 576.0, 756.0);
+        shapes.push(ln(36.0, 480.0, 576.0, 480.0));
+        let blocks = [vec![cell("Top cell", 80.0, 740.0), cell("Bottom cell", 80.0, 470.0)], column("Below", 72.0, 185.0, 10, 15.0)].concat();
+        cases.push(Case {
+            name: "large grid, little text",
+            shapes,
+            blocks,
+            tables: 1,
+            inside: &["Top cell", "Bottom cell"],
+            outside: &["Below0"],
+            boxes: 0,
+        });
+        // A large box around a little of the page's text is a box, not a frame.
+        let blocks = [column("Boxed", 80.0, 740.0, 2, 15.0), column("Below", 72.0, 185.0, 10, 15.0)].concat();
+        cases.push(Case {
+            name: "large box, little text",
+            shapes: rect(36.0, 200.0, 576.0, 756.0),
+            blocks,
+            tables: 0,
+            inside: &[],
+            outside: &["Boxed0", "Below0"],
+            boxes: 2,
+        });
+        // A page with no usable size: a small table (a title row, a row of two cells, a tall row
+        // of two cells) holding all its text stays a table.
+        for name in ["zero page size", "negative page size"] {
+            let mut shapes = rect(100.0, 540.0, 300.0, 700.0);
+            shapes.extend([ln(100.0, 680.0, 300.0, 680.0), ln(100.0, 660.0, 300.0, 660.0), ln(200.0, 540.0, 200.0, 680.0)]);
+            let blocks =
+                vec![cell("Title", 105.0, 696.0), cell("A", 105.0, 676.0), cell("B", 205.0, 676.0), cell("C", 105.0, 656.0), cell("D", 205.0, 656.0)];
+            cases.push(Case { name, shapes, blocks, tables: 1, inside: &["Title", "D"], outside: &[], boxes: 0 });
+        }
+        // Without a usable page size nothing is a frame: a bordered page stays a table.
+        let mut shapes = border();
+        shapes.push(ln(36.0, 720.0, 576.0, 720.0));
+        cases.push(Case {
+            name: "negative page size, framed",
+            shapes,
+            blocks: [vec![title()], body(8, 72.0, 700.0)].concat(),
+            tables: 1,
+            inside: &["Report title"],
+            outside: &[],
+            boxes: 0,
+        });
+        let mut failures = Vec::new();
+        for c in cases {
+            let sized = |p: Page| match c.name {
+                "zero page size" => Page { width: 0.0, height: 0.0, ..p },
+                "negative page size" | "negative page size, framed" => Page { width: -612.0, height: -792.0, ..p },
+                _ => p,
+            };
+            let p = sized(page(c.blocks, c.shapes));
+            let xml = part(&docx(std::slice::from_ref(&p), c.name), "word/document.xml");
+            let tables: Vec<&str> = xml.split("<w:tbl>").skip(1).filter_map(|t| t.split("</w:tbl>").next()).collect();
+            let in_table = |t: &str| tables.iter().any(|tb| tb.contains(&format!(">{t}<")));
+            let mut wrong = Vec::new();
+            if tables.len() != c.tables {
+                wrong.push(format!("{} tables, not {}", tables.len(), c.tables));
+            }
+            wrong.extend(c.inside.iter().filter(|t| !in_table(t)).map(|t| format!("{t:?} not in a table")));
+            wrong.extend(c.outside.iter().filter(|t| in_table(t) || !xml.contains(&format!(">{t}<"))).map(|t| format!("{t:?} not in the flow")));
+            if xml.matches("<w:pBdr>").count() != c.boxes {
+                wrong.push(format!("{} boxed paragraphs, not {}", xml.matches("<w:pBdr>").count(), c.boxes));
+            }
+            for b in &p.blocks {
+                if xml.matches(&format!(">{}<", b.text)).count() == 0 {
+                    wrong.push(format!("{:?} lost", b.text));
+                }
+            }
+            let h = html(std::slice::from_ref(&p), c.name);
+            if h.matches("<table>").count() != c.tables {
+                wrong.push(format!("HTML has {} tables", h.matches("<table>").count()));
+            }
+            if !wrong.is_empty() {
+                failures.push(format!("{}: {}", c.name, wrong.join("; ")));
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// A table cut from a grid starts and ends its merges at its edges: a continuation in its
+    /// first row opens the merge when the next row continues it, and a merge with nothing below
+    /// it is a plain cell.
+    #[test]
+    fn cut_tables_start_and_end_their_merges() {
+        let c = |vmerge: Option<bool>| RuledCell { span: 1, vmerge, blocks: Vec::new(), shade: None, rect: [10.0, 0.0, 20.0, 10.0] };
+        let mut rows = vec![vec![c(Some(false))], vec![c(Some(false))], vec![c(None)]];
+        unmerge_ends(&mut rows);
+        assert_eq!(rows.iter().map(|r| r[0].vmerge).collect::<Vec<_>>(), [Some(true), Some(false), None]);
+        let mut rows = vec![vec![c(Some(false))], vec![c(None)], vec![c(Some(true))]];
+        unmerge_ends(&mut rows);
+        assert_eq!(rows.iter().map(|r| r[0].vmerge).collect::<Vec<_>>(), [None, None, None]);
     }
 
     /// A box around a box is sized to every paragraph inside it, the inner box's too.

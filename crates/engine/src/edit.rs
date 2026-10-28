@@ -122,6 +122,11 @@ pub enum Edit {
     /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
     /// "Untitled" bookmark (New Bookmarks from Structure).
     BookmarksFromStructure,
+    /// Bookmarks for the lines set in `levels`' styles (the first is level 1, the next nests
+    /// under it, …), under a new first "Untitled" bookmark (#1693; see [`crate::text_style_bookmarks`]).
+    BookmarksFromTextStyles {
+        levels: Vec<crate::text_style_bookmarks::TextStyle>,
+    },
     /// Label pages `from..=to` (0-based) as Acrobat's "Number pages" does; later pages keep their labels.
     NumberPages {
         from: usize,

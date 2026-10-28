@@ -347,6 +347,39 @@ pub fn tools() -> Vec<ToolDef> {
             "Make bookmarks from the document's tagged headings (H, H1-H6), nested by level under a new first bookmark titled \"Untitled\". Fails if the document has no tagged headings. Returns the first page of the bookmark tree (see bookmark_list). Undoable.",
         )
         .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "text_styles",
+            "List text styles",
+            "The styles the document's text is set in, the largest first: font (without its subset tag), the size it is shown at in points, bold, italic, how many lines and pages use it, and the first line in it as a sample. For choosing the styles bookmark_from_text_styles makes bookmarks from (headings are usually the larger, rarer styles). Reads the first 5000 pages.",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "bookmark_from_text_styles",
+            "New bookmarks from text styles",
+            "Make bookmarks from the lines set in chosen text styles, for documents whose headings are not tagged: levels lists one style per bookmark level ({font, size, bold, italic} as text_styles gives them; sizes within a quarter point match), the first level 1, the next nested under the bookmark before it, and so on. A heading set on several lines is one bookmark, and each goes to the top of its heading. They go under a new first bookmark titled \"Untitled\". Fails if no text is set in the styles. Returns the first page of the bookmark tree (see bookmark_list). Undoable.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "levels": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 9,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "font": { "type": "string", "minLength": 1 },
+                            "size": { "type": "number", "exclusiveMinimum": 0 },
+                            "bold": { "type": "boolean" },
+                            "italic": { "type": "boolean" }
+                        },
+                        "required": ["font", "size"]
+                    }
+                }
+            }),
+            &["doc", "levels"],
+        )),
         t("page_number", "Number pages", "Label a range of pages (e.g. i, ii, iii for front matter, or A-1, A-2 for an appendix). Later pages keep their labels. Undoable.").with(schema(
             json!({
                 "doc": doc(),

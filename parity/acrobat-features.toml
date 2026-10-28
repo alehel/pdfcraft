@@ -3379,6 +3379,18 @@ evidence = ["crates/a11y/src/tests.rs::headings_are_found_with_their_levels_titl
 notes = "Bookmark options ▸ New bookmarks from structure: tagged headings (H1–H6 through the role map; a plain H takes its Sect/Part/Art nesting) become bookmarks nested by level under a new first \"Untitled\" bookmark, each linked to its element (/SE). Titles come from /ActualText, the marked text drawn directly on the page (not inside Form XObjects; words split where the glyphs are apart, so text placed glyph by glyph, as Chromium writes it, keeps its words; vertical line breaks use the absolute font size independently of Tz), /Alt or /T. Not yet: Acrobat's choice of element types (only headings), and destinations go to the heading's page rather than its position on it"
 
 [[feature]]
+id = "organize.bookmarks-from-text-styles"
+title = "Generate bookmarks from text styles"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = ["bookmark.from_text_styles"]
+tools = ["text_styles", "bookmark_from_text_styles"]
+evidence = ["crates/engine/src/tests.rs::bookmarks_from_text_styles_nest_the_headings_and_undo", "crates/engine/src/text_style_bookmarks.rs::subset_tags_are_left_out_of_the_font_name", "crates/engine/src/text_style_bookmarks.rs::styles_match_within_a_quarter_point", "crates/automation/tests/it/automation.rs::bookmarks_from_text_styles_through_tools", "crates/ui-egui/tests/it/bookmarks.rs::new_bookmarks_from_text_styles_from_the_bookmark_options"]
+notes = "Bookmark options (and Pages) ▸ New bookmarks from text styles…, for documents whose headings aren't tagged (#1693): the dialog lists the document's text styles (font without its subset tag, the size shown at, bold, italic, line count and a sample), the largest first and offered for level 1; one style per level, up to four levels (nine headlessly). Every line in a level's style becomes a bookmark of that level under a new first \"Untitled\" bookmark, a heading set on several rows is one bookmark, and each goes to the top of its heading (/XYZ). Lines are read down each page, then left to right, so a multi-column page's headings are taken row by row across the columns; sizes within a quarter point match. Not yet: several styles for one level, colour as part of a style, and the first 5000 pages only. Acrobat has no such command (its bookmarks come from structure); this is beyond it"
+
+[[feature]]
 id = "organize.attachments-add"
 title = "Add file attachments"
 area = "D"

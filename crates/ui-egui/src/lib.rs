@@ -83,6 +83,7 @@ use canvas::wheel_boost;
 use canvas::wheel_pager;
 use canvas::zoom_snap;
 use dialogs::appearance;
+pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::credits;
 use dialogs::marks_ui;
@@ -561,6 +562,8 @@ pub struct PdfCraftApp {
     pub(crate) word_count_draft: word_count_ui::Draft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
+    /// New bookmarks from text styles dialog state (#1693).
+    pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.
     pub boxes_draft: pageboxes::BoxesDraft,
     /// Header & footer / watermark / background dialog state.

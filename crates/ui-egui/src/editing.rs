@@ -743,6 +743,11 @@ impl PdfCraftApp {
                 self.right = Some(crate::RightPanel::Bookmarks);
                 Edit::BookmarksFromStructure
             }
+            // A dialog chooses the styles; it makes the edit.
+            A::FromTextStyles => {
+                self.open_text_style_bookmarks(id);
+                return;
+            }
         };
         self.apply_edit(edit);
     }

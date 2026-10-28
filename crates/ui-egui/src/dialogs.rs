@@ -8,6 +8,7 @@ use pdfcraft_engine::Edit;
 use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
 pub(super) mod appearance;
+pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
 pub(super) mod marks_ui;
@@ -405,6 +406,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.protect_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::BookmarksFromTextStyles => {
+            req.close = crate::bookmark_styles_ui::body(ui, app, &t);
             return false;
         }
         Dialog::NumberPages => {

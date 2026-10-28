@@ -54,6 +54,7 @@ mod stamp_preview;
 mod test_hooks;
 pub mod text_fonts;
 mod text_preview;
+pub mod text_style_bookmarks;
 pub mod word_count;
 pub mod xfa;
 mod xfa_form;

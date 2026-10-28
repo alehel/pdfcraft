@@ -32,6 +32,17 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("page changes"))
             }
         }
+        // Creates bookmarks (assembly), and their titles are the document's text, copied out of it
+        // (Table 22, bit 5), as an export of it would be.
+        Edit::BookmarksFromTextStyles { .. } => {
+            if !p.assemble() {
+                Err(EditError::NotPermitted("page changes"))
+            } else if !p.copy() {
+                Err(EditError::NotPermitted("copying text and images"))
+            } else {
+                Ok(())
+            }
+        }
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
@@ -280,8 +291,28 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()
-                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj })
+                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, top: None })
                 .collect();
+            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+        }
+        Edit::BookmarksFromTextStyles { levels } => {
+            if levels.is_empty() {
+                return Err(EditError::Invalid("choose a text style for at least one bookmark level".into()));
+            }
+            // Each line goes to the first level whose style it is in: a style given again, or one
+            // within the size tolerance of an earlier level's, would leave its level empty.
+            for (i, a) in levels.iter().enumerate() {
+                if let Some(j) = levels.iter().skip(i.saturating_add(1)).position(|b| a.matches(b)) {
+                    let (first, second) = (i.saturating_add(1), i.saturating_add(j).saturating_add(2));
+                    return Err(EditError::Invalid(format!(
+                        "bookmark levels {first} and {second} have the same text style: choose a different one for each level"
+                    )));
+                }
+            }
+            let entries = crate::text_style_bookmarks::headings(doc, levels);
+            if entries.is_empty() {
+                return Err(EditError::Invalid("no text is set in the chosen styles".into()));
+            }
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
         }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,

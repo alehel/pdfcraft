@@ -1849,6 +1849,153 @@ fn bookmarks_from_structure_nest_the_headings_and_undo() {
     assert!(s.get(id).unwrap().info.outline.is_empty());
 }
 
+/// Three pages whose headings are set apart only by how they look (#1693): chapters in
+/// Helvetica-Bold 18, sections in Helvetica-Bold 14, text in Helvetica 11. Page 2's chapter title
+/// runs over two lines, its bold font is another subset of the same font, and one section is set
+/// with `1 Tf` and a text matrix 14 times larger. Page 3 has two sections on one row.
+fn styled_headings_fixture() -> Vec<u8> {
+    let page1 = "BT /FB 18 Tf 72 700 Td (Chapter One) Tj ET BT /FR 11 Tf 72 670 Td (Body text) Tj ET \
+                 BT /FB 14 Tf 72 640 Td (Section A) Tj ET BT /FR 11 Tf 72 620 Td (More body) Tj ET";
+    let page2 = "BT /FS 18 Tf 72 700 Td (Chapter Two) Tj ET BT /FS 18 Tf 72 680 Td (and its subtitle) Tj ET \
+                 BT /FB 1 Tf 14 0 0 14 72 640 Tm (Section B) Tj ET BT /FR 11 Tf 72 620 Td (Body) Tj ET \
+                 BT /FB 14 Tf 72 600 Td (Section C) Tj ET";
+    // Two sections on one row, the right one drawn first: read from the left.
+    let page3 = "BT /FB 14 Tf 300 500 Td (Right part) Tj ET BT /FB 14 Tf 72 500 Td (Left part) Tj ET";
+    let fonts = "/Font << /FB 6 0 R /FR 7 0 R /FS 8 0 R >>";
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj(format!("<< /Type /Pages /Kids [3 0 R 4 0 R 10 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << {fonts} >> >>"))
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 9 0 R >>")
+        .stream("", page1)
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+        .stream("", page2)
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 11 0 R >>")
+        .stream("", page3)
+        .build()
+}
+
+/// #1693: the document's text styles, largest first, and bookmarks made from the chosen ones:
+/// chapters at level 1, sections nested under the chapter before them. A two-line title is one
+/// bookmark; a subset of the same font and a size set by the text matrix count as the style.
+/// Each bookmark goes to its heading's top. One undo step; no style, or none in use, is refused.
+#[test]
+fn bookmarks_from_text_styles_nest_the_headings_and_undo() {
+    let mut s = Session::new();
+    let id = s.open("styled.pdf", None, Arc::new(styled_headings_fixture()), None).unwrap();
+    let styles = s.get(id).unwrap().text_styles();
+    let listed: Vec<(String, f64, bool, usize, usize)> =
+        styles.iter().map(|u| (u.style.font.clone(), u.style.size, u.style.bold, u.lines, u.pages)).collect();
+    assert_eq!(
+        listed,
+        [
+            ("Helvetica-Bold".to_string(), 18.0, true, 3, 2),
+            ("Helvetica-Bold".to_string(), 14.0, true, 5, 3),
+            ("Helvetica".to_string(), 11.0, false, 3, 2),
+        ]
+    );
+    assert_eq!(styles[0].sample, "Chapter One");
+    let (chapter, section) = (styles[0].style.clone(), styles[1].style.clone());
+    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![chapter.clone(), section.clone()] }).unwrap();
+    let outline = s.get(id).unwrap().info.outline.clone();
+    assert_eq!(
+        outline_titles(&outline),
+        ["Untitled→0[Chapter One→1[Section A→1],Chapter Two and its subtitle→2[Section B→2,Section C→2,Left part→3,Right part→3]]"]
+    );
+    let first = &outline[0].children[0];
+    match first.view {
+        pdfcraft_render::DestView::Xyz { left: None, top: Some(top), zoom: None } => {
+            assert!((700.0..720.0).contains(&top), "the top of the heading's line: {top}")
+        }
+        ref v => panic!("{v:?}"),
+    }
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("New bookmarks from text styles"));
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+    // One level is enough; the sections are then left out.
+    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![chapter] }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Chapter One→1,Chapter Two and its subtitle→2]"]);
+    s.undo(id).unwrap();
+    // Nothing chosen, or a style no text is in: refused, nothing changes.
+    let err = s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![] }).unwrap_err();
+    assert!(err.to_string().contains("at least one bookmark level"), "{err}");
+    let unused = pdfcraft_engine_style(&section, 30.0);
+    let err = s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![unused] }).unwrap_err();
+    assert!(err.to_string().contains("no text is set in the chosen styles"), "{err}");
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+}
+
+/// CodeRabbit on #4560: a line goes to the first level whose style it is in, so the same style
+/// for two levels (or one within the size tolerance of the other) would leave the later level
+/// empty. Refused at the edit, for the dialog and automation alike; nothing changes.
+#[test]
+fn bookmarks_from_text_styles_refuse_one_style_for_two_levels() {
+    let mut s = Session::new();
+    let id = s.open("styled.pdf", None, Arc::new(styled_headings_fixture()), None).unwrap();
+    let styles = s.get(id).unwrap().text_styles();
+    let (chapter, section) = (styles[0].style.clone(), styles[1].style.clone());
+    let near = pdfcraft_engine_style(&section, section.size + 0.1);
+    for levels in [vec![chapter.clone(), chapter.clone()], vec![chapter.clone(), section.clone(), near]] {
+        let n = levels.len();
+        let err = s.apply(id, Edit::BookmarksFromTextStyles { levels }).unwrap_err();
+        assert!(err.to_string().contains(&format!("levels {} and {n} have the same text style", n - 1)), "{err}");
+        assert!(s.get(id).unwrap().info.outline.is_empty());
+    }
+}
+
+/// CodeRabbit on #4560: bookmark titles from text styles are the document's text, so a document
+/// that forbids copying lists no styles and refuses the edit, as it refuses other extraction.
+#[test]
+fn bookmarks_from_text_styles_need_copying_permission() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(styled_headings_fixture())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("r.pdf", None, bytes.clone(), None).unwrap();
+    assert!(s.get(id).unwrap().allows_assembly() && !s.get(id).unwrap().allows_copying());
+    assert!(s.get(id).unwrap().text_styles().is_empty(), "no samples of text that may not be copied");
+    let style = text_style_bookmarks::TextStyle { font: "Helvetica-Bold".into(), size: 18.0, bold: true, italic: false };
+    let err = s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style.clone()] }).unwrap_err();
+    assert_eq!(err, EditError::NotPermitted("copying text and images"));
+    let owner = s.open("r.pdf", None, bytes, Some("owner")).unwrap();
+    assert!(!s.get(owner).unwrap().text_styles().is_empty());
+    assert!(s.apply(owner, Edit::BookmarksFromTextStyles { levels: vec![style] }).is_ok(), "the owner may");
+}
+
+/// CodeRabbit on #4560: two headings in one style in two columns, the right one a little lower,
+/// are two bookmarks, not one heading run on across the columns.
+#[test]
+fn headings_in_two_columns_are_two_bookmarks() {
+    let page = "BT /FB 14 Tf 72 700 Td (Left heading) Tj ET BT /FB 14 Tf 320 690 Td (Right heading) Tj ET";
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources << /Font << /FB 5 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>")
+        .stream("", page)
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("cols.pdf", None, Arc::new(bytes), None).unwrap();
+    let style = s.get(id).unwrap().text_styles()[0].style.clone();
+    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Left heading→1,Right heading→1]"]);
+}
+
+/// `style` at another size.
+fn pdfcraft_engine_style(style: &text_style_bookmarks::TextStyle, size: f64) -> text_style_bookmarks::TextStyle {
+    text_style_bookmarks::TextStyle { size, ..style.clone() }
+}
+
 #[test]
 fn number_pages_shows_in_the_viewer_and_undoes() {
     let (mut s, id) = session_with(5);

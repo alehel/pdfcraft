@@ -653,7 +653,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     cx.xfa_out.console.push(format!("Imported XFA data: {} node(s)", r.nodes));
                     xfa_after_data_change(doc, cx, true)?;
                 }
-                Some(Err(why)) => return Err(EditError::Invalid(why)),
+                Some(Err(why)) if !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => return Err(EditError::Invalid(why)),
                 _ => {
                     // A PDF with bytes before its header, within the 1,024 the reader allows, is read
                     // as a PDF when it is not a data file. A file the PDF reader cannot open keeps

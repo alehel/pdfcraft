@@ -8762,6 +8762,21 @@ fn importing_a_pdf_copies_its_comments() {
     assert_eq!(contents(&s), [Some("from the data file".to_string())]);
 }
 
+/// An XFA form imports the comments of a PDF with binary bytes before its header, instead of
+/// refusing it as a data file in an unknown encoding.
+#[test]
+fn an_xfa_form_imports_comments_from_a_pdf_with_binary_bytes_before_its_header() {
+    let data = "<form><page1><country>JP</country></page1></form>";
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template(data)));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("fields.pdf", None, bytes, None).expect("opens");
+    let review = pdf_with_annots(&[b"<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (from the review) /P 3 0 R >>"]);
+    let prefixed = [b"\xC0\xC1\xF5\n".as_slice(), &review].concat();
+    s.apply(id, Edit::ImportData { name: "prefixed.pdf".into(), bytes: Arc::new(prefixed) }).unwrap();
+    let contents: Vec<_> = s.get(id).unwrap().info.annotations.iter().map(|a| a.contents.clone()).collect();
+    assert!(contents.contains(&Some("from the review".to_string())), "{contents:?}");
+}
+
 /// A one-page 200 × 300 document whose page lists `annots` (objects 4, 5, …).
 fn pdf_with_annots(annots: &[&[u8]]) -> Vec<u8> {
     let list: String = (0..annots.len()).map(|i| format!("{} 0 R ", i + 4)).collect();

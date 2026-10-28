@@ -128,6 +128,7 @@ fn reserve(dst: &mut Document, src: &Document, annots: &mut PageAnnots, mut dict
     let same = dict.get(b"NM").and_then(|n| src.resolve(n).as_string().map(|s| s.to_text())).and_then(|nm| annots.named(dst, &nm));
     let target = match same {
         Some((r, false)) => {
+            annots.claimed.insert(r);
             // The replaced comment's pop-up goes with it: the one it names, and any whose `/Parent`
             // is the comment.
             if let Some(p) = dst.get(r).as_dict().and_then(|d| d.reference(b"Popup")) {
@@ -227,6 +228,8 @@ struct PageAnnots {
     /// The pop-ups on the page before the import, by `/Parent`.
     popups: HashMap<ObjRef, Vec<ObjRef>>,
     removed: HashSet<ObjRef>,
+    /// The annotations that an incoming comment has already replaced.
+    claimed: HashSet<ObjRef>,
 }
 
 impl PageAnnots {
@@ -252,7 +255,7 @@ impl PageAnnots {
                 popups.entry(parent).or_default().push(r);
             }
         }
-        PageAnnots { list, members, names, popups, removed: HashSet::new() }
+        PageAnnots { list, members, names, popups, removed: HashSet::new(), claimed: HashSet::new() }
     }
 
     /// Add `r` at the end, unless the page already lists it.
@@ -275,7 +278,10 @@ impl PageAnnots {
     /// The first annotation on the page named `nm`, and whether it must be kept: it is locked, or
     /// it is no comment.
     fn named(&self, dst: &Document, nm: &str) -> Option<(ObjRef, bool)> {
-        let r = *self.names.get(nm)?.iter().find(|r| self.members.contains(r))?;
+        let mut listed = self.names.get(nm)?.iter().filter(|r| self.members.contains(r));
+        let first = *listed.clone().next()?;
+        // A second incoming comment with the name of one already replaced is added beside it.
+        let Some(&r) = listed.find(|r| !self.claimed.contains(r)) else { return Some((first, true)) };
         let d = dst.get(r).as_dict().cloned()?;
         let flags = d.get(b"F").and_then(|f| dst.resolve(f).as_int()).unwrap_or(0);
         let subtype = d.get(b"Subtype").map(|s| dst.resolve(s));
@@ -554,6 +560,29 @@ mod tests {
         assert_eq!(text(&one[1].1, b"NM").as_deref(), Some("movie-1"));
         assert_eq!(text(&by_contents(&one, "from the reviewer").1, b"NM"), None, "the copy is added without the name");
         assert_eq!(text(&by_contents(&one, "a square").1, b"NM"), None);
+    }
+
+    #[test]
+    fn two_comments_with_one_name_replace_one_comment_and_add_the_other() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /NM (twin) /Contents (first) /Rect [10 10 30 30] /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Text /NM (twin) /Contents (second) /Rect [40 40 60 60] /P 3 0 R >>",
+        ]);
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /NM (twin) /Contents (older text) /Rect [10 10 30 30] /P 3 0 R >>",
+        ]);
+        assert_eq!(import_comments(&mut doc, &src).unwrap(), 2);
+        let one = page_annots(&doc, 0);
+        assert_eq!(one.len(), 2, "one comment replaced and one added");
+        let (first, d) = by_contents(&one, "first");
+        assert_eq!((*first, text(d, b"NM").as_deref()), (ObjRef::new(4, 0), Some("twin")));
+        assert_eq!(text(&by_contents(&one, "second").1, b"NM"), None, "the second copy is added without the name");
     }
 
     #[test]

@@ -66,7 +66,7 @@ pub(super) fn is_centred(block: &TextBlock, lines: &[TextLine], page_centre: f64
 }
 
 pub(super) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
-    group_layout(lines, true, &[])
+    group_layout(lines, true, true, &[])
 }
 
 /// Exporters currently represent a block with one style. Keep their style boundaries until
@@ -74,7 +74,7 @@ pub(super) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
 /// Dotted-leader entries stay on one row and use the title run's style.
 pub(super) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     let mut blocks = Vec::new();
-    reading_slices(lines, |slice| blocks.extend(group_layout(slice, false, &[])));
+    reading_slices(lines, |slice| blocks.extend(group_layout(slice, false, false, &[])));
     blocks
 }
 
@@ -171,7 +171,7 @@ fn paragraph_ends(lines: &[TextLine], seg: &[Vec<usize>], row: &[usize], right: 
 /// Split each visual region of `lines` into paragraphs and give each its style runs.
 fn paragraphs_of(lines: &[TextLine], walls: &[[f64; 4]]) -> Vec<ReadingParagraph> {
     let mut out = Vec::new();
-    for block in group_layout(lines, true, walls) {
+    for block in group_layout(lines, true, false, walls) {
         let right = block.rows.iter().filter_map(|r| frame_row_rect(r, lines)).map(|r| r[2]).fold(f64::NEG_INFINITY, f64::max);
         let mut seg: Vec<Vec<usize>> = Vec::new();
         for row in block.rows {
@@ -427,14 +427,17 @@ fn walled(a: [f64; 4], b: [f64; 4], walls: &[[f64; 4]]) -> bool {
     })
 }
 
-fn group_layout(lines: &[TextLine], mixed: bool, walls: &[[f64; 4]]) -> Vec<TextBlock> {
+/// `mixed` lets lines of different styles share a block. `scans_apart` keeps OCR text (invisible
+/// lines over a scan) apart: words join only across a word space and rows never join, as the
+/// scan fixes where each sits (editing); otherwise OCR rows flow into paragraphs (export).
+fn group_layout(lines: &[TextLine], mixed: bool, scans_apart: bool, walls: &[[f64; 4]]) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let joins = rows.last().and_then(|r| r.last()).and_then(|i| lines.get(*i)).is_some_and(|prev| {
             let gap = line.frame_rect()[0] - prev.frame_rect()[2];
             // OCR words (invisible text over a scan) join only across a word space: a wider gap
             // is a table cell or a tab stop, which a rewrite would close up.
-            let scanned = !mixed || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));
+            let scanned = !scans_apart || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));
             scanned
                 && (mixed || same_style(prev, line))
                 && same_plane(prev, line)
@@ -496,7 +499,7 @@ fn group_layout(lines: &[TextLine], mixed: bool, walls: &[[f64; 4]]) -> Vec<Text
                 || (pr[2] - frame[2]).abs() < tol
                 || hanging;
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
-            (!mixed || !(invisible(prev) || invisible(first)))
+            (!scans_apart || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
                 && same_plane(prev, first)
                 // The rewrite sets every row in the first one's horizontal scale.

@@ -6435,3 +6435,15 @@ fn painted_rects_report_fills_and_straight_strokes() {
     // The slanted line, the curve and the shapes under the overflowing matrix add nothing.
     assert_eq!(rects.len(), 3, "{rects:?}");
 }
+
+/// OCR text (invisible, over a scan) flows into paragraphs for export, as reading blocks do;
+/// editing keeps each scanned row apart, since the scan fixes where it sits.
+#[test]
+fn reading_paragraphs_let_ocr_rows_flow_into_a_paragraph() {
+    let doc = helvetica_page(
+        "BT 3 Tr /F1 11 Tf 72 700 Td (The first scanned row of a paragraph is the longest one here) Tj 0 -13 Td (and the second row continues it.) Tj ET",
+    );
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["The first scanned row of a paragraph is the longest one here and the second row continues it."]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2, "editing keeps OCR rows apart");
+}

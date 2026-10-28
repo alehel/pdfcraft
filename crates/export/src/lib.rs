@@ -492,6 +492,13 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                     if r.bold && !b.bold {
                         piece = format!("<strong>{piece}</strong>");
                     }
+                    // A plain run inside a bold or italic paragraph, which the element wraps whole.
+                    if !r.italic && b.italic {
+                        piece = format!("<span style=\"font-style:normal\">{piece}</span>");
+                    }
+                    if !r.bold && b.bold && lvl == 0 {
+                        piece = format!("<span style=\"font-weight:normal\">{piece}</span>");
+                    }
                     if rgb8(r.color) != rgb8(b.color) {
                         piece = format!("<span style=\"color:#{}\">{piece}</span>", hex(r.color).unwrap_or_else(|| "000000".into()));
                     }
@@ -514,7 +521,8 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                 for row in &t.rows {
                     s.push_str("<tr>");
                     for c in row {
-                        let mut body = esc(&c.text);
+                        // A cell's paragraphs are a line each.
+                        let mut body = esc(&c.text).replace('\n', "<br>");
                         if c.italic {
                             body = format!("<em>{body}</em>");
                         }
@@ -832,7 +840,7 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
             let ends_in_table = seg.is_some_and(|s| s.ends_in_table);
             if last_page && k + 1 == count {
                 if ends_in_table || page.blocks.is_empty() && page.images.is_empty() {
-                    body.push_str("<w:p><w:pPr><w:spacing w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr></w:p>");
+                    body.push_str(word::HAIRLINE);
                 }
                 body.push_str(&sect);
             } else {
@@ -1055,7 +1063,7 @@ pub fn rtf(pages: &[Page]) -> String {
                             fmt.push_str("\\i");
                         }
                         fmt.push_str(&cf(c.color));
-                        s.push_str(&format!("{{{fmt} {}}}\\cell", rtf_text(&c.text)));
+                        s.push_str(&format!("{{{fmt} {}}}\\cell", rtf_text(&c.text).replace('\n', "\\line ")));
                     }
                     s.push_str("\\row\n");
                 }
@@ -1319,6 +1327,19 @@ mod tests {
         assert!(bold_run.contains("b=\"1\""), "{slide}");
         let xml = part(&docx(&[p], "Runs"), "word/document.xml");
         assert!(xml.contains("<w:b/><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/></w:rPr><w:t xml:space=\"preserve\">well ahead</w:t>"), "{xml}");
+    }
+
+    /// A plain phrase inside a bold or italic paragraph stays plain in HTML.
+    #[test]
+    fn html_keeps_a_plain_phrase_inside_a_bold_paragraph() {
+        let run = |text: &str, bold: bool, italic: bool| Run { text: text.into(), size: 11.0, bold, italic, ..Run::default() };
+        let mut p = page();
+        let b = &mut p.blocks[3];
+        (b.bold, b.italic) = (true, true);
+        b.runs = vec![run("Mostly bold ", true, true), run("plain", false, false), run(" text, long enough to stay body text here.", true, true)];
+        b.text = b.runs.iter().map(|r| r.text.as_str()).collect();
+        let h = html(&[p], "Runs");
+        assert!(h.contains("<span style=\"font-weight:normal\"><span style=\"font-style:normal\">plain</span></span>"), "{h}");
     }
 
     #[test]

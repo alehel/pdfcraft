@@ -125,8 +125,15 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
 /// Choose the object a comment is copied into: the comment of `annots` with its name, or a new
 /// object. Returns it with the dictionary to copy.
 fn reserve(dst: &mut Document, src: &Document, annots: &mut PageAnnots, mut dict: Dict) -> (ObjRef, Dict) {
-    let same = dict.get(b"NM").and_then(|n| src.resolve(n).as_string().map(|s| s.to_text())).and_then(|nm| annots.named(dst, &nm));
+    let nm = dict.get(b"NM").and_then(|n| src.resolve(n).as_string().map(|s| s.to_text()));
+    let same = nm.as_deref().and_then(|nm| annots.named(dst, nm));
+    // A second incoming comment with the name of one added earlier is added without the name.
+    let taken = nm.is_some_and(|nm| !annots.added.insert(nm));
     let target = match same {
+        None if taken => {
+            dict.remove(b"NM");
+            dst.add(Object::Null)
+        }
         Some((r, false)) => {
             annots.claimed.insert(r);
             // The replaced comment's pop-up goes with it: the one it names, and any whose `/Parent`
@@ -230,6 +237,8 @@ struct PageAnnots {
     removed: HashSet<ObjRef>,
     /// The annotations that an incoming comment has already replaced.
     claimed: HashSet<ObjRef>,
+    /// The names of the incoming comments placed so far.
+    added: HashSet<String>,
 }
 
 impl PageAnnots {
@@ -262,7 +271,7 @@ impl PageAnnots {
                 popups.entry(parent).or_default().push(r);
             }
         }
-        PageAnnots { list, members, names, popups, removed: HashSet::new(), claimed: HashSet::new() }
+        PageAnnots { list, members, names, popups, removed: HashSet::new(), claimed: HashSet::new(), added: HashSet::new() }
     }
 
     /// Add `r` at the end, unless the page already lists it.
@@ -589,6 +598,27 @@ mod tests {
         assert_eq!(one.len(), 2, "one comment replaced and one added");
         let (first, d) = by_contents(&one, "first");
         assert_eq!((*first, text(d, b"NM").as_deref()), (ObjRef::new(4, 0), Some("twin")));
+        assert_eq!(text(&by_contents(&one, "second").1, b"NM"), None, "the second copy is added without the name");
+    }
+
+    #[test]
+    fn two_new_comments_with_one_name_keep_it_once() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /NM (twin) /Contents (first) /Rect [10 10 30 30] /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Text /NM (twin) /Contents (second) /Rect [40 40 60 60] /P 3 0 R >>",
+        ]);
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ]);
+        assert_eq!(import_comments(&mut doc, &src).unwrap(), 2);
+        let one = page_annots(&doc, 0);
+        assert_eq!(one.len(), 2);
+        assert_eq!(text(&by_contents(&one, "first").1, b"NM").as_deref(), Some("twin"));
         assert_eq!(text(&by_contents(&one, "second").1, b"NM"), None, "the second copy is added without the name");
     }
 

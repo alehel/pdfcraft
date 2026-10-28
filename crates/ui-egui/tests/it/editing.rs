@@ -6298,6 +6298,29 @@ fn page_properties_does_not_apply_to_another_active_document() {
     }
 }
 
+/// Page properties sets the tab order of the pages it was opened on: when an edit changes the
+/// document while the dialog is open, OK closes it without changing a page.
+#[test]
+fn page_properties_does_not_apply_after_the_document_changes() {
+    use pdfcraft_engine::TabOrder::Annotations;
+    let mut h = organize(3);
+    let id = h.state().views[0].id;
+    h.state_mut().views[0].select_pages(&[0]);
+    assert!(h.state_mut().execute("page.properties"));
+    h.run_steps(3);
+    h.get_by_label("Use Column Order").click();
+    h.run_steps(2);
+    // Page 1 becomes page 3, so index 0 is another page now.
+    assert!(h.state_mut().execute("page.reverse"));
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.tab_orders(), [Annotations; 3]);
+    assert_ne!(doc.can_undo(), Some("Set tab order"));
+}
+
 /// Leaving Organize (a page opened from the grid, or the grid's Close) goes back to the
 /// workspace's panel: under the Edit tab, the Edit panel, not All tools.
 #[test]

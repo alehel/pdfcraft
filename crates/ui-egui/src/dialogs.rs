@@ -52,7 +52,7 @@ struct Pending {
     summarize_now: bool,
     optimize_now: bool,
     duplicate_now: Option<Edit>,
-    page_props_now: Option<(pdfcraft_engine::DocId, Edit)>,
+    page_props_now: Option<(pdfcraft_engine::DocId, u64, Edit)>,
     replace_now: bool,
     open_revision: Option<usize>,
     a11y_now: bool,
@@ -227,7 +227,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             let (ok, cancel) = crate::organize_panel::page_props_body(ui, d);
             // An order every page already has adds no undo step.
             if ok && let Some(order) = d.tab_order.filter(|o| d.before != Some(*o)) {
-                req.page_props_now = Some((d.doc, Edit::SetTabOrder { pages: d.pages.clone(), order }));
+                req.page_props_now = Some((d.doc, d.generation, Edit::SetTabOrder { pages: d.pages.clone(), order }));
             }
             req.close = ok || cancel;
             return false;
@@ -1657,9 +1657,11 @@ fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
         app.duplicate_draft = None;
         app.apply_edit(e);
     }
-    // Another document became active while the dialog was open: its pages are not the ones chosen.
-    if let Some((doc, e)) = req.page_props_now.take()
+    // Another document became active, or the document changed, while the dialog was open: the
+    // pages at those indices may not be the ones chosen.
+    if let Some((doc, generation, e)) = req.page_props_now.take()
         && app.active_ids().is_some_and(|(_, id)| id == doc)
+        && app.session.get(doc).is_some_and(|d| d.edit_generation() == generation)
     {
         app.apply_edit(e);
     }

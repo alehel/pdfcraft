@@ -6319,6 +6319,10 @@ fn page_properties_does_not_apply_after_the_document_changes() {
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.tab_orders(), [Annotations; 3]);
     assert_ne!(doc.can_undo(), Some("Set tab order"));
+    assert_eq!(
+        h.state().toast.as_ref().map(|t| t.0.as_str()),
+        Some("The document changed while the dialog was open, so nothing was changed. Open Page properties again to set the tab order.")
+    );
 }
 
 /// Leaving Organize (a page opened from the grid, or the grid's Close) goes back to the

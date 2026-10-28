@@ -1659,11 +1659,12 @@ fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
     }
     // Another document became active, or the document changed, while the dialog was open: the
     // pages at those indices may not be the ones chosen.
-    if let Some((doc, generation, e)) = req.page_props_now.take()
-        && app.active_ids().is_some_and(|(_, id)| id == doc)
-        && app.session.get(doc).is_some_and(|d| d.edit_generation() == generation)
-    {
-        app.apply_edit(e);
+    if let Some((doc, generation, e)) = req.page_props_now.take() {
+        if app.active_ids().is_some_and(|(_, id)| id == doc) && app.session.get(doc).is_some_and(|d| d.edit_generation() == generation) {
+            app.apply_edit(e);
+        } else {
+            app.notify_tr("The document changed while the dialog was open, so nothing was changed. Open Page properties again to set the tab order.");
+        }
     }
     if req.extract_now {
         app.extract_selection();

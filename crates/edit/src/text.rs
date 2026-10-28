@@ -1410,9 +1410,10 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 /// (`bt`, baseline, end x, size).
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     // Reading keeps invisible text (an OCR layer) and visible text (a stamp on its line) in
-    // separate lines, even within one text object; a space drawn either way joins either.
-    let visibility_matches =
-        |l: &TextLine| s.text.trim().is_empty() || l.text.trim().is_empty() || (l.origin.state.render_mode == 3) == (s.state.render_mode == 3);
+    // separate lines, even within one text object. A space drawn either way joins the line it
+    // follows; a line is as visible as its first show, so text never joins a line opened by a
+    // space drawn the other way (that blank line is dropped).
+    let visibility_matches = |l: &TextLine| s.text.trim().is_empty() || (l.origin.state.render_mode == 3) == (s.state.render_mode == 3);
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
         lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order && visibility_matches(l))
@@ -1563,7 +1564,7 @@ pub(crate) fn form_call(
 /// [`text_lines`] leaves out because it can only rewrite the page's own streams). Lines from a
 /// form carry a stream number past the page's streams, one per form drawn. The flag is `true`
 /// when forms past [`MAX_FORM_DEPTH`] or [`MAX_FORM_VISITS`] were left unread.
-fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), EditError> {
+pub(crate) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), EditError> {
     struct Walk<'a> {
         doc: &'a Document,
         lines: Vec<TextLine>,

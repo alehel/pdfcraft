@@ -15,9 +15,6 @@ pub(crate) struct Frame {
 
 /// A line's pitch as a multiple of its font size, when a page gives no paragraph to measure.
 const DEFAULT_PITCH: f64 = 1.15;
-/// Most cells a grid framing the page's text has (a border with rules under the header, over
-/// the footer and down the middle); a grid with more is a table.
-const MAX_FRAME_CELLS: usize = 6;
 /// Most rows a table rebuilt from its borders may have.
 const MAX_RULED_ROWS: usize = 500;
 /// Most rules looked at on one page when rebuilding tables (pairs of them are compared).
@@ -461,7 +458,6 @@ pub(crate) fn ruled_tables(page: &Page) -> Ruled {
             continue;
         }
         let (Some(&x0), Some(&x1), Some(&y1), Some(&y0)) = (xs.first(), xs.last(), ys.first(), ys.last()) else { continue };
-        // A box drawn around a paragraph (one cell, one block) is not a table.
         let rect = [x0, y0, x1, y1];
         let ncols = xs.len() - 1;
         let nrows = ys.len() - 1;
@@ -531,75 +527,82 @@ pub(crate) fn ruled_tables(page: &Page) -> Ruled {
                 }
             }
         }
-        let filled = rows.iter().flatten().filter(|c| !c.blocks.is_empty()).count();
         // A frame around the text (a page border, perhaps with rules under the header, over the
-        // footer or down the middle) is not a table. It is told by its geometry: few cells,
-        // covering most of the page and holding most of its text. Its rules are then left out
-        // of the boxes and rules found later.
+        // footer or down the middle) is not a table. It covers most of the page and holds most
+        // of its text, and has rows that are one cell across (the header, the footer, the body
+        // under a border). Those rows are not table rows, and neither is a lone row of columns
+        // between them; a run of two or more rows of cells inside it (a table drawn against the
+        // border) still is. A grid filling the page whose every row has cells (a SWOT grid, a
+        // form) stays a table. The frame's rules are left out of the boxes and rules found later.
         let page_area = page.width * page.height;
         let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
-        let texts: Vec<&Block> = page.blocks.iter().filter(|b| !b.text.trim().is_empty()).collect();
-        let enclosed = texts
+        let texts = page.blocks.iter().filter(|b| !b.text.trim().is_empty()).count();
+        let enclosed = page
+            .blocks
             .iter()
+            .filter(|b| !b.text.trim().is_empty())
             .filter(|b| {
                 let (cx, cy) = ((b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0);
                 cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1
             })
             .count();
-        let frame_like = rows.iter().flatten().count() <= MAX_FRAME_CELLS
-            && page_area.is_finite()
-            && area(rect) >= page_area * 0.5
-            && !texts.is_empty()
-            && enclosed * 5 >= texts.len() * 4;
-        if frame_like {
+        let encloses_page = page_area.is_finite() && page_area > 0.0 && area(rect) >= page_area * 0.5 && texts > 0 && enclosed * 5 >= texts * 4;
+        let across = |row: &Vec<RuledCell>| row.len() == 1;
+        let framed = encloses_page && rows.iter().any(across);
+        let runs: Vec<std::ops::Range<usize>> = if framed {
             frames.extend(hs.iter().map(|r| [r.from, r.at, r.to, r.at]));
             frames.extend(vs.iter().map(|r| [r.at, r.from, r.at, r.to]));
-        }
-        if rows.iter().flatten().count() < 2 || filled == 0 || frame_like {
-            // Not a grid of cells: release its blocks.
-            for c in rows.iter().flatten() {
-                for bi in &c.blocks {
+            let mut out = Vec::new();
+            let mut start: Option<usize> = None;
+            for i in 0..=rows.len() {
+                if rows.get(i).is_none_or(across) {
+                    if let Some(s) = start.take()
+                        && i - s >= 2
+                    {
+                        out.push(s..i);
+                    }
+                } else if start.is_none() {
+                    start = Some(i);
+                }
+            }
+            out
+        } else {
+            // The whole grid is one table.
+            std::iter::once(0..rows.len()).collect()
+        };
+        // Blocks in no table's rows go back to the flow.
+        for (i, row) in rows.iter().enumerate() {
+            if !runs.iter().any(|r| r.contains(&i)) {
+                for bi in row.iter().flat_map(|c| &c.blocks) {
                     if let Some(slot) = consumed.get_mut(*bi) {
                         *slot = false;
                     }
                 }
-            }
-            continue;
-        }
-        // Shading: the last filled box (painted on top) covering most of a cell. The fills over
-        // the table are picked once, topmost first and a bounded number, then each row's.
-        let table_area = area(rect);
-        let overlaps = |a: &[f64; 4], b: &[f64; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
-        let fills: Vec<&Shape> = page
-            .shapes
-            .iter()
-            .rev()
-            .filter(|s| !s.stroked && overlaps(&s.rect, &rect) && area(s.rect) <= table_area * 1.05 && rgb8(s.color) != [255, 255, 255])
-            .take(MAX_FILLS)
-            .collect();
-        for row in rows.iter_mut() {
-            let band = row.iter().map(|c| c.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
-            let row_fills: Vec<&Shape> = fills.iter().copied().filter(|s| band.is_some_and(|b| overlaps(&s.rect, &b))).collect();
-            for c in row.iter_mut() {
-                let cell_area = area(c.rect);
-                c.blocks.sort_by(|a, b| {
-                    let (ta, tb) = (page.blocks.get(*a).map_or(0.0, |b| b.rect[3]), page.blocks.get(*b).map_or(0.0, |b| b.rect[3]));
-                    tb.total_cmp(&ta)
-                });
-                c.shade = row_fills
-                    .iter()
-                    .find(|s| {
-                        let i = [s.rect[0].max(c.rect[0]), s.rect[1].max(c.rect[1]), s.rect[2].min(c.rect[2]), s.rect[3].min(c.rect[3])];
-                        cell_area > 0.0 && area(i) >= 0.6 * cell_area
-                    })
-                    .map(|s| s.color);
             }
         }
         let mut widths: Vec<f64> = hs.iter().chain(&vs).map(|r| r.width).filter(|w| w.is_finite()).collect();
         widths.sort_by(|a, b| a.total_cmp(b));
         let width = widths.get(widths.len() / 2).copied().unwrap_or(0.5);
         let color = hs.first().map_or([0.0; 3], |r| r.color);
-        tables.push(RuledTable { rect, xs, ys, rows, border: (width, color) });
+        for run in runs {
+            let (Some(&top), Some(&bottom)) = (ys.get(run.start), ys.get(run.end)) else { continue };
+            let mut part: Vec<Vec<RuledCell>> = rows.get(run.clone()).unwrap_or_default().to_vec();
+            unmerge_ends(&mut part);
+            let filled = part.iter().flatten().filter(|c| !c.blocks.is_empty()).count();
+            if part.iter().flatten().count() < 2 || filled == 0 {
+                // Not a grid of cells: release its blocks.
+                for bi in part.iter().flatten().flat_map(|c| &c.blocks) {
+                    if let Some(slot) = consumed.get_mut(*bi) {
+                        *slot = false;
+                    }
+                }
+                continue;
+            }
+            let rect = [x0, bottom, x1, top];
+            shade_cells(&mut part, page, rect);
+            let ys = ys.get(run.start..=run.end).unwrap_or_default().to_vec();
+            tables.push(RuledTable { rect, xs: xs.clone(), ys, rows: part, border: (width, color) });
+        }
     }
     Ruled { tables, consumed, frames }
 }
@@ -612,6 +615,59 @@ pub(crate) struct Ruled {
     /// The rules of frames around the text (grids that are not tables), as `[x0, y0, x1, y1]`
     /// lines: they are neither boxes nor rules under paragraphs.
     pub frames: Vec<[f64; 4]>,
+}
+
+/// Cells merged down across the edge of a table cut from a grid start or end there: a
+/// continuation in its first row, or a merge with no continuation below, is a plain cell.
+fn unmerge_ends(rows: &mut [Vec<RuledCell>]) {
+    if let Some(first) = rows.first_mut() {
+        for c in first.iter_mut().filter(|c| c.vmerge == Some(false)) {
+            c.vmerge = None;
+        }
+    }
+    for i in 0..rows.len() {
+        let continued: Vec<f64> =
+            rows.get(i + 1).map_or_else(Vec::new, |next| next.iter().filter(|c| c.vmerge == Some(false)).map(|c| c.rect[0]).collect());
+        if let Some(row) = rows.get_mut(i) {
+            for c in row.iter_mut().filter(|c| c.vmerge == Some(true) && !continued.contains(&c.rect[0])) {
+                c.vmerge = None;
+            }
+        }
+    }
+}
+
+/// Each cell's paragraphs top to bottom, and its shading: the last filled box (painted on top)
+/// covering most of it. The fills over the table are picked once, topmost first and a bounded
+/// number, then each row's.
+fn shade_cells(rows: &mut [Vec<RuledCell>], page: &Page, rect: [f64; 4]) {
+    let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let table_area = area(rect);
+    let overlaps = |a: &[f64; 4], b: &[f64; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+    let fills: Vec<&Shape> = page
+        .shapes
+        .iter()
+        .rev()
+        .filter(|s| !s.stroked && overlaps(&s.rect, &rect) && area(s.rect) <= table_area * 1.05 && rgb8(s.color) != [255, 255, 255])
+        .take(MAX_FILLS)
+        .collect();
+    for row in rows.iter_mut() {
+        let band = row.iter().map(|c| c.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+        let row_fills: Vec<&Shape> = fills.iter().copied().filter(|s| band.is_some_and(|b| overlaps(&s.rect, &b))).collect();
+        for c in row.iter_mut() {
+            let cell_area = area(c.rect);
+            c.blocks.sort_by(|a, b| {
+                let (ta, tb) = (page.blocks.get(*a).map_or(0.0, |b| b.rect[3]), page.blocks.get(*b).map_or(0.0, |b| b.rect[3]));
+                tb.total_cmp(&ta)
+            });
+            c.shade = row_fills
+                .iter()
+                .find(|s| {
+                    let i = [s.rect[0].max(c.rect[0]), s.rect[1].max(c.rect[1]), s.rect[2].min(c.rect[2]), s.rect[3].min(c.rect[3])];
+                    cell_area > 0.0 && area(i) >= 0.6 * cell_area
+                })
+                .map(|s| s.color);
+        }
+    }
 }
 
 /// Whether a thin shape or rule `r` lies along one of `frames`' lines.
@@ -2162,6 +2218,74 @@ mod tests {
         blocks.extend((0..3).map(|i| para(&format!("Body paragraph {i}."), 72.0, 540.0, 600.0 - 40.0 * i as f64, 2, 300.0)));
         let xml = part(&docx(&[page(blocks, shapes)], "Three"), "word/document.xml");
         assert!(!xml.contains("<w:tbl>") && !xml.contains("<w:pBdr>"), "{xml}");
+    }
+
+    /// Ruled grids that fill the page but have cells in every row (a SWOT grid, a 2×3 form)
+    /// are bordered tables; a table drawn against a page border stays a table of its own with
+    /// the frame's text around it; a large grid holding little of the page's text is a table;
+    /// and a page without a usable size frames nothing.
+    #[test]
+    fn page_sized_grids_frames_and_tables_against_a_border() {
+        let ln = |x0: f64, y0: f64, x1: f64, y1: f64| line(x0, y0, x1, y1);
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![ln(x0, y0, x1, y0), ln(x0, y1, x1, y1), ln(x0, y0, x0, y1), ln(x1, y0, x1, y1)];
+        let bordered = |xml: &str| xml.contains("<w:tbl>") && xml.contains("<w:insideV w:val=\"single\"");
+
+        // SWOT: the page in four quadrants, a heading and a paragraph in each.
+        let mut shapes = rect(72.0, 100.0, 540.0, 720.0);
+        shapes.extend([ln(306.0, 100.0, 306.0, 720.0), ln(72.0, 410.0, 540.0, 410.0)]);
+        let mut blocks = Vec::new();
+        for (x, top) in [(80.0, 710.0), (314.0, 710.0), (80.0, 400.0), (314.0, 400.0)] {
+            blocks.push(para("Strengths", x, x + 100.0, top, 1, x + 100.0));
+            blocks.push(para("A point about this quarter of the grid.", x, x + 200.0, top - 20.0, 2, x + 120.0));
+        }
+        assert!(bordered(&part(&docx(&[page(blocks, shapes)], "SWOT"), "word/document.xml")));
+
+        // A 2×3 form over the page, one label per cell.
+        let mut shapes = rect(72.0, 100.0, 540.0, 720.0);
+        shapes.extend([ln(306.0, 100.0, 306.0, 720.0), ln(72.0, 513.0, 540.0, 513.0), ln(72.0, 306.0, 540.0, 306.0)]);
+        let blocks: Vec<Block> = [(80.0, 710.0), (314.0, 710.0), (80.0, 503.0), (314.0, 503.0), (80.0, 296.0), (314.0, 296.0)]
+            .iter()
+            .enumerate()
+            .map(|(i, (x, top))| para(&format!("Label {i}"), *x, x + 80.0, *top, 1, x + 80.0))
+            .collect();
+        assert!(bordered(&part(&docx(&[page(blocks, shapes)], "Form"), "word/document.xml")));
+
+        // A page border and a header rule, with a 2×3 table whose rules run to the border.
+        let mut shapes = rect(36.0, 36.0, 576.0, 756.0);
+        shapes.push(ln(36.0, 720.0, 576.0, 720.0));
+        shapes.extend([650.0, 630.0, 610.0].iter().map(|y| ln(36.0, *y, 576.0, *y)));
+        shapes.extend([200.0, 400.0].iter().map(|x| ln(*x, 610.0, *x, 650.0)));
+        let mut blocks = vec![para("Report title", 72.0, 300.0, 748.0, 1, 300.0), para("Body text above the table.", 72.0, 500.0, 700.0, 2, 300.0)];
+        for (r, top) in [(0, 646.0), (1, 626.0)] {
+            for (c, x) in [40.0, 205.0, 405.0].iter().enumerate() {
+                blocks.push(para(&format!("Cell {r}{c}"), *x, x + 60.0, top, 1, x + 60.0));
+            }
+        }
+        blocks.extend((0..3).map(|i| para(&format!("Body paragraph {i}."), 72.0, 540.0, 580.0 - 40.0 * i as f64, 2, 300.0)));
+        let p = page(blocks, shapes);
+        let xml = part(&docx(std::slice::from_ref(&p), "Framed form"), "word/document.xml");
+        assert_eq!(xml.matches("<w:tbl>").count(), 1, "{xml}");
+        assert_eq!((xml.matches("<w:gridCol ").count(), xml.matches("<w:tr>").count()), (3, 2), "{xml}");
+        let table = xml.split("<w:tbl>").nth(1).and_then(|t| t.split("</w:tbl>").next()).unwrap_or_default().to_string();
+        assert!(table.contains(">Cell 00<") && !table.contains(">Report title<") && !table.contains(">Body paragraph"), "{xml}");
+
+        // A grid covering most of the page around a little of its text is a table.
+        let mut shapes = rect(36.0, 200.0, 576.0, 756.0);
+        shapes.push(ln(36.0, 480.0, 576.0, 480.0));
+        let mut blocks = vec![para("Top cell", 80.0, 200.0, 740.0, 1, 200.0), para("Bottom cell", 80.0, 200.0, 470.0, 1, 200.0)];
+        blocks.extend((0..10).map(|i| para(&format!("Text below the grid {i}."), 72.0, 540.0, 185.0 - 15.0 * i as f64, 1, 300.0)));
+        assert!(part(&docx(&[page(blocks, shapes)], "Grid"), "word/document.xml").contains("<w:tbl>"));
+
+        // A page with no usable size: a small ruled table (a title row over two rows of two
+        // cells) holding all its text stays a table.
+        let mut shapes = rect(100.0, 550.0, 300.0, 700.0);
+        shapes.extend([ln(100.0, 650.0, 300.0, 650.0), ln(100.0, 600.0, 300.0, 600.0), ln(200.0, 550.0, 200.0, 650.0)]);
+        let cells = [("Title", 105.0, 695.0), ("A", 105.0, 645.0), ("B", 205.0, 645.0), ("C", 105.0, 595.0), ("D", 205.0, 595.0)];
+        let blocks: Vec<Block> = cells.iter().map(|(t, x, top)| para(t, *x, x + 40.0, *top, 1, x + 40.0)).collect();
+        let empty = Page { width: 0.0, height: 0.0, ..page(blocks, shapes) };
+        let xml = part(&docx(&[empty], "No size"), "word/document.xml");
+        let table = xml.split("<w:tbl>").nth(1).and_then(|t| t.split("</w:tbl>").next()).unwrap_or_default().to_string();
+        assert!(table.contains(">Title<") && table.contains(">D<"), "the whole grid is the table: {xml}");
     }
 
     /// A box around a box is sized to every paragraph inside it, the inner box's too.

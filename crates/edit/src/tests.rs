@@ -6476,3 +6476,29 @@ fn editing_lines_join_across_an_invisible_space() {
     let read: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
     assert_eq!(read.len(), 1, "an invisible space joins either way: {read:?}");
 }
+
+/// A line opened by a space drawn the other way (invisible before visible words) is as visible
+/// as its words: the space doesn't make it OCR text, so its words stay one paragraph.
+#[test]
+fn reading_a_line_opened_by_an_invisible_space() {
+    let doc = helvetica_page("BT /F1 11 Tf 72 700 Td 3 Tr ( ) Tj 0 Tr 6 0 Td (Hello) Tj 30 0 Td (world) Tj ET");
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["Hello world"]);
+}
+
+/// Reading splits a switch from invisible to visible text inside one text object.
+#[test]
+fn reading_splits_a_visibility_switch_inside_one_text_object() {
+    let doc = helvetica_page("BT /F1 11 Tf 72 700 Td 3 Tr (Scanned words of the row) Tj 0 Tr 140 0 Td (PAID) Tj ET");
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["Scanned words of the row", "PAID"]);
+}
+
+/// An invisible space between visible words, each its own text object, joins their reading line.
+#[test]
+fn reading_lines_join_across_an_invisible_space() {
+    let doc = helvetica_page("BT /F1 11 Tf 72 700 Td (Hello) Tj ET BT 3 Tr /F1 11 Tf 99 700 Td ( ) Tj ET BT 0 Tr /F1 11 Tf 102 700 Td (world) Tj ET");
+    let (lines, _) = text::reading_lines(&doc, 0).unwrap();
+    let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts.len(), 1, "{texts:?}");
+}

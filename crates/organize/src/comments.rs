@@ -61,20 +61,14 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
     let mut copier = Copier::new(src, HashMap::new(), pages.iter().copied().collect());
     // Every comment's object is chosen before any is copied, so a comment that another one reaches
     // through `/IRT` is copied into the object chosen for it by name.
-    let mut lists: Vec<Option<Vec<Object>>> = Vec::new();
+    let mut lists: Vec<Option<PageAnnots>> = Vec::new();
     let mut planned: Vec<(usize, ObjRef, Dict)> = Vec::new();
     for (i, ((_, page), list)) in pages.iter().zip(incoming).enumerate() {
         if list.is_empty() {
             lists.push(None);
             continue;
         }
-        let mut annots: Vec<Object> = dst
-            .get(*page)
-            .as_dict()
-            .and_then(|p| p.get(b"Annots").cloned())
-            .map(|a| dst.resolve(&a))
-            .and_then(|a| a.as_array().cloned())
-            .unwrap_or_default();
+        let mut annots = PageAnnots::read(dst, *page);
         for Incoming { entry, dict } in list {
             // The same comment listed twice on a page is copied once.
             if entry.as_ref().is_some_and(|r| copier.map.contains_key(&r)) {
@@ -84,9 +78,7 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
             if let Some(r) = entry.as_ref() {
                 copier.map.insert(r, target);
             }
-            if !annots.iter().any(|a| a.as_ref() == Some(target)) {
-                annots.push(Object::Ref(target));
-            }
+            annots.push(target);
             planned.push((i, target, dict));
         }
         lists.push(Some(annots));
@@ -101,9 +93,7 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
         if let Some(popup) = dst.get(*target).as_dict().and_then(|d| d.reference(b"Popup"))
             && let Some(annots) = lists[*i].as_mut()
         {
-            if !annots.iter().any(|a| a.as_ref() == Some(popup)) {
-                annots.push(Object::Ref(popup));
-            }
+            annots.push(popup);
             annot_pages.insert(popup, pages[*i].1);
         }
     }
@@ -118,13 +108,13 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
             copier.map.insert(popup, r);
             let copy = copier.copy_value(dst, &src.get(popup), Some(r))?;
             dst.set(r, copy);
-            annots.push(Object::Ref(r));
+            annots.push(r);
             annot_pages.insert(r, *to);
         }
     }
     for ((_, page), annots) in pages.iter().zip(lists) {
         if let Some(annots) = annots {
-            dst.update_dict(*page, |p| p.set(b"Annots".to_vec(), Object::Array(annots)))?;
+            dst.update_dict(*page, |p| p.set(b"Annots".to_vec(), Object::Array(annots.into_list())))?;
         }
     }
     copier.fix_annotations(dst, &annot_pages)?;
@@ -134,22 +124,18 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
 
 /// Choose the object a comment is copied into: the comment of `annots` with its name, or a new
 /// object. Returns it with the dictionary to copy.
-fn reserve(dst: &mut Document, src: &Document, annots: &mut Vec<Object>, mut dict: Dict) -> (ObjRef, Dict) {
-    let same = dict.get(b"NM").and_then(|n| src.resolve(n).as_string().map(|s| s.to_text())).and_then(|nm| named(dst, annots, &nm));
+fn reserve(dst: &mut Document, src: &Document, annots: &mut PageAnnots, mut dict: Dict) -> (ObjRef, Dict) {
+    let same = dict.get(b"NM").and_then(|n| src.resolve(n).as_string().map(|s| s.to_text())).and_then(|nm| annots.named(dst, &nm));
     let target = match same {
         Some((r, false)) => {
             // The replaced comment's pop-up goes with it: the one it names, and any whose `/Parent`
             // is the comment.
-            let named_popup = dst.get(r).as_dict().and_then(|d| d.reference(b"Popup"));
-            annots.retain(|a| {
-                let Some(p) = a.as_ref() else { return true };
-                if Some(p) == named_popup {
-                    return false;
-                }
-                let popup = dst.get(p);
-                let popup = popup.as_dict();
-                !popup.is_some_and(|d| d.name(b"Subtype") == Some(b"Popup".as_slice()) && d.reference(b"Parent") == Some(r))
-            });
+            if let Some(p) = dst.get(r).as_dict().and_then(|d| d.reference(b"Popup")) {
+                annots.remove(p);
+            }
+            for p in annots.popups.get(&r).cloned().unwrap_or_default() {
+                annots.remove(p);
+            }
             r
         }
         Some((_, true)) => {
@@ -231,18 +217,77 @@ fn page_popups(src: &Document, page: ObjRef) -> Vec<(ObjRef, ObjRef)> {
 /// The annotation in `annots` named `nm` (compared as text, whatever the encoding), and whether it
 /// must not be replaced: a locked comment, or an annotation that is no comment, such as a link, a
 /// redaction mark or a form widget.
-fn named(dst: &Document, annots: &[Object], nm: &str) -> Option<(ObjRef, bool)> {
-    annots.iter().find_map(|a| {
-        let r = a.as_ref()?;
+/// A page's `/Annots` while comments are added to it, indexed so that placing each comment does not
+/// scan the whole list.
+struct PageAnnots {
+    list: Vec<Object>,
+    members: HashSet<ObjRef>,
+    /// The annotations on the page before the import, by `/NM`, in list order.
+    names: HashMap<String, Vec<ObjRef>>,
+    /// The pop-ups on the page before the import, by `/Parent`.
+    popups: HashMap<ObjRef, Vec<ObjRef>>,
+    removed: HashSet<ObjRef>,
+}
+
+impl PageAnnots {
+    /// The `/Annots` of `page`.
+    fn read(dst: &Document, page: ObjRef) -> Self {
+        let list: Vec<Object> = dst
+            .get(page)
+            .as_dict()
+            .and_then(|p| p.get(b"Annots").cloned())
+            .map(|a| dst.resolve(&a))
+            .and_then(|a| a.as_array().cloned())
+            .unwrap_or_default();
+        let (mut members, mut names, mut popups) = (HashSet::new(), HashMap::<String, Vec<ObjRef>>::new(), HashMap::<ObjRef, Vec<ObjRef>>::new());
+        for r in list.iter().filter_map(Object::as_ref) {
+            members.insert(r);
+            let Some(d) = dst.get(r).as_dict().cloned() else { continue };
+            if let Some(name) = d.get(b"NM").and_then(|n| dst.resolve(n).as_string().map(|s| s.to_text())) {
+                names.entry(name).or_default().push(r);
+            }
+            if d.name(b"Subtype") == Some(b"Popup".as_slice())
+                && let Some(parent) = d.reference(b"Parent")
+            {
+                popups.entry(parent).or_default().push(r);
+            }
+        }
+        PageAnnots { list, members, names, popups, removed: HashSet::new() }
+    }
+
+    /// Add `r` at the end, unless the page already lists it.
+    fn push(&mut self, r: ObjRef) {
+        if self.removed.remove(&r) {
+            self.list.retain(|a| a.as_ref() != Some(r));
+        }
+        if self.members.insert(r) {
+            self.list.push(Object::Ref(r));
+        }
+    }
+
+    /// Take every entry for `r` off the page.
+    fn remove(&mut self, r: ObjRef) {
+        if self.members.remove(&r) {
+            self.removed.insert(r);
+        }
+    }
+
+    /// The first annotation on the page named `nm`, and whether it must be kept: it is locked, or
+    /// it is no comment.
+    fn named(&self, dst: &Document, nm: &str) -> Option<(ObjRef, bool)> {
+        let r = *self.names.get(nm)?.iter().find(|r| self.members.contains(r))?;
         let d = dst.get(r).as_dict().cloned()?;
-        let name = d.get(b"NM").and_then(|n| dst.resolve(n).as_string().map(|s| s.to_text()))?;
-        (name == nm).then(|| {
-            let flags = d.get(b"F").and_then(|f| dst.resolve(f).as_int()).unwrap_or(0);
-            let subtype = d.get(b"Subtype").map(|s| dst.resolve(s));
-            let comment = subtype.as_deref().and_then(Object::as_name).is_some_and(|s| COMMENTS.contains(&s));
-            (r, flags & LOCKED != 0 || !comment || d.contains(b"FT"))
-        })
-    })
+        let flags = d.get(b"F").and_then(|f| dst.resolve(f).as_int()).unwrap_or(0);
+        let subtype = d.get(b"Subtype").map(|s| dst.resolve(s));
+        let comment = subtype.as_deref().and_then(Object::as_name).is_some_and(|s| COMMENTS.contains(&s));
+        Some((r, flags & LOCKED != 0 || !comment || d.contains(b"FT")))
+    }
+
+    /// The new `/Annots`.
+    fn into_list(self) -> Vec<Object> {
+        let removed = self.removed;
+        self.list.into_iter().filter(|a| a.as_ref().is_none_or(|r| !removed.contains(&r))).collect()
+    }
 }
 
 #[cfg(test)]

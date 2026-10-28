@@ -190,6 +190,7 @@ const PAGES: &[&str] = &[
     "page.crop",
     "page.boxes",
     "page.number",
+    "page.properties",
     SEP,
     "bookmark.add",
     "bookmark.from_structure",

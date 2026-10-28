@@ -3975,12 +3975,14 @@ fn dragging_the_rotate_knob_turns_a_page_image() {
     let to = egui::pos2(c.x + 100.0, c.y);
     h.hover_at(knob);
     h.run_steps(1);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grab, "the knob offers to turn the picture");
     h.drag_at(knob);
     h.run_steps(1);
     for k in 1..=4 {
         h.hover_at(knob + (to - knob) * (k as f32 / 4.0));
         h.run_steps(1);
     }
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing, "and holds it while it turns");
     h.drop_at(to);
     h.run_steps(4);
     let doc = h.state().session.get(id).unwrap();

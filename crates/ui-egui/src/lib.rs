@@ -75,6 +75,7 @@ use canvas::autoscroll;
 use canvas::crop;
 use canvas::fling;
 use canvas::image_pick;
+use canvas::page_cursor;
 use canvas::page_pointer;
 pub use canvas::scroll_speed;
 use canvas::signature_drag;

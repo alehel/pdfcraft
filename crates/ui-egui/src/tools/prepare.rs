@@ -12,6 +12,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::comments;
+use crate::page_cursor::Layer;
 use crate::theme;
 use crate::widgets;
 
@@ -340,7 +341,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Opti
         return out;
     }
     if let Some(tool) = tool {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         if resp.drag_started() || resp.clicked() {
             let origin = ptr.origin.filter(|o| xf.rect.contains(*o)).unwrap_or(p);
             prep.grab = Some((page, Grab::Draw(origin), origin));
@@ -393,9 +394,9 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Opti
         f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && screen_rect(xf, info, page, w.rect).contains(p)).map(|(i, _)| (f, i))
     });
     if let Some((_, left, top)) = corner {
-        ui.ctx().set_cursor_icon(if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+        view.cursor.claim(Layer::Handle, if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
     } else if hit.is_some() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+        view.cursor.claim(Layer::Field, egui::CursorIcon::Move);
     }
     if resp.drag_started() {
         let origin = ptr.origin.unwrap_or(p);

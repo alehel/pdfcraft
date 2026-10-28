@@ -437,7 +437,10 @@ fn group_layout(lines: &[TextLine], mixed: bool, scans_apart: bool, walls: &[[f6
             let gap = line.frame_rect()[0] - prev.frame_rect()[2];
             // OCR words (invisible text over a scan) join only across a word space: a wider gap
             // is a table cell or a tab stop, which a rewrite would close up.
-            let scanned = !scans_apart || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));
+            // Mixed-style grouping also keeps visible text (a stamp, a page number) out of an OCR
+            // row, even when OCR rows flow together.
+            let alike = invisible(prev) == invisible(line);
+            let scanned = if scans_apart { alike && (!invisible(line) || gap < prev.size.max(line.size) * 0.6) } else { !mixed || alike };
             scanned
                 && (mixed || same_style(prev, line))
                 && same_plane(prev, line)

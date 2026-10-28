@@ -412,7 +412,7 @@ fn items(pages: &[Page]) -> Vec<Item<'_>> {
             out.push(Item::PageBreak);
         }
         // Tables drawn with borders first; the text-only finder looks at what they leave.
-        let (ruled, taken) = word::ruled_tables(p);
+        let word::Ruled { tables: ruled, consumed: taken, .. } = word::ruled_tables(p);
         let rest: Vec<Block> = p.blocks.iter().zip(&taken).map(|(b, t)| if *t { Block::default() } else { b.clone() }).collect();
         let (mut tables, mut consumed) = tables(&rest);
         for (c, t) in consumed.iter_mut().zip(&taken) {
@@ -492,11 +492,12 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                     if r.bold && !b.bold {
                         piece = format!("<strong>{piece}</strong>");
                     }
-                    // A plain run inside a bold or italic paragraph, which the element wraps whole.
+                    // A plain run inside a bold or italic paragraph, which the element wraps whole, or
+                    // inside a heading, which browsers set bold.
                     if !r.italic && b.italic {
                         piece = format!("<span style=\"font-style:normal\">{piece}</span>");
                     }
-                    if !r.bold && b.bold && lvl == 0 {
+                    if !r.bold && (b.bold || lvl > 0) {
                         piece = format!("<span style=\"font-weight:normal\">{piece}</span>");
                     }
                     if rgb8(r.color) != rgb8(b.color) {
@@ -1340,6 +1341,16 @@ mod tests {
         b.text = b.runs.iter().map(|r| r.text.as_str()).collect();
         let h = html(&[p], "Runs");
         assert!(h.contains("<span style=\"font-weight:normal\"><span style=\"font-style:normal\">plain</span></span>"), "{h}");
+    }
+
+    /// A plain phrase inside a heading, which browsers set bold, stays plain.
+    #[test]
+    fn html_keeps_a_plain_phrase_inside_a_heading() {
+        let run = |text: &str, bold: bool| Run { text: text.into(), size: 24.0, bold, ..Run::default() };
+        let mut p = page();
+        p.blocks[1].runs = vec![run("Annual ", true), run("Report", false)];
+        let h = html(&[p], "Heading");
+        assert!(h.contains("<h1>Annual <span style=\"font-weight:normal\">Report</span></h1>"), "{h}");
     }
 
     #[test]

@@ -167,6 +167,43 @@ pub(crate) fn marker(text: &str) -> Option<(Marker, usize)> {
     Some((marker, n))
 }
 
+/// Word boxes with the ones that touch joined: one word drawn in pieces ("underlined" and its
+/// comma, "1" and its ".").
+fn merge_touching(words: &[[f64; 4]]) -> Vec<[f64; 4]> {
+    let mut boxes: Vec<[f64; 4]> = Vec::with_capacity(words.len());
+    for w in words {
+        match boxes.last_mut() {
+            Some(last) if (w[0] - last[2]).abs() < 0.5 => *last = [last[0], last[1].min(w[1]), w[2], last[3].max(w[3])],
+            _ => boxes.push(*w),
+        }
+    }
+    boxes
+}
+
+/// A run's word boxes, when they match its words one to one (touching pieces joined).
+fn word_boxes(r: &Run) -> Option<Vec<[f64; 4]>> {
+    let boxes = merge_touching(&r.words);
+    (!boxes.is_empty() && boxes.len() == r.text.split_whitespace().count()).then_some(boxes)
+}
+
+/// Where the text starts after the first `n` characters of `runs` (a list marker and its space):
+/// the box of the word there, or the start of the run it opens. `None` when that is not known.
+fn text_start(runs: &[Run], mut n: usize) -> Option<f64> {
+    for r in runs {
+        let len = r.text.chars().count();
+        if n >= len {
+            n -= len;
+            continue;
+        }
+        if n == 0 {
+            return (r.rect != [0.0; 4]).then_some(r.rect[0]);
+        }
+        let before: String = r.text.chars().take(n).collect();
+        return word_boxes(r).and_then(|b| b.get(before.split_whitespace().count()).map(|w| w[0]));
+    }
+    None
+}
+
 /// Runs without their first `n` characters (a list marker).
 fn drop_chars(runs: &[Run], mut n: usize) -> Vec<Run> {
     let mut out = Vec::new();
@@ -179,7 +216,7 @@ fn drop_chars(runs: &[Run], mut n: usize) -> Vec<Run> {
         let text: String = r.text.chars().skip(n).collect();
         // The words dropped take their boxes along, so the rest still match theirs.
         let dropped: String = r.text.chars().take(n).collect();
-        let words = r.words.iter().skip(dropped.split_whitespace().count()).copied().collect();
+        let words = word_boxes(r).map_or_else(Vec::new, |b| b.into_iter().skip(dropped.split_whitespace().count()).collect());
         n = 0;
         out.push(Run { text, words, ..r.clone() });
     }
@@ -361,12 +398,14 @@ fn clusters(mut values: Vec<f64>, tol: f64) -> Vec<f64> {
 
 /// Tables whose grid the page draws: rules that cross each other, two or more each way. Each
 /// block whose middle lies in a cell goes into it (and is consumed); a filled box covering most
-/// of a cell is its shading.
-pub(crate) fn ruled_tables(page: &Page) -> (Vec<RuledTable>, Vec<bool>) {
+/// of a cell is its shading. A grid whose cells hold several paragraphs each frames the text
+/// instead, and is returned as such.
+pub(crate) fn ruled_tables(page: &Page) -> Ruled {
     let mut consumed = vec![false; page.blocks.len()];
+    let mut frames = Vec::new();
     let (h, v) = rules(&page.shapes);
     if h.len() < 2 || v.len() < 2 {
-        return (Vec::new(), consumed);
+        return Ruled { tables: Vec::new(), consumed, frames };
     }
     // Connected groups of crossing rules (union-find over h then v).
     let n = h.len() + v.len();
@@ -490,10 +529,16 @@ pub(crate) fn ruled_tables(page: &Page) -> (Vec<RuledTable>, Vec<bool>) {
             }
         }
         let filled = rows.iter().flatten().filter(|c| !c.blocks.is_empty()).count();
-        // A frame around the page (a border box, perhaps with a rule under the header) is not a
-        // table: it has one column, or one of its cells holds most of the page's paragraphs.
-        let paragraphs = page.blocks.iter().filter(|b| !b.text.trim().is_empty()).count();
-        let frame_like = ncols == 1 || rows.iter().flatten().any(|c| c.blocks.len() > 5 && c.blocks.len() * 2 > paragraphs);
+        // A frame around the text (a page border, perhaps with a rule under the header or down
+        // the middle) is not a table: its cells hold several paragraphs each, where a table's
+        // hold a value or two. Its rules are then left out of the boxes and rules found later.
+        let paragraphs =
+            rows.iter().flatten().flat_map(|c| &c.blocks).filter(|i| page.blocks.get(**i).is_some_and(|b| !b.text.trim().is_empty())).count();
+        let frame_like = filled > 0 && paragraphs > 3 * filled;
+        if frame_like {
+            frames.extend(hs.iter().map(|r| [r.from, r.at, r.to, r.at]));
+            frames.extend(vs.iter().map(|r| [r.at, r.from, r.at, r.to]));
+        }
         if rows.iter().flatten().count() < 2 || filled == 0 || frame_like {
             // Not a grid of cells: release its blocks.
             for c in rows.iter().flatten() {
@@ -541,7 +586,30 @@ pub(crate) fn ruled_tables(page: &Page) -> (Vec<RuledTable>, Vec<bool>) {
         let color = hs.first().map_or([0.0; 3], |r| r.color);
         tables.push(RuledTable { rect, xs, ys, rows, border: (width, color) });
     }
-    (tables, consumed)
+    Ruled { tables, consumed, frames }
+}
+
+/// What [`ruled_tables`] finds on a page.
+pub(crate) struct Ruled {
+    pub tables: Vec<RuledTable>,
+    /// Per block, whether a table took it.
+    pub consumed: Vec<bool>,
+    /// The rules of frames around the text (grids that are not tables), as `[x0, y0, x1, y1]`
+    /// lines: they are neither boxes nor rules under paragraphs.
+    pub frames: Vec<[f64; 4]>,
+}
+
+/// Whether a thin shape or rule `r` lies along one of `frames`' lines.
+fn on_frame(r: [f64; 4], frames: &[[f64; 4]]) -> bool {
+    frames.iter().any(|f| {
+        let horizontal = f[1] == f[3];
+        let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+        if horizontal {
+            (cy - f[1]).abs() < 1.5 && r[0] >= f[0] - 2.0 && r[2] <= f[2] + 2.0
+        } else {
+            (cx - f[0]).abs() < 1.5 && r[1] >= f[1] - 2.0 && r[3] <= f[3] + 2.0
+        }
+    })
 }
 
 /// Lines a run is drawn with.
@@ -576,13 +644,7 @@ fn split_by_lines(r: &Run, lines_of: LinesOf) -> Vec<(Run, Lines)> {
         _ => r.rect[2] - r.rect[0],
     };
     // Boxes that touch are one word drawn in pieces ("underlined" and its comma).
-    let mut boxes: Vec<[f64; 4]> = Vec::with_capacity(r.words.len());
-    for w in &r.words {
-        match boxes.last_mut() {
-            Some(last) if (w[0] - last[2]).abs() < 0.5 => *last = [last[0], last[1].min(w[1]), w[2], last[3].max(w[3])],
-            _ => boxes.push(*w),
-        }
-    }
+    let boxes = merge_touching(&r.words);
     if boxes.is_empty() || words != boxes.len() {
         return vec![(r.clone(), lines_of(r.rect, span))];
     }
@@ -866,7 +928,7 @@ struct Rules {
 const MAX_FILLS: usize = 2_000;
 
 impl Rules {
-    fn new(page: &Page, tables: &[RuledTable], ratio: f64) -> Self {
+    fn new(page: &Page, tables: &[RuledTable], frames: &[[f64; 4]], ratio: f64) -> Self {
         let lines = page
             .shapes
             .iter()
@@ -879,10 +941,13 @@ impl Rules {
                     s.rect[1] >= t.rect[1] - 2.0 && s.rect[3] <= t.rect[3] + 2.0 && s.rect[0] >= t.rect[0] - 2.0 && s.rect[2] <= t.rect[2] + 2.0
                 })
             })
+            .filter(|s| !on_frame(s.rect, frames))
             .take(MAX_RULES)
             .cloned()
             .collect();
         let (h, v) = rules(&page.shapes);
+        let h: Vec<Rule> = h.into_iter().filter(|r| !on_frame([r.from, r.at, r.to, r.at], frames)).collect();
+        let v: Vec<Rule> = v.into_iter().filter(|r| !on_frame([r.at, r.from, r.at, r.to], frames)).collect();
         let (h, v) = (h.get(..h.len().min(MAX_BOX_RULES)).unwrap_or_default(), v.get(..v.len().min(MAX_BOX_RULES)).unwrap_or_default());
         let mut found = Vec::new();
         for top in h {
@@ -907,13 +972,15 @@ impl Rules {
             .take(MAX_FILLS)
             .cloned()
             .collect();
-        // Each box sized once to the text of the paragraphs inside it (one pass over them).
+        // Each box sized once to the text of every paragraph inside it (one pass over them; at
+        // most MAX_BOX_RULES boxes).
         let mut extents: Vec<[f64; 3]> = vec![[f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY]; found.len()];
         for o in page.blocks.iter().filter(|o| !o.text.trim().is_empty()) {
-            let Some(k) = Self::smallest(found.iter().map(|f| &f.0), o.rect) else { continue };
             let (top, bottom) = line_box(o, line_height(o, ratio));
-            if let Some(e) = extents.get_mut(k) {
-                *e = [e[0].max(top), e[1].min(bottom), e[2].min(o.rect[0])];
+            for (e, (bx, _, _)) in extents.iter_mut().zip(&found) {
+                if Self::holds(bx, o.rect) {
+                    *e = [e[0].max(top), e[1].min(bottom), e[2].min(o.rect[0])];
+                }
             }
         }
         let boxes = found
@@ -929,16 +996,15 @@ impl Rules {
         Self { lines, boxes, fills }
     }
 
-    /// The smallest of `boxes` holding `r`, by its index.
-    fn smallest<'b>(boxes: impl Iterator<Item = &'b [f64; 4]>, r: [f64; 4]) -> Option<usize> {
-        let within = |bx: &[f64; 4]| r[0] >= bx[0] - 1.0 && r[2] <= bx[2] + 1.0 && r[1] >= bx[1] - 1.0 && r[3] <= bx[3] + 1.0;
-        let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
-        boxes.enumerate().filter(|(_, bx)| within(bx)).min_by(|a, b| area(a.1).total_cmp(&area(b.1))).map(|(k, _)| k)
+    /// Whether box `bx` holds `r` (a point of slack each way).
+    fn holds(bx: &[f64; 4], r: [f64; 4]) -> bool {
+        r[0] >= bx[0] - 1.0 && r[2] <= bx[2] + 1.0 && r[1] >= bx[1] - 1.0 && r[3] <= bx[3] + 1.0
     }
 
-    /// The box around a block, sized to the text of every paragraph inside it.
+    /// The innermost box around a block, sized to the text of every paragraph inside it.
     fn boxed(&self, b: &Block) -> Option<Boxed> {
-        Self::smallest(self.boxes.iter().map(|x| &x.rect), b.rect).and_then(|k| self.boxes.get(k)).copied()
+        let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+        self.boxes.iter().filter(|x| Self::holds(&x.rect, b.rect)).min_by(|a, c| area(&a.rect).total_cmp(&area(&c.rect))).copied()
     }
 
     /// The filled box behind a block: the smallest non-white one holding all its text, smaller
@@ -1077,17 +1143,7 @@ impl Lists {
             };
             // The text starts at the word after the marker on the first row, or where the second
             // row starts, or a typical hanging indent after the marker.
-            let runs = b.runs();
-            let words: Vec<[f64; 4]> = runs.iter().flat_map(|r| r.words.iter().copied()).collect();
-            let text_x = words
-                .get(1)
-                .map(|w| w[0])
-                // Without word boxes: the second run, when the first is the marker alone.
-                .or_else(|| {
-                    runs.get(1)
-                        .filter(|r| r.rect != [0.0; 4] && runs.first().is_some_and(|f| f.text.split_whitespace().count() == 1))
-                        .map(|r| r.rect[0])
-                })
+            let text_x = text_start(&b.runs(), n)
                 .filter(|x| *x > marker_x)
                 .or_else(|| rows.get(1).map(|r| r[0]).filter(|x| *x > marker_x + 1.0))
                 .unwrap_or(marker_x + 18.0);
@@ -1122,10 +1178,10 @@ impl Lists {
         }
         for (i, (k, start)) in self.nums.iter().enumerate() {
             s.push_str(&format!("<w:num w:numId=\"{}\"><w:abstractNumId w:val=\"{k}\"/>", i + 1));
-            if *start != 1 {
-                for level in 0..9 {
-                    s.push_str(&format!("<w:lvlOverride w:ilvl=\"{level}\"><w:startOverride w:val=\"{start}\"/></w:lvlOverride>"));
-                }
+            // Every list starts at its own number. Word otherwise carries the count on from an
+            // earlier list of the same kind (a sub-list under the next item would go on from "c.").
+            for level in 0..9 {
+                s.push_str(&format!("<w:lvlOverride w:ilvl=\"{level}\"><w:startOverride w:val=\"{start}\"/></w:lvlOverride>"));
             }
             s.push_str("</w:num>");
         }
@@ -1407,7 +1463,7 @@ pub(crate) fn flow_page<'a>(
     media: &mut Vec<(String, &'a crate::Image)>,
     lists: &mut Lists,
 ) -> (Vec<Segment>, Option<[f64; 4]>) {
-    let (ruled, consumed) = ruled_tables(page);
+    let Ruled { tables: ruled, consumed, frames } = ruled_tables(page);
     let f = frame(page, ratio).map(|mut f| {
         for t in &ruled {
             f.left = f.left.min(t.rect[0]);
@@ -1425,8 +1481,9 @@ pub(crate) fn flow_page<'a>(
         );
         Frame { left: 0.0, right: w, top: h, bottom: 0.0 }
     };
+    let fallback = f.is_none();
     let frame = f.unwrap_or_else(page_box);
-    let rules = Rules::new(page, &ruled, ratio);
+    let rules = Rules::new(page, &ruled, &frames, ratio);
     let plain_page =
         Page { blocks: page.blocks.iter().zip(&consumed).map(|(b, c)| if *c { Block::default() } else { b.clone() }).collect(), ..page.clone() };
     // Pieces top to bottom: what the ruled tables left. Columns are found first; the text-only
@@ -1640,7 +1697,8 @@ pub(crate) fn flow_page<'a>(
     // (a wrongly sized page) keeps the default margins.
     let on_page = frame.left >= -1.0 && frame.bottom >= -1.0 && frame.right <= page.width + 1.0 && frame.top <= page.height + 1.0;
     let margins = [frame.left, page.width - frame.right, page.height - frame.top, frame.bottom];
-    (out, on_page.then_some(margins))
+    // A page with no content of its own keeps the default margins.
+    (out, (on_page && !fallback).then_some(margins))
 }
 
 /// An empty paragraph `gap` points tall (nothing for less than a point).
@@ -1952,6 +2010,97 @@ mod tests {
             .unwrap_or_default()
             .to_string();
         assert!(five.contains("<w:startOverride w:val=\"5\"/>"), "{numbering}");
+        // Word carries a count on across lists of one kind unless told to restart: the second
+        // sub-list restarts at 1.
+        let again = numbering
+            .split(&format!("<w:num w:numId=\"{}\">", num("Sub again")))
+            .nth(1)
+            .and_then(|n| n.split("</w:num>").next())
+            .unwrap_or_default()
+            .to_string();
+        assert!(again.contains("<w:startOverride w:val=\"1\"/>"), "{numbering}");
+    }
+
+    /// Tables drawn with borders stay tables when they have one column, or a cell holding
+    /// several lines; a page border with a header rule and a rule down the middle frames the
+    /// text instead, and draws no boxes of its own.
+    #[test]
+    fn ruled_tables_and_frames_are_told_apart() {
+        // One column, three rows.
+        let mut shapes: Vec<Shape> = [700.0, 680.0, 660.0, 640.0].iter().map(|y| line(100.0, *y, 300.0, *y)).collect();
+        shapes.extend([line(100.0, 640.0, 100.0, 700.0), line(300.0, 640.0, 300.0, 700.0)]);
+        let rows: Vec<Block> =
+            ["Row one", "Row two", "Row three"].iter().enumerate().map(|(i, t)| para(t, 105.0, 200.0, 696.0 - 20.0 * i as f64, 1, 200.0)).collect();
+        let xml = part(&docx(&[page(rows, shapes)], "One column"), "word/document.xml");
+        assert!(xml.contains("<w:tbl>") && !xml.contains("<w:pBdr>"), "{xml}");
+
+        // Two by two, the second cell holding six lines, on a page with little else.
+        let mut shapes: Vec<Shape> = [700.0, 680.0, 580.0].iter().map(|y| line(100.0, *y, 400.0, *y)).collect();
+        shapes.extend([100.0, 200.0, 400.0].iter().map(|x| line(*x, 580.0, *x, 700.0)));
+        let mut blocks = vec![
+            para("Name", 105.0, 150.0, 696.0, 1, 150.0),
+            para("Notes", 205.0, 250.0, 696.0, 1, 250.0),
+            para("Ada", 105.0, 150.0, 676.0, 1, 150.0),
+        ];
+        blocks.extend((0..6).map(|i| para(&format!("Note line {i}"), 205.0, 300.0, 676.0 - 15.0 * i as f64, 1, 300.0)));
+        blocks.push(para("A closing line.", 72.0, 300.0, 500.0, 1, 300.0));
+        let xml = part(&docx(&[page(blocks, shapes)], "Notes"), "word/document.xml");
+        assert!(xml.contains("<w:tbl>"), "{xml}");
+
+        // A page border, a rule under the header and a rule down the middle.
+        let shapes = vec![
+            line(36.0, 36.0, 576.0, 36.0),
+            line(36.0, 756.0, 576.0, 756.0),
+            line(36.0, 36.0, 36.0, 756.0),
+            line(576.0, 36.0, 576.0, 756.0),
+            line(36.0, 720.0, 576.0, 720.0),
+            line(306.0, 36.0, 306.0, 720.0),
+        ];
+        let mut blocks = vec![para("Report title", 72.0, 300.0, 748.0, 1, 300.0)];
+        // Columns of prose: paragraphs of four rows, the right column's starting lower.
+        for (side, first) in [(72.0, 700.0), (330.0, 690.0)] {
+            blocks.extend((0..8).map(|i| para(&format!("Paragraph {i} at {side}."), side, side + 220.0, first - 70.0 * i as f64, 4, side + 100.0)));
+        }
+        let p = page(blocks, shapes);
+        let xml = part(&docx(std::slice::from_ref(&p), "Framed"), "word/document.xml");
+        assert!(!xml.contains("<w:tbl>") && !xml.contains("<w:pBdr>"), "{xml}");
+        assert!(!html(&[p], "Framed").contains("<table>"));
+    }
+
+    /// A list marker drawn in pieces, or without word boxes of its own, still puts the text
+    /// where its first word starts.
+    #[test]
+    fn list_text_starts_at_its_first_word_however_the_marker_is_drawn() {
+        let row = |x0: f64, x1: f64| [x0, 689.0, x1, 700.0];
+        let body = || para("Body text long enough to set the page's text area for the item.", 72.0, 540.0, 650.0, 1, 540.0);
+        let hanging = |runs: Vec<Run>| {
+            let mut b = para("1. Item text", 72.0, 300.0, 700.0, 1, 300.0);
+            b.runs = runs;
+            let xml = part(&docx(&[page(vec![b, body()], Vec::new())], "Item"), "word/document.xml");
+            xml.split("w:hanging=\"").nth(1).and_then(|h| h.split('"').next()).unwrap_or_default().to_string()
+        };
+        // "1" and "." drawn touching, then the words.
+        let pieces = vec![Run {
+            text: "1. Item text".into(),
+            size: 11.0,
+            rect: row(72.0, 140.0),
+            words: vec![row(72.0, 77.0), row(77.0, 80.0), row(90.0, 112.0), row(115.0, 140.0)],
+            ..Run::default()
+        }];
+        assert_eq!(hanging(pieces), "360");
+        // The marker's run has no word boxes; the text's has.
+        let split = vec![
+            Run { text: "1. ".into(), size: 11.0, rect: row(72.0, 80.0), ..Run::default() },
+            Run { text: "Item text".into(), size: 11.0, rect: row(90.0, 140.0), words: vec![row(90.0, 112.0), row(115.0, 140.0)], ..Run::default() },
+        ];
+        assert_eq!(hanging(split), "360");
+    }
+
+    /// An empty page keeps Word's default margins.
+    #[test]
+    fn an_empty_page_keeps_default_margins() {
+        let xml = part(&docx(&[page(Vec::new(), Vec::new())], "Empty"), "word/document.xml");
+        assert!(xml.contains("w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\""), "{xml}");
     }
 
     /// A page whose rows have no usable position still has its text in the document.

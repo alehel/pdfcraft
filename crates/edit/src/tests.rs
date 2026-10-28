@@ -6447,3 +6447,11 @@ fn reading_paragraphs_let_ocr_rows_flow_into_a_paragraph() {
     assert_eq!(texts, ["The first scanned row of a paragraph is the longest one here and the second row continues it."]);
     assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2, "editing keeps OCR rows apart");
 }
+
+/// A visible stamp on an OCR row's line stays out of the OCR paragraph in export.
+#[test]
+fn reading_paragraphs_keep_visible_text_out_of_ocr_rows() {
+    let doc = helvetica_page("BT 3 Tr /F1 11 Tf 72 700 Td (Scanned words of the row) Tj ET BT 0 Tr /F1 11 Tf 205 700 Td (PAID) Tj ET");
+    let texts: Vec<String> = text::reading_paragraphs(&doc, 0).unwrap().paragraphs.into_iter().map(|p| p.text).collect();
+    assert_eq!(texts, ["Scanned words of the row", "PAID"]);
+}

@@ -1404,6 +1404,9 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
         && same(&[a.scale, a.rise], &[b.scale, b.rise])
         && a.fill.len() == b.fill.len()
         && a.fill.iter().zip(&b.fill).all(|(a, b)| a.op == b.op && a.operands == b.operands)
+        // Invisible text (an OCR layer) and visible text (a stamp on the same line) are
+        // different lines, even when their text objects otherwise match.
+        && (a.render_mode == 3) == (b.render_mode == 3)
 }
 
 /// The line `s` continues, or a new one: `last` is the previous run of the same stream

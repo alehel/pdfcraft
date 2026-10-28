@@ -292,6 +292,12 @@ pub enum Edit {
     DeleteField {
         name: String,
     },
+    /// Delete one widget of a field (`widget`, 0-based in the field's widgets): one radio button
+    /// of a group, or one copy of a duplicated field. The last widget takes the field with it.
+    DeleteWidget {
+        name: String,
+        widget: usize,
+    },
     /// Page properties ▸ Tab order, for pages (0-based).
     SetTabOrder {
         pages: Vec<usize>,

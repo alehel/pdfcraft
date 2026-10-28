@@ -513,9 +513,9 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
         t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
-        t("form_delete_field", "Delete a field", "Delete a form field and all its widgets. Undoable.")
+        t("form_delete_field", "Delete a field", "Delete a form field and all its widgets, or with widget only that one: one radio button of a group (widget n is the nth of the radio group's options in form_fields), or one copy of a duplicated field. A field's last widget takes the field with it. Undoable.")
             .destructive()
-            .with(schema(json!({ "doc": doc(), "field": { "type": "string" } }), &["doc", "field"])),
+            .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "widget": { "type": "integer", "minimum": 1, "description": "Delete only this widget (1-based)." } }), &["doc", "field"])),
         t(
             "redact_mark",
             "Mark for redaction",

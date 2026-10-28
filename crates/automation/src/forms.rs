@@ -698,7 +698,14 @@ impl Automation {
         if !self.doc(a)?.form.iter().any(|f| f.name == name) {
             return Err(failed(format!("there is no field named {name:?} (see form_fields)")));
         }
-        self.apply(a, Edit::DeleteField { name })
+        let Some(widget) = a.opt_int("widget")? else { return self.apply(a, Edit::DeleteField { name }) };
+        let count = self.doc(a)?.form.iter().find(|f| f.name == name).map_or(0, |f| f.widgets.len());
+        let widget = usize::try_from(widget)
+            .ok()
+            .and_then(|w| w.checked_sub(1))
+            .filter(|w| *w < count)
+            .ok_or_else(|| bad(format!("widget must be 1 to {count}: {name} has {count} widgets")))?;
+        self.apply(a, Edit::DeleteWidget { name, widget })
     }
 
     pub(crate) fn doc_export_data(&mut self, a: &Args) -> Result<Value> {

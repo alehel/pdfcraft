@@ -93,7 +93,7 @@ pub use pdfcraft_forms::{
 };
 
 pub use pdfcraft_a11y as a11y;
-pub use pdfcraft_edit::{BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
+pub use pdfcraft_edit::{Backdrop, BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
@@ -125,7 +125,9 @@ use bookmarks::outline_rows;
 pub use bookmarks::{BookmarkPage, BookmarkRow};
 use comments::comment_list;
 pub use comments::{SummarySort, comment_kind, comment_summary, comment_type_name};
-pub use document::{Document, TextNotice, display_bytes_for, render_password_for};
+#[cfg(test)]
+use document::page_runs;
+pub use document::{Document, EditNotice, TextNotice, display_bytes_for, render_password_for};
 use document::{display_bytes, info_fields, recovered_render_password, same_pages, shown_under_redactions, undrawn_notices};
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};

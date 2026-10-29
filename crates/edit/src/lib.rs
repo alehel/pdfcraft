@@ -33,6 +33,8 @@ pub enum EditError {
 
 pub type Rgb = [f64; 3];
 
+pub mod backdrop;
+pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
 mod background;
 pub use background::page_background;
 pub mod objects;

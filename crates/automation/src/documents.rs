@@ -416,6 +416,28 @@ impl Automation {
         Ok(out)
     }
 
+    /// Pages whose own backdrop hides a background (see `pdfcraft_edit::backdrop`).
+    pub(crate) fn backdrops(&mut self, a: &Args) -> Result<Value> {
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let doc = self.doc(a)?;
+        let found: Vec<Value> = pages
+            .iter()
+            .zip(doc.page_backdrops(&pages))
+            .filter_map(|(p, found)| {
+                let kind = match found? {
+                    pdfcraft_engine::Backdrop::Fill => "fill",
+                    pdfcraft_engine::Backdrop::Image => "image",
+                };
+                Some(json!({ "page": p + 1, "backdrop": kind }))
+            })
+            .collect();
+        Ok(json!({ "pages": found }))
+    }
+
     pub(crate) fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
         use pdfcraft_engine::{Background, HeaderFooter, MarkKind, Watermark};
         let n = self.doc(a)?.info.pages.len();
@@ -483,6 +505,7 @@ impl Automation {
                     color: color("color", [1.0; 3])?,
                     opacity: a.opt_num("opacity")?.unwrap_or(1.0),
                     scale: a.opt_num("scale")?.unwrap_or(1.0).clamp(0.01, 1.0),
+                    replace_backdrop: a.opt_bool("replace_backdrop")?.unwrap_or(true),
                     ..Background::default()
                 },
                 replace,

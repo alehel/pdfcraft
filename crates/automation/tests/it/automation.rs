@@ -8995,8 +8995,8 @@ fn text_box_and_callout_fill_and_border_through_tools() {
 }
 
 /// Three paragraphs: Alpha (two rows), Bravo (one row) and Charlie (two rows), at the leading
-/// of #2516. A third Alpha row brings its last baseline within 2.5 × size of Bravo's, so the next
-/// read groups the two as one paragraph.
+/// of #2516. Alpha's last baseline is 35.6 pt above Bravo's; moving Alpha down 21.2 pt leaves
+/// 14.4 pt, Alpha's own leading, so the next read groups the two as one paragraph.
 fn three_paragraph_pdf() -> Vec<u8> {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
     use std::sync::Arc;
@@ -9045,6 +9045,10 @@ fn an_emptied_paragraph_does_not_pass_its_number_to_an_overlapping_neighbour() {
 /// #2516: a paragraph number names the paragraph `text_paragraphs` listed. When an edit regroups
 /// the page so that paragraph no longer exists on its own, the next edit by that number is
 /// refused. It used to rewrite whichever paragraph had taken the number, and that text was gone.
+///
+/// Moving Alpha down (no text change) is the regrouping edit: #2517 wraps a rewrite that adds or
+/// keeps rows in a marked region precisely so it can't be mistaken for a neighbour by geometry
+/// alone, so a text rewrite can no longer manufacture this scenario; a pure move still can.
 #[test]
 fn text_edit_refuses_a_paragraph_number_an_earlier_edit_regrouped() {
     let dir = workdir("text-edit-stale-number");
@@ -9056,12 +9060,9 @@ fn text_edit_refuses_a_paragraph_number_an_earlier_edit_regrouped() {
     assert!(listed["paragraphs"][1]["text"].as_str().unwrap().starts_with("Bravo"));
 
     // Listing again here would renumber the page, so the first edit's result says what moved.
-    let first = ok(
-        &mut a,
-        "text_edit",
-        json!({"doc":doc,"page":1,"paragraph":1,"text":"Alpha paragraph, first row.\nAlpha paragraph, second row.\nAlpha paragraph, a third row."}),
-    );
-    assert_eq!(first["stale_paragraphs"], json!([1, 2]), "the third row regroups Alpha with Bravo: {first}");
+    // Moving Alpha down by 21.2 pt brings its last row within 14.4 pt of Bravo, its own leading.
+    let first = ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"dy":-21.2}));
+    assert_eq!(first["stale_paragraphs"], json!([1, 2]), "moving Alpha down regroups it with Bravo: {first}");
 
     // Paragraph 2 of the earlier listing was Bravo, which is now part of Alpha's paragraph.
     let stale = a.call("text_edit", &json!({"doc":doc,"page":1,"paragraph":2,"text":"Bravo paragraph, edited."}));
@@ -9076,13 +9077,14 @@ fn text_edit_refuses_a_paragraph_number_an_earlier_edit_regrouped() {
     assert!(relisted["paragraphs"][1]["text"].as_str().unwrap().starts_with("Charlie"));
     ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":2,"text":"Charlie paragraph, edited."}));
     let text = page_text(&mut a, doc).join(" ");
-    assert!(text.contains("Charlie paragraph, edited.") && text.contains("Alpha paragraph, a third row."), "{text}");
+    assert!(text.contains("Charlie paragraph, edited.") && text.contains("Alpha paragraph, second row."), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// An edit that merges its paragraph into a neighbour leaves no paragraph of its own to follow:
 /// the merged one holds the edited text too, but rewriting it by the edited paragraph's number
-/// would drop the neighbour's text (#2516).
+/// would drop the neighbour's text (#2516). Moving Alpha down (see the previous test) is the
+/// regrouping edit, since a text rewrite is marked precisely so it cannot merge this way (#2517).
 #[test]
 fn text_edit_does_not_follow_a_paragraph_into_the_one_it_merged_with() {
     let dir = workdir("text-edit-merged-number");
@@ -9090,11 +9092,7 @@ fn text_edit_does_not_follow_a_paragraph_into_the_one_it_merged_with() {
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({"path":"p.pdf"}))["doc"].as_u64().unwrap();
     ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
-    let first = ok(
-        &mut a,
-        "text_edit",
-        json!({"doc":doc,"page":1,"paragraph":1,"text":"Alpha paragraph, first row.\nAlpha paragraph, second row.\nAlpha paragraph, a third row."}),
-    );
+    let first = ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"dy":-21.2}));
     assert!(first.get("paragraph").is_none(), "the result must not present the merged paragraph as the edited one: {first}");
 
     // Paragraph 1 was Alpha. Alpha now shares a paragraph with Bravo, so the number is refused.
@@ -9108,6 +9106,8 @@ fn text_edit_does_not_follow_a_paragraph_into_the_one_it_merged_with() {
 
 /// The editor background preview takes the same paragraph number as `text_edit`, so it hides the
 /// paragraph the number named in the listing and refuses a number an edit made stale (#2516).
+/// Moving Alpha down (see the two tests above) is the regrouping edit; a text rewrite is marked
+/// precisely so it cannot merge this way (#2517).
 #[test]
 fn page_render_hide_text_block_refuses_a_paragraph_number_an_earlier_edit_regrouped() {
     let dir = workdir("hide-text-block-stale-number");
@@ -9115,11 +9115,7 @@ fn page_render_hide_text_block_refuses_a_paragraph_number_an_earlier_edit_regrou
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({"path":"p.pdf"}))["doc"].as_u64().unwrap();
     ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
-    ok(
-        &mut a,
-        "text_edit",
-        json!({"doc":doc,"page":1,"paragraph":1,"text":"Alpha paragraph, first row.\nAlpha paragraph, second row.\nAlpha paragraph, a third row."}),
-    );
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"dy":-21.2}));
 
     // Paragraph 2 of the listing was Bravo, now inside Alpha's paragraph; position 2 is Charlie.
     let stale = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72,"hide_text_block":2}));
@@ -9489,4 +9485,226 @@ fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
     let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
     assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
+}
+
+/// #2517, through the same tools as the report. One blank line is two paragraphs, and editing
+/// the first leaves the second. The neighbour at y=656.8 is one blank line below (two 14.4 pt
+/// leadings under the second row). Growing the first paragraph, saving, reopening and editing
+/// again leaves that neighbour in place. An explicit TL of 27.6 pt stays one paragraph.
+#[test]
+fn a_blank_line_stays_a_separate_paragraph_through_tools() {
+    let dir = workdir("blank-line");
+    let body = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (First paragraph, first row.) Tj T* (First paragraph, second row.) Tj ET \
+                BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Second paragraph, first row.) Tj T* (Second paragraph, second row.) Tj ET";
+    std::fs::write(dir.join("a.pdf"), helvetica_page(body)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(before["count"], 2, "{before}");
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "First paragraph, edited row.\nFirst paragraph, second row." }));
+    let after = ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(after["count"], 2, "{after}");
+    let second = after["paragraphs"][1]["text"].as_str().unwrap();
+    assert!(second.contains("Second paragraph"), "{second}");
+
+    let grown = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj ET \
+                 BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbour) Tj ET";
+    std::fs::write(dir.join("grown.pdf"), helvetica_page(grown)).unwrap();
+    let grown_doc = ok(&mut a, "doc_open", json!({ "path": "grown.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({ "doc": grown_doc, "page": 1 }))["count"], 2);
+    ok(&mut a, "text_edit", json!({ "doc": grown_doc, "page": 1, "paragraph": 1, "text": "One\nTwo\nThree" }));
+    ok(&mut a, "doc_save", json!({ "doc": grown_doc, "path": "grown-out.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "grown-out.pdf" }))["doc"].as_u64().unwrap();
+    let after = ok(&mut a, "text_paragraphs", json!({ "doc": saved, "page": 1 }));
+    assert_eq!(after["count"], 2, "{after}");
+    assert!(after["paragraphs"][1]["text"].as_str().unwrap().contains("Neighbour"), "{after}");
+    ok(&mut a, "text_edit", json!({ "doc": saved, "page": 1, "paragraph": 1, "text": "One\nTwo\nFour" }));
+    let after = ok(&mut a, "text_paragraphs", json!({ "doc": saved, "page": 1 }));
+    assert_eq!(after["count"], 2, "{after}");
+    assert!(after["paragraphs"][1]["text"].as_str().unwrap().contains("Neighbour"), "{after}");
+
+    let spaced = "BT /F1 12 Tf 27.6 TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj T* (Three) Tj ET";
+    std::fs::write(dir.join("spaced.pdf"), helvetica_page(spaced)).unwrap();
+    let spaced_doc = ok(&mut a, "doc_open", json!({ "path": "spaced.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({ "doc": spaced_doc, "page": 1 }))["count"], 1);
+}
+
+/// #2529, through the same tools as a width drag. The typed double space falls on the wrap.
+/// Omitting `text` reflows with the saved gap count. An incremental save and a full rewrite
+/// both still have both spaces after the box is widened again.
+#[test]
+fn narrowing_then_widening_keeps_a_typed_double_space_through_tools() {
+    let dir = workdir("double-space-width");
+    std::fs::write(dir.join("a.pdf"), helvetica_page("BT /F1 24 Tf 20 150 Td (One  Two) Tj ET")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"][0]["editor_text"], "One  Two");
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "width": 45.0 }));
+    let narrow = &ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"][0];
+    assert_eq!(narrow["editor_text"], "One\nTwo", "{narrow}");
+    for (name, full) in [("narrow-inc.pdf", false), ("narrow-full.pdf", true)] {
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": name, "full": full }));
+        let saved = ok(&mut a, "doc_open", json!({ "path": name }))["doc"].as_u64().unwrap();
+        let block = &ok(&mut a, "text_paragraphs", json!({ "doc": saved, "page": 1 }))["paragraphs"][0];
+        assert_eq!(block["editor_text"], "One\nTwo", "{name}: {block}");
+        ok(&mut a, "text_edit", json!({ "doc": saved, "page": 1, "paragraph": 1, "width": 200.0 }));
+        let wide_name = format!("wide-{name}");
+        ok(&mut a, "doc_save", json!({ "doc": saved, "path": wide_name, "full": full }));
+        let wide = ok(&mut a, "doc_open", json!({ "path": wide_name }))["doc"].as_u64().unwrap();
+        let block = &ok(&mut a, "text_paragraphs", json!({ "doc": wide, "page": 1 }))["paragraphs"][0];
+        assert_eq!(block["editor_text"], "One  Two", "{name}: the second typed space was lost: {block}");
+    }
+}
+
+fn paragraph_texts(a: &mut Automation, doc: u64) -> Vec<String> {
+    ok(a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["text"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The reported edits, through open / text_paragraphs / text_edit / save / reopen / text_extract.
+/// Covers an explicit TL, the three ways a file moves rows without TL, a blank line written with
+/// Td, a two-row file that must stay split, and a partial rewrite that adds a row.
+#[test]
+fn paragraph_grouping_survives_save_and_reopen_through_tools() {
+    let dir = workdir("paragraph-grouping");
+    let mut a = auto(&dir);
+    for step in [27.6_f64, 28.8] {
+        let y2 = 700.0 - step;
+        let y3 = 700.0 - 2.0 * step;
+        let bodies = [
+            format!("BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj 0 -{step} Td (Two) Tj 0 -{step} Td (Three) Tj ET"),
+            format!(
+                "BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj ET BT /F1 12 Tf 1 0 0 1 72 {y2} Tm (Two) Tj ET BT /F1 12 Tf 1 0 0 1 72 {y3} Tm (Three) Tj ET"
+            ),
+            format!("BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {y2} Td (Two) Tj ET BT /F1 12 Tf 72 {y3} Td (Three) Tj ET"),
+        ];
+        for (i, body) in bodies.iter().enumerate() {
+            let path = format!("step-{step}-{i}.pdf");
+            std::fs::write(dir.join(&path), helvetica_page(body)).unwrap();
+            let doc = ok(&mut a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+            let paras = paragraph_texts(&mut a, doc);
+            assert_eq!(paras.len(), 1, "{path}: {paras:?}");
+            assert!(paras[0].contains("One") && paras[0].contains("Two") && paras[0].contains("Three"), "{path}: {paras:?}");
+            let extracted = page_text(&mut a, doc);
+            assert!(extracted[0].contains("One") && extracted[0].contains("Three"), "{path}: {extracted:?}");
+        }
+    }
+
+    // One gap and no third row: still two paragraphs.
+    let pair = format!("BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET", 700.0 - 27.6);
+    std::fs::write(dir.join("pair.pdf"), helvetica_page(&pair)).unwrap();
+    let pair_doc = ok(&mut a, "doc_open", json!({ "path": "pair.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, pair_doc).len(), 2);
+
+    // Blank line written with Td, not TL. The inner step repeats; the break does not.
+    let inner = 14.4_f64;
+    let blank = format!(
+        "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET \
+         BT /F1 12 Tf 72 {} Td (Neighbour) Tj ET BT /F1 12 Tf 72 {} Td (Line) Tj ET",
+        700.0 - inner,
+        700.0 - 3.0 * inner,
+        700.0 - 4.0 * inner
+    );
+    std::fs::write(dir.join("blank.pdf"), helvetica_page(&blank)).unwrap();
+    let blank_doc = ok(&mut a, "doc_open", json!({ "path": "blank.pdf" }))["doc"].as_u64().unwrap();
+    let blank_paras = paragraph_texts(&mut a, blank_doc);
+    assert_eq!(blank_paras.len(), 2, "{blank_paras:?}");
+    assert!(blank_paras[0].contains("One") && blank_paras[0].contains("Two"), "{blank_paras:?}");
+    assert!(blank_paras[1].contains("Neighbour") && blank_paras[1].contains("Line"), "{blank_paras:?}");
+
+    // The first row is unchanged. Save incremental, reopen, edit again, save in full, reopen.
+    let partial = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+                   BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET";
+    std::fs::write(dir.join("partial.pdf"), helvetica_page(partial)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "partial.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, doc).len(), 2);
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "Alpha first row.\nTwo\nThree" }));
+    let incremental = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "partial.pdf" }));
+    assert_eq!(incremental["incremental"], true, "{incremental}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "partial.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["Alpha first row. Two Three", "Neighbor stays."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 1, "text": "Alpha first row.\nTwo\nFour" }));
+    let full = ok(&mut a, "doc_save", json!({ "doc": reopened, "path": "partial-full.pdf", "full": true }));
+    assert_eq!(full["incremental"], false, "{full}");
+    let again = ok(&mut a, "doc_open", json!({ "path": "partial-full.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, again), ["Alpha first row. Two Four", "Neighbor stays."]);
+    let extracted = page_text(&mut a, again);
+    assert!(extracted[0].contains("Neighbor stays.") && extracted[0].contains("Four"), "{extracted:?}");
+}
+
+/// Editing the only paragraph on the page, while leaving its second row in the source, stays
+/// one paragraph through save and reopen. A neighbour in a different marked region stays in
+/// its own paragraph.
+#[test]
+fn a_partial_rewrite_of_the_last_paragraph_stays_one_through_tools() {
+    let dir = workdir("paragraph-tail");
+    let mut a = auto(&dir);
+    let only = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET";
+    std::fs::write(dir.join("only.pdf"), helvetica_page(only)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "only.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, doc), ["Alpha first row. Alpha next row."]);
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "One.\nAlpha next row." }));
+    assert_eq!(paragraph_texts(&mut a, doc), ["One. Alpha next row."]);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "only.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "only.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["One. Alpha next row."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 1, "text": "One.\nTwo." }));
+    assert_eq!(paragraph_texts(&mut a, reopened), ["One. Two."]);
+
+    let marked = "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET EMC \
+                  /P << /MCID 1 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC";
+    std::fs::write(dir.join("marked.pdf"), helvetica_page(marked)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, doc).len(), 2);
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "One.\nAlpha next row." }));
+    assert_eq!(paragraph_texts(&mut a, doc), ["One. Alpha next row.", "Neighbor stays."]);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "marked.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["One. Alpha next row.", "Neighbor stays."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 1, "text": "One.\nTwo." }));
+    assert_eq!(paragraph_texts(&mut a, reopened), ["One. Two.", "Neighbor stays."]);
+}
+
+/// Both ends of one text object, through open / text_edit / save / reopen / text_extract.
+/// Editing the last paragraph must not take the one before it, and editing the first must
+/// not take the one after it. Incremental and full saves.
+#[test]
+fn a_shared_text_object_keeps_both_paragraphs_through_tools() {
+    let dir = workdir("shared-text-object");
+    let mut a = auto(&dir);
+    let body =
+        "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj T* T* (Neighbor stays.) Tj T* (Neighbor next.) Tj ET";
+    std::fs::write(dir.join("last.pdf"), helvetica_page(body)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "last.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, doc), ["Alpha first row. Alpha next row.", "Neighbor stays. Neighbor next."]);
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 2, "text": "Neighbor stays.\nChanged." }));
+    assert_eq!(paragraph_texts(&mut a, doc), ["Alpha first row. Alpha next row.", "Neighbor stays. Changed."]);
+    let incremental = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "last.pdf" }));
+    assert_eq!(incremental["incremental"], true, "{incremental}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "last.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["Alpha first row. Alpha next row.", "Neighbor stays. Changed."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 2, "text": "Neighbor stays.\nEdited." }));
+    let full = ok(&mut a, "doc_save", json!({ "doc": reopened, "path": "last-full.pdf", "full": true }));
+    assert_eq!(full["incremental"], false, "{full}");
+    let again = ok(&mut a, "doc_open", json!({ "path": "last-full.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, again), ["Alpha first row. Alpha next row.", "Neighbor stays. Edited."]);
+    let extracted = page_text(&mut a, again);
+    assert!(extracted[0].contains("Alpha first row.") && extracted[0].contains("Edited."), "{extracted:?}");
+
+    std::fs::write(dir.join("first.pdf"), helvetica_page(body)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "first.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "Alpha first row.\nTwo\nThree" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "first.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "first.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["Alpha first row. Two Three", "Neighbor stays. Neighbor next."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 1, "text": "Alpha first row.\nTwo\nFour" }));
+    ok(&mut a, "doc_save", json!({ "doc": reopened, "path": "first-full.pdf", "full": true }));
+    let again = ok(&mut a, "doc_open", json!({ "path": "first-full.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, again), ["Alpha first row. Two Four", "Neighbor stays. Neighbor next."]);
+    let extracted = page_text(&mut a, again);
+    assert!(extracted[0].contains("Four") && extracted[0].contains("Neighbor stays."), "{extracted:?}");
 }

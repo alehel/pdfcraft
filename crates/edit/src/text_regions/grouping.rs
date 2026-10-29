@@ -227,14 +227,15 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
     }
     let mut blocks: Vec<TextBlock> = Vec::new();
-    for row in rows {
+    for row_at in 0..rows.len() {
+        let Some(row) = rows.get(row_at) else { continue };
         let Some(first) = row.first().and_then(|i| lines.get(*i)) else { continue };
-        let (Some(rect), Some(frame)) = (row_rect(&row, lines), frame_row_rect(&row, lines)) else { continue };
+        let (Some(rect), Some(frame)) = (row_rect(row, lines), frame_row_rect(row, lines)) else { continue };
         let joins = blocks.last().is_some_and(|block| {
             // A bullet of its own opens a list item (#2564): such a row is a new paragraph, and
             // letting it join is what made an edit of the row above delete this item and the ones
             // after it.
-            if starts_list_item(&row, lines) {
+            if starts_list_item(row, lines) {
                 return false;
             }
             let Some(prev_row) = block.rows.last() else { return false };
@@ -253,6 +254,36 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 || ((pr[0] + pr[2] - frame[0] - frame[2]) / 2.0).abs() < tol
                 || (pr[2] - frame[2]).abs() < tol
                 || hanging;
+            // Once a paragraph has two rows, its own leading is the measured baseline gap. A
+            // blank line is about twice that, so a wider gap is the next paragraph (#2517). A
+            // single row uses the text object's TL when it has one: a gap equal to that TL
+            // joins, and a gap of twice the TL does not. `Td` does not set TL (`TD` does). A
+            // step that repeats on the following row is that leading; one large gap, with no
+            // second step to compare, stays a break. The old cap of 2.5 × the size joined the
+            // blank line too.
+            let own_leading = block.rows.len().checked_sub(2).and_then(|i| {
+                let above = block.rows.get(i)?.first().and_then(|n| lines.get(*n));
+                let below = prev_row.first().and_then(|n| lines.get(*n));
+                match (above, below) {
+                    (Some(above), Some(below)) => Some((above.frame_origin().1 - below.frame_origin().1).abs()),
+                    _ => None,
+                }
+            });
+            let stated = (prev.origin.state.leading > 0.0).then(|| prev.wrap_leading()).filter(|lead| lead.is_finite() && *lead > tol * 0.4);
+            // The next row is not in this block yet. Its gap is only a leading when it matches
+            // this one: a blank line is a single wider gap and has no matching step after it.
+            let repeated = rows.get(row_at.saturating_add(1)).and_then(|next| {
+                let nfirst = next.first().and_then(|i| lines.get(*i))?;
+                let nframe = frame_row_rect(next, lines)?;
+                let ngap = first.frame_origin().1 - nfirst.frame_origin().1;
+                let same = same_plane(first, nfirst)
+                    && (mixed || same_style(first, nfirst))
+                    && first.size.min(nfirst.size) >= first.size.max(nfirst.size) * 0.4
+                    && (nframe[0] - frame[0]).abs() < tol;
+                let scale = gap.abs().max(ngap.abs());
+                if same && ngap > tol * 0.8 && scale < tol * 4.0 && (ngap - gap).abs() <= scale * 0.08 + 0.5 { Some(gap) } else { None }
+            });
+            let max_gap = own_leading.filter(|lead| *lead > tol * 0.4).or(stated).or(repeated).map_or(tol * 2.05, |lead| lead * 1.5);
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
             (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
@@ -262,12 +293,13 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 && aligned
                 && first.size.min(prev.size) >= first.size.max(prev.size) * 0.4
                 && gap > first.size.min(prev.size) * 0.8
-                && gap < first.size.max(prev.size) * 2.5
+                && gap < max_gap
         });
         if !joins {
             blocks.push(TextBlock {
                 text: String::new(),
                 editor_text: String::new(),
+                reflow_text: String::new(),
                 spans: Vec::new(),
                 rect,
                 base_font: first.base_font.clone(),
@@ -286,7 +318,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         if !block.rows.is_empty() {
             block.editor_text.push('\n');
         }
-        for &index in &row {
+        for &index in row {
             let Some(line) = lines.get(index) else { continue };
             // Some producers position separate words without encoding a space.
             if let Some(prev) = block.lines.last().filter(|i| row.contains(i)).and_then(|i| lines.get(*i))
@@ -313,7 +345,62 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
         block.text.push_str(row_text.trim_matches(paragraph_separator));
         block.rect = union(block.rect, rect);
-        block.rows.push(row);
+        block.rows.push(row.clone());
+    }
+    for block in &mut blocks {
+        block.reflow_text = reflow_text(block, lines);
     }
     blocks
+}
+
+/// The text a width change should reflow. A `/PCSoft` line is a wrap and rejoins. A `/PCHard`
+/// line, or a short line that is not marked, keeps its newline. An unmarked line that reaches
+/// the paragraph's right edge and is wide enough to be a measure rejoins too: that is how a
+/// file written elsewhere wraps a body line.
+fn reflow_text(block: &TextBlock, lines: &[TextLine]) -> String {
+    let parts: Vec<&str> = block.editor_text.split('\n').collect();
+    if parts.len() != block.rows.len() {
+        return block.editor_text.clone();
+    }
+    let mut out = String::new();
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            match break_gap(block, lines, index) {
+                Some(_) if out.ends_with('-') => {
+                    out.pop();
+                }
+                // `gap` is the exact number of separator characters the wrap consumed (0 for a
+                // Chinese/Japanese word split, which has no space of its own) when the marker or
+                // the source recorded it; a line already ending in whitespace is left alone so a
+                // row whose own text kept a trailing space isn't doubled.
+                Some(gap) if !out.ends_with(char::is_whitespace) => out.push_str(&" ".repeat(gap)),
+                Some(_) => {}
+                None => out.push('\n'),
+            }
+        }
+        out.push_str(part);
+    }
+    out
+}
+
+/// `None`: a hard break, kept as a newline. `Some(gap)`: a soft wrap, rejoined with exactly `gap`
+/// spaces — the count a `/PCSoft` marker recorded ([`TextLine::soft_gap`]), or, for a line this
+/// app did not mark (a file written elsewhere, or an older save), a single space when the
+/// geometry looks like an ordinary wrapped body line (`#2529`).
+fn break_gap(block: &TextBlock, lines: &[TextLine], row_index: usize) -> Option<usize> {
+    let line = block.rows.get(row_index).and_then(|row| row.first()).and_then(|i| lines.get(*i))?;
+    if line.hard_break {
+        return None;
+    }
+    if line.soft_break {
+        return Some(line.soft_gap);
+    }
+    let prev = block.rows.get(row_index.wrapping_sub(1)).and_then(|row| row_rect(row, lines))?;
+    let next = block.rows.get(row_index).and_then(|row| row_rect(row, lines))?;
+    let size = line.size.max(1.0);
+    let slack = block.rect[2] - prev[2];
+    let width = prev[2] - prev[0];
+    // Short rows define the right edge by their own letters. A body line that fills the
+    // measure leaves almost no room for the next word.
+    (slack <= size * 0.75 && width >= size * 8.0 && (next[2] - next[0]) + size * 0.25 > slack).then_some(1)
 }

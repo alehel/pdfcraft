@@ -422,7 +422,10 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
                 let width = (l.rect[2] - l.rect[0]) + (to[2] - to[0]) - (from[2] - from[0]);
                 let shift = to[0] - from[0];
                 let style = pdfcraft_engine::BlockStyle { width: Some(width), offset: (shift != 0.0).then_some([shift, 0.0]), ..Default::default() };
-                Edit::EditTextBlock { page, block: d.block, text: l.text.clone(), style }
+                // `editor_text` has a newline for every visual row, so a wrap would come back as a
+                // hard break and a wider box would not reflow it. `reflow_text` rejoins a wrap
+                // and keeps a newline that was typed.
+                Edit::EditTextBlock { page, block: d.block, text: l.reflow_text.clone(), style }
             } else {
                 // Translation must keep the selected source operators. Rewriting unchanged text
                 // would also remove unrelated paragraphs that now overlap this one (#594).

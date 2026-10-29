@@ -578,14 +578,40 @@ impl LineWriter<'_> {
         }
     }
 
-    /// Writes one wrapped line, returning its underline (x0, x1, y) in text space.
-    fn write_line(&self, index: usize, line: &str, last: bool, cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<(f64, f64, f64), EditError> {
+    /// Writes one wrapped line, returning its underline (x0, x1, y) in text space. `wrap`: whether
+    /// this line continues the previous one because a word did not fit, and, when it does, how
+    /// many separator characters the wrap consumed (0 for a Chinese/Japanese word split).
+    fn write_line(
+        &self,
+        index: usize,
+        line: &str,
+        wrap: (bool, usize),
+        last: bool,
+        cursor: &mut LineCursor,
+        ops: &mut Vec<Op>,
+    ) -> Result<(f64, f64, f64), EditError> {
         let n = pdfcraft_content::num;
+        let (soft, gap) = wrap;
         let body = line.trim_matches(' ');
         let interior = body.matches(' ').count();
         let tw = self.stretch(body, last);
         let (shown, visible) = self.shown(line, body, tw);
         let dx = if tw > 0.0 { 0.0 } else { self.alignment.offset(visible) };
+        if index > 0 {
+            // Inside this text object, so the marker starts and ends here. `/PCHard` is a newline
+            // that was already in the text. `/PCSoft` rejoins when the box widens, with `/N` the
+            // exact number of separator characters the wrap consumed (0 for a Chinese/Japanese
+            // word split), so a rejoin restores what was actually there instead of guessing a
+            // single space and silently dropping the rest of a typed run (#2529).
+            if soft {
+                let mut properties = Dict::new();
+                properties.set(b"N".to_vec(), Object::Int(i64::try_from(gap).unwrap_or(i64::MAX)));
+                ops.push(Op::new("BDC", vec![Object::name("PCSoft"), Object::Dict(properties)]));
+            } else {
+                ops.push(Op::new("BMC", vec![Object::name("PCHard")]));
+            }
+            ops.push(Op::new("EMC", vec![]));
+        }
         if index > 0 || dx != 0.0 {
             ops.push(Op::new("Td", vec![n(dx - cursor.x), n(if index > 0 { -self.lead } else { 0.0 })]));
         }
@@ -633,8 +659,12 @@ impl LineWriter<'_> {
     }
 
     /// Writes every wrapped line, returning their underlines.
-    fn write_all(&self, wrapped: &[String], cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<Vec<(f64, f64, f64)>, EditError> {
-        wrapped.iter().enumerate().map(|(i, line)| self.write_line(i, line, i + 1 == wrapped.len(), cursor, ops)).collect()
+    fn write_all(&self, wrapped: &[(String, bool, usize)], cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<Vec<(f64, f64, f64)>, EditError> {
+        wrapped
+            .iter()
+            .enumerate()
+            .map(|(i, (line, soft, gap))| self.write_line(i, line, (*soft, *gap), i + 1 == wrapped.len(), cursor, ops))
+            .collect()
     }
 }
 
@@ -653,7 +683,7 @@ struct BlockPlan<'a> {
     underline: bool,
 }
 
-fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[String], show_font: String) -> Result<Vec<Op>, EditError> {
+fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[(String, bool, usize)], show_font: String) -> Result<Vec<Op>, EditError> {
     let n = pdfcraft_content::num;
     let mut ops = vec![Op::new("q", vec![])];
     ops.extend(reveal_ops(plan.block, plan.lines, plan.style, plan.emit.ctm)?);

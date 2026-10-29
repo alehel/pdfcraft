@@ -3668,6 +3668,228 @@ fn a_paragraph_editor_opens_at_full_opacity() {
     }
 }
 
+/// One US Letter page of Helvetica, for driving the live editor on a known baseline.
+fn letter_text(body: &str) -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+fn open_letter(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 1400.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes(name, None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+fn click_page(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
+    let page = h.state().views[0].page_screen_rect(0).expect("the page is on screen");
+    let at = egui::pos2(page.left() + x / 612.0 * page.width(), page.top() + (792.0 - y) / 792.0 * page.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(4);
+}
+
+fn save_live_shot(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    for _ in 0..40 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+    }
+    let dir = std::path::Path::new("/tmp/pdfcraft-visual");
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(image) = h.render() {
+        let _ = image.save(dir.join(name));
+    }
+}
+
+/// Live editor: a repeated step with no TL opens as one paragraph, and adding a row
+/// beside a kept first row leaves the neighbour as its own paragraph on screen.
+#[test]
+fn the_live_editor_groups_a_repeated_step_and_keeps_the_neighbour() {
+    let step = 27.6_f32;
+    let repeated = format!(
+        "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET BT /F1 12 Tf 72 {} Td (Three) Tj ET",
+        700.0 - step,
+        700.0 - 2.0 * step
+    );
+    let mut h = open_letter("repeated.pdf", letter_text(repeated.as_str()));
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    click_page(&mut h, 90.0, 700.0 - step + 4.0);
+    let editor = h.state().views[0].line_editor.clone().expect("the middle row opens");
+    assert!(editor.text.contains("One") && editor.text.contains("Two") && editor.text.contains("Three"), "{}", editor.text);
+    save_live_shot(&mut h, "live-repeated-step.png");
+
+    let partial = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+                   BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET";
+    let mut h = open_letter("partial.pdf", letter_text(partial));
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    click_page(&mut h, 120.0, 704.0);
+    let editor = h.state().views[0].line_editor.clone().expect("the first paragraph opens");
+    assert!(editor.text.contains("Alpha first row.") && editor.text.contains("Alpha next row."), "{}", editor.text);
+    assert!(!editor.text.contains("Neighbor"), "{}", editor.text);
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Alpha first row.\nTwo\nThree".into();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(6);
+    let blocks = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.text_blocks(0).iter().map(|b| b.text.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(blocks, ["Alpha first row. Two Three", "Neighbor stays."]);
+    save_live_shot(&mut h, "live-after-adding-a-row.png");
+    click_page(&mut h, 120.0, 660.0);
+    let neighbour = h.state().views[0].line_editor.clone().expect("the neighbour opens on its own");
+    assert_eq!(neighbour.text, "Neighbor stays.");
+    save_live_shot(&mut h, "live-neighbour-open.png");
+}
+
+/// Widening example 1 must not pull the heading into that box or split the paragraph under example 2.
+#[test]
+fn widening_example_one_keeps_the_heading_and_the_next_paragraph() {
+    let body = "BT /F1 14 Tf 72 740 Td (1. Repeated step, no TL. Click Two.) Tj ET \
+                BT /F1 12 Tf 72 700 Td (One) Tj ET \
+                BT /F1 12 Tf 72 672.4 Td (Two) Tj ET \
+                BT /F1 12 Tf 72 644.8 Td (Three) Tj ET \
+                BT /F1 14 Tf 72 590 Td (2. Blank line. Edit the first paragraph.) Tj ET \
+                BT /F1 12 Tf 14.4 TL 1 0 0 1 72 550 Tm (First paragraph, first row.) Tj T* (First paragraph, second row.) Tj ET \
+                BT /F1 12 Tf 14.4 TL 1 0 0 1 72 506.8 Tm (Second paragraph, first row.) Tj T* (Second paragraph, second row.) Tj ET \
+                BT /F1 14 Tf 72 450 Td (3. Add a row under Alpha. Neighbor stays.) Tj ET \
+                BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+                BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET";
+    let mut h = open_letter("letter.pdf", letter_text(body));
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    click_page(&mut h, 90.0, 690.0);
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "One\nTwo\nThree\nfour".into();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(8);
+    let (edge, page_id) = {
+        let s = h.state();
+        let id = s.views[0].id;
+        let blocks = s.session.get(id).unwrap().text_blocks(0);
+        let texts: Vec<_> = blocks.iter().map(|b| b.text.clone()).collect();
+        assert!(texts.iter().any(|t| t == "1. Repeated step, no TL. Click Two."), "commit already joined the heading: {texts:?}");
+        assert!(
+            texts.iter().any(|t| t.contains("First paragraph, first row") && t.contains("second row")),
+            "commit already split the next paragraph: {texts:?}"
+        );
+        let block = blocks.iter().find(|b| b.text.contains("four")).expect("the edited paragraph");
+        let page = s.views[0].page_screen_rect(0).unwrap();
+        let edge = egui::pos2(
+            page.left() + block.rect[2] as f32 / 612.0 * page.width(),
+            page.top() + (792.0 - (block.rect[1] + block.rect[3]) as f32 / 2.0) / 792.0 * page.height(),
+        );
+        (edge, id)
+    };
+    let to = edge + egui::vec2(280.0, 0.0);
+    h.hover_at(edge);
+    h.run_steps(1);
+    h.drag_at(edge);
+    h.run_steps(1);
+    for k in 1..=6 {
+        h.hover_at(edge + (to - edge) * (k as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(8);
+    let texts: Vec<_> = {
+        let s = h.state();
+        s.session.get(page_id).unwrap().text_blocks(0).iter().map(|b| b.text.clone()).collect()
+    };
+    let edited = {
+        let s = h.state();
+        s.session
+            .get(page_id)
+            .unwrap()
+            .text_blocks(0)
+            .iter()
+            .find(|b| b.editor_text.contains("four"))
+            .expect("the widened paragraph")
+            .editor_text
+            .clone()
+    };
+    assert_eq!(edited, "One\nTwo\nThree\nfour", "the width handle flattened the line breaks: {edited:?}");
+    assert!(texts.iter().any(|t| t == "1. Repeated step, no TL. Click Two."), "the width handle joined the heading: {texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("First paragraph, first row") && t.contains("First paragraph, second row")),
+        "the width handle split the next paragraph: {texts:?}"
+    );
+    save_live_shot(&mut h, "live-example-one-widened.png");
+}
+
+/// The live width handle, after a row was added on top of the neighbour.
+#[test]
+fn resizing_the_live_box_keeps_the_neighbour() {
+    let partial = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+                   BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET";
+    let mut h = open_letter("partial.pdf", letter_text(partial));
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    click_page(&mut h, 120.0, 414.0);
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Alpha first row.\nthis is another\nalpha test\nAlpha next row.".into();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(6);
+    let before = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0).iter().map(|b| b.text.clone()).collect::<Vec<_>>()
+    };
+    assert!(before.iter().any(|t| t.contains("Neighbor stays.")), "the edit already dropped it: {before:?}");
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let rect = h.state().session.get(h.state().views[0].id).unwrap().text_blocks(0)[0].rect;
+    let edge = egui::pos2(
+        page.left() + rect[2] as f32 / 612.0 * page.width(),
+        page.top() + (792.0 - (rect[1] + rect[3]) as f32 / 2.0) / 792.0 * page.height(),
+    );
+    let to = edge + egui::vec2(80.0, 0.0);
+    h.hover_at(edge);
+    h.run_steps(1);
+    h.drag_at(edge);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(edge + (to - edge) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(6);
+    let after = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0).iter().map(|b| b.text.clone()).collect::<Vec<_>>()
+    };
+    assert!(after.iter().any(|t| t.contains("Neighbor stays.")), "resize removed the neighbour: {after:?}");
+    save_live_shot(&mut h, "live-after-resize.png");
+}
+
 #[test]
 fn editing_existing_text_in_place() {
     let mut h = harness(1, |_| {});

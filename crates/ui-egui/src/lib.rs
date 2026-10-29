@@ -567,6 +567,8 @@ pub struct PdfCraftApp {
     fonts_cjk: theme::CjkPreference,
     /// The window title last sent to the platform.
     pub window_title: String,
+    /// The web page's title last set: the window title, but always with the file's name.
+    pub page_title: String,
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<control::Control>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).

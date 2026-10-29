@@ -14,6 +14,7 @@ use pdfcraft_render::DocInfo;
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
+use crate::page_router::{Hit, Owner, ParagraphPart};
 
 mod background;
 mod image;
@@ -21,7 +22,7 @@ mod layout;
 
 pub(crate) use background::TextBackground;
 pub use image::{CropMode, ImageSelection};
-pub(crate) use image::{ImageAction, ImageCx, image_input, image_owns_pointer};
+pub(crate) use image::{ImageAction, ImageCx, body_hit as picture_hit, handle_hit as picture_handle_hit, image_input};
 #[cfg(test)]
 use image::{rotate_knob, turn_degrees};
 #[cfg(test)]
@@ -233,8 +234,9 @@ pub struct BlockDrag {
 
 /// How far an edge grip reaches either side of a box's edge (screen pixels).
 const EDGE_REACH: f32 = 6.0;
-/// How far outside an open paragraph's frame the pointer still means the frame (screen pixels).
-const FRAME_REACH: f32 = 4.0;
+/// How far outside an open paragraph's frame the pointer still means the frame (screen pixels):
+/// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
+pub(crate) const FRAME_REACH: f32 = 6.0;
 
 /// The rewrap handles drawn on a paragraph box's left and right edges (screen).
 fn width_handles(b: Rect) -> [Rect; 2] {
@@ -271,17 +273,38 @@ fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) ->
     xf.user_rect(info, page, rect.map(|v| v as f32)).expand(2.0)
 }
 
+/// Whether `p` lies in the box of one of the paragraphs `lines` on `page`, its edge grips there
+/// included, not beside it: where Add text acts on the page's own paragraphs.
+pub(crate) fn over_paragraph(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft_engine::TextBlock], p: Pos2) -> bool {
+    lines.iter().any(|l| paragraph_box(xf, info, page, l.rect).contains(p))
+}
+
 /// The width handles need the page upright (or upside down): on a quarter-turned page the
 /// screen's horizontal is the paragraph's vertical.
 fn has_edges(info: &DocInfo, page: usize) -> bool {
     info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0)
 }
 
-/// Whether a press at `p` takes hold of the width handle of one of the paragraphs `rects` (user
-/// space). The handle is drawn half outside the box and grabs from a little further out still,
-/// where a press is not on the box itself, so area selection must leave it to [`page_input`].
-pub(crate) fn grabs_edge(xf: &PageXform, info: &DocInfo, page: usize, mut rects: impl Iterator<Item = [f64; 4]>, p: Pos2) -> bool {
-    has_edges(info, page) && rects.any(|r| edge_at(paragraph_box(xf, info, page, r), p).is_some())
+/// What of the paragraphs `lines` lies under `p` on `page`: the one hit test of Edit text's
+/// paragraphs, for the cursor and the press. A closed paragraph moves when dragged (the four-way
+/// arrow says so; a click still opens it for typing) and its edge rewraps it, from a little way
+/// outside the box (the handle is drawn half outside it, #2276); the open one takes the text
+/// cursor. `active` is the paragraph open for typing on this page.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft_engine::TextBlock], active: Option<usize>, p: Pos2) -> Option<Hit> {
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    // Edges rewrap closed paragraphs only: around the open one lies its frame (`object_ui`).
+    let (block, grip) = grab_at(&boxes, p, has_edges(info, page) && active.is_none())?;
+    let paragraph = |part| Owner::Paragraph { block, part };
+    Some(match (active, grip) {
+        (None, Grip::Left) => Hit::new(paragraph(ParagraphPart::Left), Layer::Handle, egui::CursorIcon::ResizeHorizontal),
+        (None, Grip::Right) => Hit::new(paragraph(ParagraphPart::Right), Layer::Handle, egui::CursorIcon::ResizeHorizontal),
+        (None, Grip::Move) => Hit::new(paragraph(ParagraphPart::Body), Layer::Text, egui::CursorIcon::Move),
+        (Some(open), _) if open == block => Hit::new(paragraph(ParagraphPart::Body), Layer::Editor, egui::CursorIcon::Text),
+        (Some(_), _) => Hit::new(paragraph(ParagraphPart::Body), Layer::Text, egui::CursorIcon::Text),
+    })
 }
 
 fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
@@ -416,35 +439,37 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         return true;
     }
     // Dragging a box (not while a paragraph is open for typing) moves it; from an edge, resizes it.
-    // What it grabs comes from where the button went down, not where the pointer is now: egui
+    // What it grabs is what the press was on ([`hit`]), not what is under the pointer now: egui
     // only calls it a drag once the pointer has moved a few pixels (or been held a moment), and a
     // quick flick has left the edge by then.
+    let owner = match view.router.owner(page) {
+        Some(Owner::Paragraph { block, part }) => Some((block, part)),
+        _ => None,
+    };
     if resp.drag_started()
         && active.is_none()
         && let Some(o) = ptr.origin
-        && let Some((block, grip)) = grab_at(&boxes, o, upright)
+        && let Some((block, part)) = owner
     {
+        let grip = match part {
+            ParagraphPart::Body => Grip::Move,
+            ParagraphPart::Left => Grip::Left,
+            ParagraphPart::Right => Grip::Right,
+        };
         view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
         return true;
     }
     let Some(p) = ptr.within(xf.rect) else { return false };
-    let Some((hit, grip)) = grab_at(&boxes, p, upright) else { return false };
-    if active != Some(hit) {
-        painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+    // The paragraph under the pointer: outlined, with its width handles when closed.
+    let Some((hovered, _)) = grab_at(&boxes, p, upright) else { return false };
+    if active != Some(hovered) {
+        painter.rect_stroke(boxes[hovered], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
     }
-    let on_edge = active.is_none() && grip != Grip::Move;
     if upright && active.is_none() {
-        draw_handles(boxes[hit]);
+        draw_handles(boxes[hovered]);
     }
-    // A closed paragraph moves when dragged (the four-way arrow says so; a click still opens it
-    // for typing); an edge rewraps it. The open one takes the text cursor.
-    if on_edge {
-        view.cursor.claim(Layer::Handle, egui::CursorIcon::ResizeHorizontal);
-    } else if active.is_none() {
-        view.cursor.claim(Layer::Text, egui::CursorIcon::Move);
-    } else {
-        view.cursor.claim(if active == Some(hit) { Layer::Editor } else { Layer::Text }, egui::CursorIcon::Text);
-    }
+    // A click opens the paragraph the press was on.
+    let Some((hit, _)) = owner else { return true };
     if resp.clicked() {
         view.image_selection = None;
         // A click that moves the editor to another paragraph applies the open one first, so its

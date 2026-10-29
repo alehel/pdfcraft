@@ -3935,6 +3935,98 @@ fn editing_existing_images_on_the_page() {
     check_existing_artwork("picture.png", png);
 }
 
+/// Add text places a box with a click anywhere off its own boxes: on a scanned page (one picture
+/// filling it) too, and just beside a paragraph, where Edit text would rewrap it.
+#[test]
+fn add_text_places_a_box_on_a_picture_and_beside_a_paragraph() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::AddText;
+    h.run_steps(2);
+    let c = h.state().views[0].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(c);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "the I-beam over the picture");
+    click_at(&mut h, c);
+    assert!(h.state().views[0].content.draft.is_some(), "a click on the picture starts a text box");
+
+    let mut h = harness(2, |_| {});
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::AddText;
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    // 6 px left of the text: 4 px past its box, within a closed paragraph's edge grip in Edit text.
+    let beside = egui::pos2(r.left() + block.rect[0] as f32 * k, r.top() + (300.0 - ((block.rect[1] + block.rect[3]) / 2.0) as f32) * k)
+        - egui::vec2(6.0, 0.0);
+    click_at(&mut h, beside);
+    assert!(h.state().views[0].content.draft.is_some(), "a click beside the paragraph starts a text box");
+}
+
+/// Add text opens a paragraph with a click anywhere in its box, just inside its edge too, where the
+/// edge's grip shows (a drag there rewraps it, as with Edit text). Add text's hits left the grip
+/// out there, so the click neither opened the paragraph nor started a box.
+#[test]
+fn add_text_opens_a_paragraph_from_just_inside_its_edge() {
+    let mut h = harness(2, |_| {});
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::AddText;
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    // 2 px right of where the text starts: 4 px into its box, within its left edge's grip.
+    let inside = egui::pos2(r.left() + block.rect[0] as f32 * k, r.top() + (300.0 - ((block.rect[1] + block.rect[3]) / 2.0) as f32) * k)
+        + egui::vec2(2.0, 0.0);
+    h.hover_at(inside);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal, "the edge's grip");
+    click_at(&mut h, inside);
+    assert!(h.state().views[0].line_editor.is_some(), "the click opens the paragraph for typing");
+    assert!(h.state().views[0].content.draft.is_none(), "and starts no text box");
+}
+
+/// With Add text a paragraph dragged off its own box still moves to where the button comes up, as
+/// with Edit text. Add text acted on the page's paragraphs only while the pointer was over one, so
+/// the drag was left hanging, to land wherever the pointer next met a paragraph.
+#[test]
+fn add_text_finishes_a_paragraph_drag_that_leaves_its_box() {
+    let mut h = harness(2, |_| {});
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::AddText;
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().text_blocks(0)[0].rect;
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let from = egui::pos2(r.left() + ((before[0] + before[2]) / 2.0) as f32 * k, r.top() + (300.0 - ((before[1] + before[3]) / 2.0) as f32) * k);
+    // The drag starts in the box (8 px down), then goes 60 pt down, onto the blank page under it.
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(from + egui::vec2(0.0, 8.0));
+    h.run_steps(1);
+    for i in 1..=4 {
+        h.hover_at(from + egui::vec2(0.0, 15.0 * k * i as f32));
+        h.run_steps(1);
+    }
+    h.drop_at(from + egui::vec2(0.0, 60.0 * k));
+    for _ in 0..10 {
+        h.run_steps(2);
+    }
+    assert!(h.state().views[0].block_drag.is_none(), "the drag is over");
+    let after = h.state().session.get(id).unwrap().text_blocks(0)[0].rect;
+    assert!(before[1] - after[1] > 50.0, "the paragraph moved down with it: {before:?} to {after:?}");
+}
+
 #[test]
 fn dragging_the_rotate_knob_turns_a_page_image() {
     let mut png = Vec::new();
@@ -4332,6 +4424,53 @@ fn an_open_paragraph_moves_by_its_frame_and_by_the_arrow_keys() {
         dragged.rect
     );
     assert_eq!(h.state().session.get(id).unwrap().text_lines(0).len(), 1, "moved, not retyped");
+}
+
+/// The open paragraph's frame shows the Move cursor as far out as a press there takes hold of the
+/// box: the cursor reached 4 px past the frame, the press 6.
+#[test]
+fn an_open_paragraphs_frame_shows_move_wherever_a_press_takes_the_box() {
+    let mut h = harness(2, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    click_at(&mut h, screen((before.rect[0] + before.rect[2]) / 2.0, (before.rect[1] + before.rect[3]) / 2.0));
+    assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+    // 7 px above the text: 5 px past the frame drawn 2 px out.
+    let far = screen((before.rect[0] + before.rect[2]) / 2.0, before.rect[3]) - egui::vec2(0.0, 7.0);
+    h.hover_at(far);
+    h.run_steps(3);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "the frame offers to move the box there");
+    click_at(&mut h, far);
+    assert!(h.state().views[0].line_editor.is_none(), "and a click there selects the box");
+}
+
+/// The open paragraph's frame takes hold of the box on its sides too: there the edges of a closed
+/// paragraph would rewrap it, but around the open one lies its frame.
+#[test]
+fn an_open_paragraphs_frame_takes_the_box_beside_its_text() {
+    let mut h = harness(2, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let middle = (before.rect[1] + before.rect[3]) / 2.0;
+    click_at(&mut h, screen((before.rect[0] + before.rect[2]) / 2.0, middle));
+    assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+    // 6 px left of the text: 4 px past the frame drawn 2 px out.
+    let beside = screen(before.rect[0], middle) - egui::vec2(6.0, 0.0);
+    h.hover_at(beside);
+    h.run_steps(3);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "the frame offers to move the box there");
+    click_at(&mut h, beside);
+    assert!(h.state().views[0].line_editor.is_none(), "and a click there selects the box");
 }
 
 /// Contributor-original text, with an off-origin CropBox. Keep the moving paragraph last in

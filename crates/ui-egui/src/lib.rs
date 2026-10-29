@@ -77,6 +77,7 @@ use canvas::fling;
 use canvas::image_pick;
 use canvas::page_cursor;
 use canvas::page_pointer;
+use canvas::page_router;
 pub use canvas::scroll_speed;
 use canvas::signature_drag;
 use canvas::wheel_boost;

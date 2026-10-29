@@ -307,9 +307,10 @@ impl PageCx<'_> {
             .collect()
     }
 
-    /// The topmost comment under `p`.
+    /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
+    /// comments by position, not in paint order).
     pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).last()
+        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).max_by_key(|a| a.index)
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {

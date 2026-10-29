@@ -9,6 +9,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_router::{Hit, ObjectsPart, Owner};
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -161,6 +162,19 @@ fn leave_single(view: &mut DocView) {
     view.block_drag = None;
 }
 
+/// What of the objects lies under `p` on `page`: the objects selected together (a drag moves
+/// them), or the frame around the paragraph open for typing (`open`: its box on screen), which
+/// takes hold of the box as in Acrobat: a click selects it, a drag moves it, its text keeps the
+/// caret.
+pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, open: Option<Rect>, p: Pos2) -> Option<Hit> {
+    let s = &view.objects;
+    if s.page == Some(page) && !s.selected.is_empty() && s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o))).contains(p)
+    {
+        return Some(Hit::new(Owner::Objects { part: ObjectsPart::Selection }, Layer::Placed, egui::CursorIcon::Move));
+    }
+    open.filter(|r| on_frame(r.shrink(2.0), p)).map(|_| Hit::new(Owner::Objects { part: ObjectsPart::Frame }, Layer::Handle, egui::CursorIcon::Move))
+}
+
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
 /// single-object text/resize tools. A text draft is finished or discarded through its editor.
 pub(crate) fn page_input(cx: PageToolContext<'_>, view: &mut DocView) -> bool {
@@ -246,14 +260,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         return s.page == Some(page) && !s.selected.is_empty();
     };
     if !pressed {
-        if s.page == Some(page) && !s.selected.is_empty() {
-            let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
-            if union.contains(p) {
-                view.cursor.claim(Layer::Placed, egui::CursorIcon::Move);
-            }
-            return true;
-        }
-        return false;
+        return s.page == Some(page) && !s.selected.is_empty();
     }
     let objects = match s.inventory(doc, page) {
         Ok(objects) => objects,
@@ -296,18 +303,16 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         view.current = page;
         return true;
     }
-    if s.page == Some(page) && !s.selected.is_empty() {
-        let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
-        if union.contains(p) && !resp.double_clicked() {
-            s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
-            return true;
-        }
+    // What the press was on ([`hit`]): the selection moves; the frame of the paragraph open for
+    // typing selects its box (for the arrow keys) and moves it.
+    let owner = view.router.owner(page);
+    if owner == Some(Owner::Objects { part: ObjectsPart::Selection }) && !resp.double_clicked() {
+        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+        return true;
     }
-    // The frame of the paragraph open for typing takes hold of the box, as in Acrobat: a click
-    // selects it (for the arrow keys), a drag moves it. Its text keeps the caret.
-    if let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
+    if owner == Some(Owner::Objects { part: ObjectsPart::Frame })
+        && let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
         && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
-        && on_frame(screen(xf, info, page, object), p)
     {
         s.clear();
         s.page = Some(page);
@@ -318,11 +323,9 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         return true;
     }
     s.clear();
-    // A closed paragraph's width handle reaches past its box, and a press there rewraps the
-    // paragraph (as in `edit_text_ui`) instead of starting an area selection (#2276).
-    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page)
-        && crate::edit_text_ui::grabs_edge(xf, info, page, objects.iter().filter(|o| o.target.kind == ObjectKind::Text).map(|o| o.rect), p);
-    if hit.is_some() || on_edge {
+    // A press on something (a paragraph, its edge reaching past its box #2276, a picture, added
+    // content) is its own; only one on the empty page starts an area selection.
+    if hit.is_some() || view.router.owner(page).is_some() {
         return false;
     }
     leave_single(view);
@@ -335,11 +338,8 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
 /// Whether `p` is on the frame drawn around a paragraph open for typing (`r`, screen): just
 /// outside the text, where a press would otherwise close the paragraph.
 fn on_frame(r: Rect, p: Pos2) -> bool {
-    r.expand(2.0 + FRAME_REACH).contains(p) && !r.expand(2.0).contains(p)
+    r.expand(2.0 + crate::edit_text_ui::FRAME_REACH).contains(p) && !r.expand(2.0).contains(p)
 }
-
-/// How far outside a paragraph's frame a press still grabs it (screen pixels).
-const FRAME_REACH: f32 = 6.0;
 
 /// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
 /// as in Acrobat. They are taken before the view turns the page with them.

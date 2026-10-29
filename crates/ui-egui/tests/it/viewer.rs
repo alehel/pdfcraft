@@ -70,6 +70,33 @@ fn revert_after_confirming() {
     assert_eq!((d.info.pages.len(), d.dirty), (2, false));
 }
 
+/// #3632: Alt+← / Alt+→ go back to where a link was followed from and forward again, as in
+/// Acrobat and browsers, while ← / → still turn the page.
+#[test]
+fn alt_arrows_go_back_and_forward_through_the_view_history() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    // A followed link jumps the same way (`go_to_dest` → `go_to_page`).
+    h.state_mut().views[0].go_to_page(3);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 0, "back to where the jump started");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 3, "forward to the jump's target");
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 2, "← still turns the page");
+    h.ctx.set_os(egui::os::OperatingSystem::Nix);
+    assert!(h.state_mut().execute("help.shortcuts"));
+    h.run_steps(3);
+    h.get_by_label("Alt+← / Alt+→");
+    h.get_by_label("Previous view / Next view");
+}
+
 #[test]
 fn view_history_select_all_and_find_options() {
     let mut h = harness();

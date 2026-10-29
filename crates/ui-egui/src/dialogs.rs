@@ -1463,6 +1463,13 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     let pair = |a, b| format!("{} / {}", key(a), key(b));
     // Key names, translated where a catalog has them (not scanned as UI literals).
     let named = |k: &str| tl!(k).to_string();
+    // Alt+← / Alt+→ (`canvas::shortcuts`): not a registered command, which has no Alt.
+    let alt_arrows = if crate::commands::mac_shortcuts(ui.ctx()) {
+        "⌥← / ⌥→".to_owned()
+    } else {
+        let alt = crate::i18n::key_name("Alt");
+        format!("{alt}+← / {alt}+→")
+    };
     let scroll = crate::i18n::fmt(tl!("Zoom in / out (also pinch or {key}-scroll)"), &[("key", crate::commands::command_modifier_label(ui.ctx()))]);
     for (k, v) in [
         (pair(FIND_NEXT, FIND_PREV), tl!("Next / previous match").to_string()),
@@ -1476,6 +1483,7 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         (pair(ROTATE_CW, ROTATE_CCW), tl!("Rotate view").to_string()),
         (format!("{} / {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End")), tl!("First / last page").to_string()),
         (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
+        (alt_arrows, format!("{} / {}", tl!("Previous view"), tl!("Next view"))),
         (named("V"), tl!("Select (V)").to_string()),
         (named("H / Space (hold)"), tl!("Hand (H)").to_string()),
         (crate::i18n::key_name("Delete").to_string(), tl!("Delete selected pages (Organize)").to_string()),

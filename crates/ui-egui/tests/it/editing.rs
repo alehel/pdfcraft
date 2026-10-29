@@ -4334,8 +4334,9 @@ fn press(h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers, key: Key) 
     h.run_steps(4);
 }
 
-#[test]
-fn arrow_keys_nudge_a_selected_image_instead_of_turning_the_page() {
+/// A two-page document whose first page draws one picture (a Form XObject), open in Edit text
+/// & images with the picture selected.
+fn selected_figure() -> Harness<'static, PdfCraftApp> {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};
     let mut doc = Document::open(std::sync::Arc::new(fixture(2))).unwrap();
     let page = pdfcraft_model::pages(&doc)[0].clone();
@@ -4363,12 +4364,18 @@ fn arrow_keys_nudge_a_selected_image_instead_of_turning_the_page() {
     h.run_steps(4);
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
-    let id = h.state().views[0].id;
-    let rect = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().page_images(0)[0].rect;
-    let before = rect(&h);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     click_at(&mut h, egui::pos2(r.left() + 100.0 / 200.0 * r.width(), r.top() + (300.0 - 240.0) / 300.0 * r.height()));
     assert!(h.state().views[0].image_selection.is_some(), "selected");
+    h
+}
+
+#[test]
+fn arrow_keys_nudge_a_selected_image_instead_of_turning_the_page() {
+    let mut h = selected_figure();
+    let id = h.state().views[0].id;
+    let rect = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let before = rect(&h);
     // As in Acrobat: an arrow moves it a point, Shift and an arrow ten.
     press(&mut h, Modifiers::NONE, Key::ArrowRight);
     press(&mut h, Modifiers::SHIFT, Key::ArrowDown);
@@ -4379,6 +4386,46 @@ fn arrow_keys_nudge_a_selected_image_instead_of_turning_the_page() {
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move image"));
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the image, not the page");
     assert!(h.state().views[0].image_selection.is_some(), "it stays selected for the next nudge");
+}
+
+/// #3632: with a picture selected, Alt+← / Alt+→ still go back and forward through the view
+/// history. They don't nudge it (the nudge patterns also match a press with Alt), so nothing moves
+/// and the document isn't edited.
+#[test]
+fn alt_arrows_navigate_instead_of_nudging_a_selected_image() {
+    let mut h = selected_figure();
+    let id = h.state().views[0].id;
+    let rect = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let before = rect(&h);
+    // A followed link's jump to page 2 and back, as `go_to_dest` makes it.
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "still selected, so a nudge could take the keys");
+    press(&mut h, Modifiers::ALT, Key::ArrowLeft);
+    assert_eq!(h.state().views[0].current, 1, "Alt+← went back");
+    press(&mut h, Modifiers::ALT, Key::ArrowRight);
+    assert_eq!(h.state().views[0].current, 0, "Alt+→ went forward");
+    // Each press is judged by its own modifiers, not the frame's: Alt let go in the same frame
+    // as Alt+← leaves the frame with none, and the press still goes back.
+    let arrow = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    h.event(arrow(Key::ArrowLeft, Modifiers::ALT));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1, "an Alt+← press went back");
+    assert_eq!(rect(&h), before, "the picture didn't move");
+    let doc = h.state().session.get(id).unwrap();
+    assert!(!doc.dirty && doc.can_undo().is_none(), "nothing was edited");
+    // And a plain → pressed before Alt goes down in the same frame still nudges.
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    h.event(arrow(Key::ArrowRight, Modifiers::NONE));
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.run_steps(4);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    let moved = rect(&h);
+    assert!((moved[0] - before[0] - 1.0).abs() < 0.01, "a plain → nudged a point: {before:?} → {moved:?}");
 }
 
 #[test]

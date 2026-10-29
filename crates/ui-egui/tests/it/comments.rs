@@ -1004,6 +1004,38 @@ fn arrow_keys_nudge_the_selected_comment() {
     assert_eq!(h.state().views[0].current, 1, "and the view goes to the next page");
 }
 
+/// #3632: with a comment selected, Alt+← / Alt+→ still go back and forward through the view
+/// history instead of nudging it (egui's key patterns let an extra Alt through).
+#[test]
+fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
+    use egui::{Key, Modifiers};
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    let before = comments(&h)[0].rect;
+    // A followed link's jump to page 2 and back, as `go_to_dest` makes it.
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "still selected, so a nudge could take the keys");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 1, "Alt+← went back");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0, "Alt+→ went forward");
+    assert_eq!(comments(&h)[0].rect, before, "the comment didn't move");
+    let id = h.state().views[0].id;
+    assert_ne!(h.state().session.get(id).unwrap().can_undo(), Some("Move comment"), "nothing was nudged");
+    // A plain arrow still nudges it.
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert!(comments(&h)[0].rect[0] > before[0], "→ nudged it");
+}
+
 #[test]
 fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
     // #2338: the new shape showed its handles, but only the Select tool answered them.

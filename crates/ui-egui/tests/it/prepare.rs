@@ -156,6 +156,40 @@ fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
 }
 
+/// #3632: Alt+← / Alt+→ go back and forward through the view history with a field selected, and
+/// leave the field where it is, even when Alt is let go in the same frame as the arrow, so the
+/// frame has no modifiers and only the press carries Alt.
+#[test]
+fn alt_arrows_navigate_instead_of_nudging_the_selected_field() {
+    let mut h = harness();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 }));
+    h.run_steps(2);
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let before = rect_of(&h, &name);
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert!(h.state().views[0].prepare.selected.is_some(), "still selected, so a nudge could take the keys");
+    let arrow = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    h.event(arrow(egui::Key::ArrowLeft, egui::Modifiers::ALT));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1, "an Alt+← press went back");
+    h.event(arrow(egui::Key::ArrowRight, egui::Modifiers::ALT));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 0, "an Alt+→ press went forward");
+    assert_eq!(rect_of(&h, &name), before, "the field didn't move");
+}
+
 #[test]
 fn format_validate_and_calculate_tabs() {
     use pdfcraft_engine::form_scripts::{Calculate, Format, Validate};

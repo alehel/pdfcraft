@@ -38,7 +38,7 @@ impl Automation {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?
             }
-            "page_render" => return self.page_render(&a).map(|c| vec![c]),
+            "page_render" => return self.page_render(&a),
             "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_word_count" => self.text_word_count(&a)?,
@@ -142,7 +142,7 @@ impl Automation {
             "command_run" => return self.command_run(&a),
             "command_batch" => self.command_batch(&a)?,
             "doc_inspect" => self.doc_inspect(&a)?,
-            "render_preview" => return self.render_preview(&a).map(|c| vec![c]),
+            "render_preview" => return self.render_preview(&a),
             "page_number" => {
                 use pdfcraft_organize::LabelStyle as L;
                 let n = self.doc(&a)?.info.pages.len();

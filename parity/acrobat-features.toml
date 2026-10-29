@@ -4043,6 +4043,18 @@ evidence = ["crates/annot/src/tests.rs::lines_and_polygons_are_reshaped_by_their
 notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it to 45° from the point before), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
 
 [[feature]]
+id = "comment.move-preview"
+title = "A moved comment is drawn where it goes while it is dragged"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = []
+evidence = ["crates/ui-egui/tests/it/comments.rs::a_moved_comment_is_drawn_where_it_goes_before_release", "crates/engine/src/tests.rs::comment_layer_draws_the_comment_alone"]
+notes = "Dragging a rectangle, oval, line, text box or any other comment with the Select tool draws the comment itself under the pointer, not only its blue frame: it is rendered alone once as the drag starts (Document::comment_layer, a read-only copy with only that comment and no page content) and laid over the page where it goes; the page beneath keeps showing it where it was until the move is applied, as a CAD program's move does (rendering the page without it would cost a whole page at every drag on a heavy plan). Stamps and Fill & Sign marks keep their own layers, which also hide the original. Pointer frames never edit the document. Not yet: resizing shows the frame only."
+
+[[feature]]
 id = "comment.edit-comment-text"
 title = "Edit comment text"
 area = "E"

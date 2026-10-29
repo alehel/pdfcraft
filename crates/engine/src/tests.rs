@@ -3556,6 +3556,44 @@ trailer << /Root 1 0 R >>
     assert!(doc.stamp_preview(0, 1).unwrap().is_none(), "a stamp without an appearance");
 }
 
+/// A moved comment's layer: the comment alone on a transparent page (no page text, no other
+/// comment), drawn as on screen, another app's comment without an appearance too. Preparing it
+/// changes nothing in the document.
+#[test]
+fn comment_layer_draws_the_comment_alone() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [140.0, 40.0, 190.0, 90.0])).unwrap();
+    s.apply(id, rect_comment(0, [20.0, 20.0, 60.0, 60.0])).unwrap();
+    let doc = s.get(id).unwrap();
+    let (generation, dirty) = (doc.edit_generation(), doc.dirty);
+    let layer = doc.comment_layer(0, &[0]).unwrap().expect("a rectangle").render(1.0).unwrap();
+    let px = |p: &pdfcraft_render::RenderedPage, x: u32, y: u32| -> [u8; 4] {
+        p.rgba[(((300 - y) * p.width + x) * 4) as usize..][..4].try_into().unwrap()
+    };
+    assert_eq!(px(&layer, 165, 65), [255, 0, 0, 255], "the rectangle is drawn");
+    let near = |x: u32, y: u32| (137..=193).contains(&x) && (37..=93).contains(&y);
+    let stray: Vec<(u32, u32)> =
+        (1..300).flat_map(|y| (0..200).map(move |x| (x, y))).filter(|&(x, y)| !near(x, y) && px(&layer, x, y) != [0, 0, 0, 0]).collect();
+    assert!(stray.is_empty(), "only the rectangle is on its layer: {:?}", &stray[..stray.len().min(8)]);
+    assert!(doc.comment_layer(0, &[9]).unwrap().is_none(), "no such comment");
+    let both = doc.comment_layer(0, &[0, 1]).unwrap().expect("both").render(1.0).unwrap();
+    assert_eq!((px(&both, 165, 65), px(&both, 40, 40)), ([255, 0, 0, 255], [255, 0, 0, 255]), "moved together, drawn together");
+    let doc = s.get(id).unwrap();
+    assert_eq!((doc.edit_generation(), doc.dirty, doc.can_undo()), (generation, dirty, Some("Add rectangle")), "the document is unchanged");
+
+    let bare = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /Rect [140 40 190 90] /C [1 0 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut s = Session::new();
+    let id = s.open("bare.pdf", None, Arc::new(bare.to_vec()), None).unwrap();
+    let layer = s.get(id).unwrap().comment_layer(0, &[0]).unwrap().expect("drawn as on screen").render(1.0).unwrap();
+    assert!((138..=142).any(|x| px(&layer, x, 65)[..3] == [255, 0, 0]), "the square without an appearance is drawn");
+}
+
 #[test]
 fn flattening_fill_and_sign_keeps_other_comments_fields_and_undoes() {
     let (mut s, id) = session_with(1);

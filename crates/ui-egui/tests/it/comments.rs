@@ -2821,3 +2821,172 @@ fn text_comments_can_save_a_zero_width_default() {
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
 }
+
+/// Moving a rectangle or an oval showed only its blue frame going while the shape stayed where
+/// it was until release. Now the comment itself is drawn where it goes (the page beneath shows it
+/// where it was until the move is applied), and the pointer frames change nothing.
+#[test]
+fn a_moved_comment_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|_| {});
+    let id = h.state().views[0].id;
+    for shape in
+        [pdfcraft_engine::Shape::Rectangle { rect: [30.0, 30.0, 70.0, 70.0] }, pdfcraft_engine::Shape::Oval { rect: [230.0, 30.0, 270.0, 70.0] }]
+    {
+        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: String::new(),
+            author: "Tester".into(),
+        })));
+    }
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    let red = |v: [u8; 4]| v[0] > 200 && v[1] < 80 && v[2] < 80;
+    for ((x, y), (tx, ty)) in [((50.0, 50.0), (150.0, 120.0)), ((250.0, 50.0), (200.0, 150.0))] {
+        let generation = h.state().session.get(id).unwrap().edit_generation();
+        let (from, to) = (at(&h, x, y), at(&h, tx, ty));
+        // Beside the pointer, whose arrow is drawn over the page.
+        let (was, goes) = (at(&h, x - 10.0, y - 10.0), at(&h, tx - 10.0, ty - 10.0));
+        let px = |pixels: &image::RgbaImage, p: Pos2| pixels.get_pixel(p.x.round() as u32, p.y.round() as u32).0;
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.hover_at(from + (to - from) * (k as f32 / 4.0));
+            h.run_steps(1);
+        }
+        let mut shown = false;
+        for _ in 0..100 {
+            h.run_steps(2);
+            let pixels = h.render().unwrap();
+            if red(px(&pixels, goes)) {
+                shown = true;
+                assert!(red(px(&pixels, was)), "the page still shows it where it was");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(shown, "the comment at ({x}, {y}) is drawn under the pointer before release");
+        assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
+        h.drop_at(to);
+        h.run_steps(3);
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Move comment"));
+        crate::support::settle(&mut h);
+        let pixels = h.render().unwrap();
+        assert!(!red(px(&pixels, was)), "once applied it is gone from where it was");
+        assert!(red(px(&pixels, goes)), "and shown where it went");
+    }
+}
+
+/// Fill & Sign's typed text (a Typewriter FreeText) is drawn where it goes while it is dragged
+/// too, not only its frame (#4619).
+#[test]
+fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|_| {});
+    h.state_mut().execute("sign.fill.text");
+    click_pt(&mut h, (40.0, 150.0));
+    h.event(egui::Event::Text("WWWWWW".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
+    assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    let (x, y) = ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+    let (dx, dy) = (120.0, -60.0);
+    let (from, to) = (at(&h, x, y), at(&h, x + dx, y + dy));
+    // Ink in the left of the box where it goes, inside its frame and away from the pointer, which
+    // is drawn over the page.
+    let goes = egui::Rect::from_two_pos(at(&h, a.rect[0] + dx, a.rect[1] + dy), at(&h, a.rect[2] + dx, a.rect[3] + dy)).shrink(3.0);
+    let inked = |pixels: &image::RgbaImage| {
+        (goes.left() as u32..(to.x - 12.0) as u32)
+            .any(|px| (goes.top() as u32..goes.bottom() as u32).any(|py| pixels.get_pixel(px, py).0[..3].iter().all(|c| *c < 100)))
+    };
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    let mut shown = false;
+    for _ in 0..100 {
+        h.run_steps(2);
+        if inked(&h.render().unwrap()) {
+            shown = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shown, "the typed text is drawn under the pointer before release");
+    h.drop_at(to);
+    h.run_steps(3);
+}
+
+/// A comment kept upright on a turned page (NoRotate on a /Rotate 90 page) is drawn where it goes
+/// while it is dragged too: its layer is cut from the box it is drawn in, not from its /Rect.
+#[test]
+fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let pdf = String::from_utf8_lossy(TEXT_FIXTURE)
+        .replace("/Contents 5 0 R /Resources", "/Contents 5 0 R /Rotate 90 /Annots [8 0 R] /Resources")
+        .replace(
+            "trailer",
+            "8 0 obj << /Type /Annot /Subtype /Square /Rect [40 60 160 90] /F 20 /C [1 0 0] /IC [1 0 0] /BS << /W 2 >> >> endobj\ntrailer",
+        )
+        .into_bytes();
+    let mut h = harness_with_bytes(pdf, |_| {});
+    crate::support::settle(&mut h);
+    let id = h.state().views[0].id;
+    let drawn = {
+        let app = h.state();
+        let v = &app.views[0];
+        let info = &app.session.get(v.id).unwrap().info;
+        let a = info.annotations.iter().find(|a| a.subtype == "Square").expect("the square");
+        assert!(a.no_rotate, "kept upright");
+        let page = &info.pages[0];
+        let xf =
+            pdfcraft_ui_egui::canvas::PageXform { rect: v.page_screen_rect(0).expect("on screen"), rot: v.rotation, pw: page.width, ph: page.height };
+        xf.user_rect(info, 0, a.shown_rect(page.rotation))
+    };
+    let red = |v: [u8; 4]| v[0] > 200 && v[1] < 80 && v[2] < 80;
+    let px = |pixels: &image::RgbaImage, p: Pos2| pixels.get_pixel(p.x.round() as u32, p.y.round() as u32).0;
+    // Beside the pointer, which is drawn over the page.
+    let (from, delta) = (drawn.center(), egui::vec2(160.0, 120.0));
+    let was = pos2(drawn.left() + 6.0, drawn.center().y);
+    let goes = was + delta;
+    assert!(red(px(&h.render().unwrap(), was)), "drawn in its upright box");
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + delta * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    let mut shown = false;
+    for _ in 0..100 {
+        h.run_steps(2);
+        let pixels = h.render().unwrap();
+        if red(px(&pixels, goes)) {
+            shown = true;
+            assert!(red(px(&pixels, was)), "the page still shows it where it was");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shown, "the upright comment is drawn under the pointer before release");
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
+    h.drop_at(from + delta);
+    h.run_steps(3);
+}

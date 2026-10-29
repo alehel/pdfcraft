@@ -2226,6 +2226,35 @@ fn nested_replies_stay_in_the_listing() {
     assert!(replies.contains(&"DIRECT_REPLY") && replies.contains(&"NESTED_REPLY"), "the nested reply is listed: {replies:?}");
 }
 
+/// comment_delete on a reply deletes that reply and the replies to it, as the Comments panel's
+/// reply menu does: the comment and its other replies stay, and one undo brings it back.
+#[test]
+fn deleting_a_reply_keeps_its_comment_and_the_other_replies() {
+    let dir = workdir("delete-reply");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let root = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [40, 40], "contents": "ROOT_NOTE", "author": "A" }));
+    let root_id = root["comment"]["id"].as_str().unwrap().to_string();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": root_id, "text": "WRONG_REPLY", "author": "B" }));
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": root_id, "text": "RIGHT_REPLY", "author": "C" }));
+    let replies = |a: &mut Automation| -> Vec<Value> {
+        let list = ok(a, "comment_list", json!({ "doc": doc }));
+        assert_eq!(list["count"], 1, "{list}");
+        list["comments"][0]["replies"].as_array().unwrap().clone()
+    };
+    let wrong = replies(&mut a).into_iter().find(|r| r["contents"] == "WRONG_REPLY").unwrap();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": wrong["id"], "text": "ANSWER_TO_WRONG", "author": "D" }));
+    let texts = |a: &mut Automation| -> Vec<String> { replies(a).iter().filter_map(|r| r["contents"].as_str().map(str::to_owned)).collect() };
+    assert_eq!(texts(&mut a), ["WRONG_REPLY", "RIGHT_REPLY", "ANSWER_TO_WRONG"]);
+
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "page": wrong["page"], "index": wrong["index"] }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["comments"][0]["contents"], "ROOT_NOTE", "{list}");
+    assert_eq!(texts(&mut a), ["RIGHT_REPLY"], "the reply took the answer to it along");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Delete comment");
+    assert_eq!(texts(&mut a), ["WRONG_REPLY", "RIGHT_REPLY", "ANSWER_TO_WRONG"]);
+}
+
 /// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every
 /// page `fitz-A0`. A shared id is refused rather than taken to mean page 1's comment.
 #[test]

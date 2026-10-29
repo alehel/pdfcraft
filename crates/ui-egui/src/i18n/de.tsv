@@ -2558,3 +2558,6 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Optionen für diese Antwort

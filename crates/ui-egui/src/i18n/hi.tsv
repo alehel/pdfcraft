@@ -2794,3 +2794,6 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	इस जवाब के विकल्प

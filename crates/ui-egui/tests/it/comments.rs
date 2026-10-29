@@ -4,7 +4,7 @@
 use egui::accesskit::Role;
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::Annotation;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
@@ -1325,6 +1325,170 @@ fn replies_follow_irt_references_when_names_repeat_on_every_page() {
     // the replies in small text under it.
     assert_eq!(h.query_all_by_label("4").count(), 0);
     h.get_by_label("2 replies");
+}
+
+// Contributor-original PDF: a comment whose wrong reply (with a pop-up) comes before it in
+// `/Annots` and has an answer of its own, a locked right reply and an Accepted status. `/F 128`
+// is the Locked flag.
+const REPLY_THREAD: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 9 0 R 4 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (note) /T (Ben) /Contents (The comment) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (wrong) /IRT 4 0 R /T (Cat) /Contents (Wrong reply) /Popup 9 0 R >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (right) /IRT 4 0 R /T (Dan) /Contents (Right reply) /F 128 >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (answer) /IRT 5 0 R /T (Eve) /Contents (Answer to the wrong reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /IRT 4 0 R /StateModel /Review /State /Accepted /T (Ben) /Contents (Accepted set by Ben) >> endobj
+9 0 obj << /Type /Annot /Subtype /Popup /Rect [60 100 160 160] /Parent 5 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// The "…" of the reply row that shows `text`: the last one above it (it sits on the row's
+/// author line).
+fn reply_options<'a>(h: &'a Harness<'static, PdfCraftApp>, text: &str) -> egui_kittest::Node<'a> {
+    let y = h.get_by_label(text).rect().top();
+    h.query_all_by_label("Options for this reply")
+        .filter(|b| b.rect().top() <= y)
+        .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("a reply menu")
+}
+
+/// One reply is deleted from its own "…" menu, with the answer to it and its pop-up: the comment,
+/// its other reply and its status stay, and the card stays selected though the comment moved up
+/// in `/Annots`. One undo brings the reply back. A locked reply can't be deleted, and Edit
+/// changes the reply's text, not the comment's.
+#[test]
+fn one_reply_is_deleted_from_its_menu_and_the_thread_stays() {
+    let mut h = harness_with_bytes(REPLY_THREAD.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.selected = Some((0, 2));
+    });
+    let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
+    let all = ["Wrong reply", "The comment", "Right reply", "Answer to the wrong reply", "Accepted set by Ben"];
+    assert_eq!(texts(&h), all);
+    assert_eq!(h.query_all_by_label("Options for this reply").count(), 3, "each reply has one; the status is a badge");
+
+    reply_options(&h, "Wrong reply").click();
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Right reply", "Accepted set by Ben"], "the reply took its answer along");
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().info.annotations[0].index, 0, "its pop-up went too");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the card stays selected where the comment now is");
+    assert_eq!(h.query_all_by_label("Wrong reply").count(), 0);
+    assert_eq!(h.query_all_by_label("Answer to the wrong reply").count(), 0);
+    h.get_by_label("Right reply");
+    h.get_by_label("Accepted");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comment"), "one undo step");
+
+    // Copy text copies the reply's text.
+    reply_options(&h, "Right reply").click();
+    h.run_steps(2);
+    h.get_by_label("Copy text").click();
+    let mut copied = false;
+    for _ in 0..4 {
+        h.step();
+        copied |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Right reply"));
+    }
+    assert!(copied, "the reply's text is copied");
+    h.run_steps(2);
+
+    // The locked reply's Delete is greyed out; its text can still be edited (ISO 32000-2
+    // Table 167: Locked doesn't restrict the contents).
+    reply_options(&h, "Right reply").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Delete").accesskit_node().is_disabled(), "a locked reply isn't deleted");
+    h.query_all_by_label("Edit").last().expect("the reply menu's Edit, after the toolbar tab").click();
+    h.run_steps(2);
+    let editor = h.query_all_by(|n| n.role() == Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("reply editor");
+    editor.click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Right reply, reworded".into()));
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Right reply, reworded", "Accepted set by Ben"]);
+
+    // The locked reply keeps its comment too: deleting the comment would take it along.
+    h.get_by_label("More").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Delete").accesskit_node().is_disabled(), "the comment of a locked reply isn't deleted");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    h.state_mut().undo();
+    h.run_steps(2);
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), all, "undo brings the reply and its answer back");
+    h.get_by_label("Wrong reply");
+}
+
+// Contributor-original PDF: a comment and its replies A, B and C, in that `/Annots` order.
+const THREE_REPLIES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (note) /T (Ben) /Contents (The comment) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (a) /IRT 4 0 R /T (Cat) /Contents (Reply A) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (b) /IRT 4 0 R /T (Dan) /Contents (Reply B) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (c) /IRT 4 0 R /T (Eve) /Contents (Reply C) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// Opens the inline editor on the reply that shows `text`, from its "…" menu, and types `draft`
+/// into it without saving.
+fn draft_reply(h: &mut Harness<'static, PdfCraftApp>, text: &str, draft: &str) {
+    reply_options(h, text).click();
+    h.run_steps(2);
+    h.query_all_by_label("Edit").last().expect("the reply menu's Edit, after the toolbar tab").click();
+    h.run_steps(2);
+    let editor = h.query_all_by(|n| n.role() == Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("reply editor");
+    editor.click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(draft.into()));
+    h.run_steps(2);
+}
+
+/// A reply's inline editor, left open with a draft, closes on Undo and on Redo. Either can put
+/// a reply back in its place or take one away, and the editor would have saved the draft over
+/// whichever reply took that place: reply A after delete → Undo, reply C after Redo.
+#[test]
+fn undo_and_redo_close_a_reply_editor_left_open() {
+    let mut h = harness_with_bytes(THREE_REPLIES.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.selected = Some((0, 0));
+    });
+    let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
+    let all = ["The comment", "Reply A", "Reply B", "Reply C"];
+    assert_eq!(texts(&h), all);
+
+    draft_reply(&mut h, "Reply B", "B's draft");
+    reply_options(&h, "Reply A").click();
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Reply B", "Reply C"]);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "B's draft".to_string())), "the editor follows B up");
+
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), all, "undo puts A back where B's editor now points");
+    assert_eq!(h.state().views[0].comments.editing, None, "the editor closes on undo");
+    assert_eq!(h.query_all_by_label("Save").count(), 0, "no draft is left to save over A");
+
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    draft_reply(&mut h, "Reply B", "B's draft");
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 2, "B's draft".to_string())));
+    h.state_mut().redo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Reply B", "Reply C"], "redo deletes A again, and C takes B's place");
+    assert_eq!(h.state().views[0].comments.editing, None, "the editor closes on redo");
+    assert_eq!(h.query_all_by_label("Save").count(), 0, "no draft is left to save over C");
 }
 
 #[test]

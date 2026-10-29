@@ -2579,3 +2579,6 @@ animation effects	Off	Вимкнено
 	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Параметри цієї відповіді

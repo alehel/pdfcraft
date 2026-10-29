@@ -2544,3 +2544,6 @@ animation effects	Off	Joaktiv
 	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opsionet për këtë përgjigje

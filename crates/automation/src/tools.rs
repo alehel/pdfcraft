@@ -1181,6 +1181,9 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
                 &["doc", "script"],
             )),
+        t("js_check", "Check JavaScript syntax", "Check a script's syntax without running it, as PdfCraft's script editors do. The parser is the engine's own, so a script that passes is one js_run accepts. Returns ok and the errors found (at most one: parsing stops at the first), each with its message and, when it has a place, its line and column (1-based; columns count characters) and the byte range [start, end) of the script it covers. A script too long or too deeply nested to run is an error without a place.")
+            .ro()
+            .with(schema(json!({ "script": { "type": "string" } }), &["script"])),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")
             .ro()
             .cmd("tools.document_js")

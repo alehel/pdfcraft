@@ -5247,9 +5247,9 @@ tier = "P1"
 milestone = "M6"
 status = "shipped"
 commands = ["tools.js_console"]
-tools = ["js_run"]
-evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "\u2318J: run JavaScript against the document, with console output, results and errors."
+tools = ["js_run", "js_check"]
+evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/ui-egui/src/widgets/script/tests.rs::a_script_is_checked_on_opening_and_again_once_typing_pauses", "crates/js/src/check/tests.rs::a_missing_bracket_is_placed_on_the_token_after_it", "crates/automation/tests/it/automation.rs::checking_javascript_syntax_through_tools"]
+notes = "\u2318J: run JavaScript against the document, with console output, results and errors. The console, Document JavaScripts and the Run a JavaScript action box colour the script (keywords, strings, templates, regular expressions, comments, numbers, the Acrobat globals) and, once typing pauses, check its syntax with the engine's own parser without running it: the error is underlined and the line under the box says what and where it is (clicking it puts the caret there); js_check does the same headlessly. Only syntax: the parser stops at the first error, and there is no linting yet (unknown field names in getField, misspelt Acrobat methods, undeclared variables). Custom Format, Keystroke, Validate and Calculate scripts have no editor yet (a field's tabs offer the built-in choices; form_set_script sets a custom script)."
 
 [[feature]]
 id = "form.js-debugger"

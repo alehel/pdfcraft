@@ -34,6 +34,18 @@ impl Automation {
         Ok(json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }))
     }
 
+    /// `js_check`: the syntax errors in `script`, found without running it.
+    pub(crate) fn js_check(&self, a: &Args) -> Result<Value> {
+        let errors: Vec<Value> = pdfcraft_engine::js::check(a.str("script")?)
+            .into_iter()
+            .map(|d| match d.at {
+                Some(at) => json!({ "message": d.message, "line": at.line, "column": at.column, "bytes": [at.bytes.start, at.bytes.end] }),
+                None => json!({ "message": d.message }),
+            })
+            .collect();
+        Ok(json!({ "ok": errors.is_empty(), "errors": errors }))
+    }
+
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {
         let list: Vec<Value> = self.doc(a)?.document_scripts().into_iter().map(|(n, s)| json!({ "name": n, "script": s })).collect();
         Ok(json!({ "scripts": list }))

@@ -7,7 +7,7 @@ use pdfcraft_render::{DocInfo, PageText};
 use super::{DocView, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, click_unit, signature_badges};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
-use crate::page_router::{Owner, top};
+use crate::page_router::{Owner, PagePress, top};
 use crate::{QuickTool, comments, icons};
 
 /// What the page's tools did with the pointer this frame.
@@ -98,6 +98,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let at = hits.at(view, o);
         view.router.press(i, at, tool);
     }
+    // What this page has to do with the press: its owner's, the active tool's, or another page's.
+    let press = view.router.press_for(i);
     let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, view, p));
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, resp, doc, view, &pcx, measure_tool, units);
@@ -111,7 +113,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         // The tool's own click: nothing drawn over the page here holds the press.
-        if resp.clicked() && view.router.owner(i).is_none() {
+        if resp.clicked() && press == PagePress::Free {
             // Centred on the click, upright as the page is shown.
             let (vx, vy) = xf.screen_to_view(p);
             let (w, h) = kind.size();
@@ -136,7 +138,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         // The tool's own click: nothing drawn over the page here holds the press.
-        if resp.clicked() && view.router.owner(i).is_none() {
+        if resp.clicked() && press == PagePress::Free {
             // Centred on the click at its natural size (the engine sizes it).
             let (vx, vy) = xf.screen_to_view(p);
             let u = info.pages[i].view_to_user(vx, vy);
@@ -264,8 +266,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view, &mut frame.out.image_action);
         !others_own_pointer && (text_used || image_used)
     };
-    let link_owner = match view.router.owner(i) {
-        Some(Owner::Link { index }) => Some(index),
+    let link_owner = match press {
+        PagePress::Mine(Owner::Link { index }) => Some(index),
         _ => None,
     };
     let link_context = match context {

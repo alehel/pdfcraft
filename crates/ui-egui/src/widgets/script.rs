@@ -54,7 +54,7 @@ fn editor_and_status(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: u
     let mut check: Check =
         ui.data(|d| d.get_temp(check_id)).unwrap_or_else(|| Check { seen: hash(text), edited_at: now - CHECK_AFTER, checked: None });
     let mut colours: Colours = ui.data(|d| d.get_temp(colours_id)).unwrap_or_else(|| Colours { hash: hash(""), tokens: Arc::default() });
-    let palette = Palette::for_kind(Tokens::get(ui.ctx()).kind, ui.visuals().error_fg_color);
+    let palette = Palette::for_kind(Tokens::get(ui.ctx()).kind);
     let checked = check.checked.clone();
     let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
         let source = buffer.as_str();
@@ -187,8 +187,9 @@ struct Palette {
 }
 
 impl Palette {
-    /// Each colour keeps at least 4.5:1 contrast on the theme's field background.
-    fn for_kind(kind: ThemeKind, error: Color32) -> Self {
+    /// Each colour keeps at least 4.5:1 contrast on the theme's field background, and the error's
+    /// on the dialog card the status line sits on as well (egui's own error red does not, on either).
+    fn for_kind(kind: ThemeKind) -> Self {
         let t = Tokens::for_kind(kind);
         match kind {
             ThemeKind::Light => Self {
@@ -199,7 +200,7 @@ impl Palette {
                 regex: Color32::from_rgb(0xA8, 0x51, 0x00),
                 comment: Color32::from_rgb(0x6B, 0x70, 0x7A),
                 api: Color32::from_rgb(0x1F, 0x5F, 0xBF),
-                error,
+                error: Color32::from_rgb(0xC6, 0x28, 0x28),
             },
             ThemeKind::Dark => Self {
                 text: t.text,
@@ -209,7 +210,7 @@ impl Palette {
                 regex: Color32::from_rgb(0xF0, 0xA3, 0x5C),
                 comment: Color32::from_rgb(0x9A, 0xA1, 0xAD),
                 api: Color32::from_rgb(0x82, 0xAA, 0xFF),
-                error,
+                error: Color32::from_rgb(0xFF, 0x7B, 0x72),
             },
         }
     }

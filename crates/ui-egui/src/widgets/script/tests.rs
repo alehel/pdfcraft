@@ -73,7 +73,7 @@ fn an_empty_box_says_nothing() {
 }
 
 fn palette() -> Palette {
-    Palette::for_kind(ThemeKind::Light, Color32::RED)
+    Palette::for_kind(ThemeKind::Light)
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn problems_without_a_place_say_so() {
 }
 
 #[test]
-fn every_colour_reads_on_the_field_background() {
+fn every_colour_reads_on_its_background() {
     // WCAG relative luminance contrast.
     fn luminance(c: Color32) -> f64 {
         let channel = |v: u8| {
@@ -126,12 +126,16 @@ fn every_colour_reads_on_the_field_background() {
         0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
     }
     for kind in [ThemeKind::Light, ThemeKind::Dark] {
-        let field = Tokens::for_kind(kind).field;
-        let p = Palette::for_kind(kind, Color32::RED);
-        for (name, c) in
-            [("keyword", p.keyword), ("literal", p.literal), ("string", p.string), ("regex", p.regex), ("comment", p.comment), ("api", p.api)]
-        {
-            let (a, b) = (luminance(c), luminance(field));
+        let tokens = Tokens::for_kind(kind);
+        let (field, card) = (tokens.field, tokens.card);
+        let p = Palette::for_kind(kind);
+        let on_field =
+            [("keyword", p.keyword), ("literal", p.literal), ("string", p.string), ("regex", p.regex), ("comment", p.comment), ("api", p.api)];
+        // The error is underlined in the box and written in the status line on the dialog card.
+        let checks =
+            on_field.map(|(name, c)| (name, c, field)).into_iter().chain([("error in the box", p.error, field), ("error message", p.error, card)]);
+        for (name, c, background) in checks {
+            let (a, b) = (luminance(c), luminance(background));
             let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
             assert!(ratio >= 4.5, "{kind:?} {name}: {ratio:.2}:1");
         }

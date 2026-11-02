@@ -7354,6 +7354,22 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
 /// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
 /// lines, every message with its details, and requests.
 #[test]
+fn checking_javascript_syntax_through_tools() {
+    let dir = workdir("js-check");
+    let mut a = auto(&dir);
+    let r = ok(&mut a, "js_check", json!({ "script": "event.value = getField('a').value * 2;" }));
+    assert_eq!(r, json!({ "ok": true, "errors": [] }));
+    // Without a document, and the place is in characters: "é" is two bytes but one column.
+    let r = ok(&mut a, "js_check", json!({ "script": "var é = 1;\nif (é { }" }));
+    assert_eq!(r["ok"], false);
+    assert_eq!((&r["errors"][0]["line"], &r["errors"][0]["column"], &r["errors"][0]["bytes"]), (&json!(2), &json!(7), &json!([19, 20])), "{r}");
+    let deep = format!("x = {}1{};", "[".repeat(500), "]".repeat(500));
+    let r = ok(&mut a, "js_check", json!({ "script": deep }));
+    assert_eq!(r["ok"], false);
+    assert!(r["errors"][0].get("line").is_none(), "no place for a script too deep to parse: {r}");
+}
+
+#[test]
 fn javascript_through_tools() {
     let dir = workdir("js");
     let mut a = auto(&dir);

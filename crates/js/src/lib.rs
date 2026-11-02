@@ -20,6 +20,9 @@
 //! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
 //! in an [`Outcome`] for the caller to apply.
+//!
+//! Script editors use [`highlight`] to colour a script and [`check`] to report its syntax errors
+//! with their place, both without running it.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -34,6 +37,7 @@ use boa_engine::property::Attribute;
 use boa_engine::realm::Realm;
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
+mod check;
 mod document;
 mod format;
 mod globals;
@@ -41,6 +45,7 @@ mod host;
 mod model;
 mod run;
 
+pub use check::{Diagnostic, Location, Token, TokenKind, check, highlight};
 #[cfg(test)]
 pub(crate) use format::PRINTD_SCANNED;
 use format::{printd, printf, printx, scand};

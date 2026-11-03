@@ -221,6 +221,76 @@ fn format_validate_and_calculate_tabs() {
     assert_eq!(f.actions.calculate, Calculate::Notation("name".into()));
 }
 
+/// The Format, Validate and Calculate tabs edit custom scripts: chosen with their radio button or
+/// category, written in one undo step, shown as Custom (not as "not calculated") when the dialog
+/// opens again, and removed by choosing another option.
+#[test]
+fn custom_format_validate_and_calculate_scripts() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let open = |h: &mut Harness<'static, PdfCraftApp>, tab: &str| {
+        h.state_mut().open_field_props("city", 0);
+        h.run_steps(2);
+        h.get_by_label(tab).click();
+        h.run_steps(2);
+    };
+    let city = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().actions.clone()
+    };
+    open(&mut h, "Calculate");
+    h.get_by_label("Custom calculation script:").click();
+    h.run_steps(2);
+    let calc = "event.value = this.getField(\"name\").value.length;";
+    h.state_mut().field_props.as_mut().unwrap().custom_calculate = Some(calc.into());
+    // The dialog grows with the script editor and re-centres over a few frames.
+    h.run_steps(6);
+    h.get_by_label("Validate").click();
+    h.run_steps(2);
+    h.get_by_label("Run custom validation script:").click();
+    h.run_steps(2);
+    let validate = "event.rc = event.value.length < 40;";
+    let format = ("event.value = event.value.toUpperCase();", "event.rc = !/[0-9]/.test(event.change);");
+    {
+        let d = h.state_mut().field_props.as_mut().unwrap();
+        d.custom_validate = Some(validate.into());
+        d.custom_format = Some((format.0.into(), format.1.into()));
+    }
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let a = city(&h);
+    assert_eq!(a.calculate, Calculate::None);
+    assert_eq!(
+        (a.scripts.calculate.as_deref(), a.scripts.validate.as_deref(), a.scripts.format.as_deref(), a.scripts.keystroke.as_deref()),
+        (Some(calc), Some(validate), Some(format.0), Some(format.1))
+    );
+    let doc = h.state().views[0].id;
+    assert_eq!(h.state().session.get(doc).unwrap().calculation_order().fixed(), ["city"], "the custom calculation is in the order");
+
+    // Opened again, each tab shows its script as Custom, with the script in the editor.
+    open(&mut h, "Calculate");
+    assert_eq!(h.state().field_props.as_ref().unwrap().custom_calculate.as_deref(), Some(calc));
+    h.get_by_label_contains("No problems found");
+    h.get_by_label("Format").click();
+    h.run_steps(2);
+    h.get_by_label("Custom keystroke script:");
+    // "Value is not calculated" removes the calculation script and keeps the others.
+    h.get_by_label("Calculate").click();
+    h.run_steps(2);
+    h.get_by_label("Value is not calculated").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let a = city(&h);
+    assert_eq!((a.scripts.calculate, a.scripts.validate.as_deref()), (None, Some(validate)));
+    // The two OKs are two undo steps: one undo brings the calculation back.
+    h.state_mut().session.undo(doc).unwrap();
+    assert_eq!(city(&h).scripts.calculate.as_deref(), Some(calc));
+}
+
 /// Renaming a field in Field Properties renames it in the formulas that read it, in the same undo
 /// step, and says how many changed.
 #[test]

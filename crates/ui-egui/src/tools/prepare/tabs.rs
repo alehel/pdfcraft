@@ -10,6 +10,8 @@ enum Category {
     Date,
     Time,
     Special,
+    /// Custom format and keystroke scripts.
+    Custom,
 }
 
 fn category(f: &Format) -> Category {
@@ -29,9 +31,10 @@ const NEGATIVES: [&str; 4] = ["-1,234.01", "1,234.01 (red)", "(1,234.01)", "(1,2
 
 const SPECIALS: [&str; 5] = ["Zip Code", "Zip Code + 4", "Phone Number", "Social Security Number", "Arbitrary Mask"];
 
-/// Draw the field-format editor for the selected category and its options.
-pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
-    let cat = category(&d.format);
+/// Draw the field-format editor for the selected category and its options. `env` is what a
+/// custom script runs with.
+pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens, env: &crate::widgets::ScriptEnv) {
+    let cat = if d.custom_format.is_some() { Category::Custom } else { category(&d.format) };
     let mut picked = cat;
     ui.horizontal(|ui| {
         ui.label(tl!("Select format category:"));
@@ -43,6 +46,7 @@ pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme
                 Category::Date => "Date",
                 Category::Time => "Time",
                 Category::Special => "Special",
+                Category::Custom => "Custom",
             }))
             .show_ui(ui, |ui| {
                 for (c, l) in [
@@ -52,14 +56,18 @@ pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme
                     (Category::Date, tl!("Date")),
                     (Category::Time, tl!("Time")),
                     (Category::Special, tl!("Special")),
+                    (Category::Custom, tl!("Custom")),
                 ] {
                     ui.selectable_value(&mut picked, c, l);
                 }
             });
     });
     if picked != cat {
+        // Custom brings back the field's own scripts, if it had some; a built-in format replaces them.
+        d.custom_format =
+            (picked == Category::Custom).then(|| d.original.as_ref().as_ref().and_then(|o| o.custom_format.clone()).unwrap_or_default());
         d.format = match picked {
-            Category::None => Format::None,
+            Category::None | Category::Custom => Format::None,
             Category::Number => Format::Number { decimals: 2, sep: 0, neg: 0, currency: String::new(), prepend: true },
             Category::Percent => Format::Percent { decimals: 2, sep: 0 },
             Category::Date => Format::Date("mm/dd/yyyy".into()),
@@ -68,6 +76,14 @@ pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme
         };
     }
     ui.add_space(8.0);
+    if let Some((format, keystroke)) = d.custom_format.as_mut() {
+        ui.label(tl!("Custom format script:"));
+        crate::widgets::script_editor(ui, format, "custom-format", 5, f32::INFINITY, Some("event.value = …"), env);
+        ui.add_space(6.0);
+        ui.label(tl!("Custom keystroke script:"));
+        crate::widgets::script_editor(ui, keystroke, "custom-keystroke", 5, f32::INFINITY, Some("event.rc = …"), env);
+        return;
+    }
     let sample = match &d.format {
         Format::Number { .. } | Format::Percent { .. } => "-1234.5",
         Format::Date(_) => "10/1/2026",
@@ -184,19 +200,25 @@ pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme
     }
 }
 
-pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
-    let mut ranged = matches!(d.validate, Validate::Range { .. });
-    widgets::radio_value(ui, &mut ranged, false, tl!("Field value is not validated"));
-    widgets::radio_value(ui, &mut ranged, true, tl!("Field value is in range:"));
-    if !ranged {
-        d.validate = Validate::None;
-        return;
+/// `env` is what a custom script runs with.
+pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, env: &crate::widgets::ScriptEnv) {
+    #[derive(PartialEq, Clone, Copy)]
+    enum Mode {
+        None,
+        Range,
+        Custom,
     }
-    if d.validate == Validate::None {
-        d.validate = Validate::Range { min: Some(0.0), max: Some(100.0) };
-    }
-    if let Validate::Range { min, max } = &mut d.validate {
+    let mode = match (&d.custom_validate, &d.validate) {
+        (Some(_), _) => Mode::Custom,
+        (None, Validate::Range { .. }) => Mode::Range,
+        (None, Validate::None) => Mode::None,
+    };
+    let mut m = mode;
+    widgets::radio_value(ui, &mut m, Mode::None, tl!("Field value is not validated"));
+    widgets::radio_value(ui, &mut m, Mode::Range, tl!("Field value is in range:"));
+    if let (Mode::Range, Validate::Range { min, max }) = (mode, &mut d.validate) {
         ui.horizontal(|ui| {
+            ui.add_space(24.0);
             let mut has = min.is_some();
             ui.add(widgets::checkbox(&mut has, tl!("From:")));
             let mut v = min.unwrap_or(0.0);
@@ -208,6 +230,18 @@ pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
             ui.add_enabled(has, egui::DragValue::new(&mut v).speed(1.0));
             *max = has.then_some(v);
         });
+    }
+    widgets::radio_value(ui, &mut m, Mode::Custom, tl!("Run custom validation script:"));
+    if let Some(script) = d.custom_validate.as_mut() {
+        crate::widgets::script_editor(ui, script, "custom-validate", 8, f32::INFINITY, Some("event.rc = event.value > 0;"), env);
+    }
+    if m != mode {
+        // Custom brings back the field's own script, if it had one; another choice replaces it.
+        d.custom_validate = (m == Mode::Custom).then(|| d.original.as_ref().as_ref().and_then(|o| o.custom_validate.clone()).unwrap_or_default());
+        d.validate = match m {
+            Mode::Range => Validate::Range { min: Some(0.0), max: Some(100.0) },
+            Mode::None | Mode::Custom => Validate::None,
+        };
     }
 }
 
@@ -330,29 +364,25 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
     });
 }
 
-pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
+/// `env` is what a custom script runs with.
+pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens, env: &crate::widgets::ScriptEnv) {
     #[derive(PartialEq, Clone, Copy)]
     enum Mode {
         None,
         Simple,
         Notation,
+        Custom,
     }
-    let mode = match d.calculate {
-        Calculate::None => Mode::None,
-        Calculate::Simple { .. } => Mode::Simple,
-        Calculate::Notation(_) => Mode::Notation,
+    let mode = match (&d.custom_calculate, &d.calculate) {
+        (Some(_), _) => Mode::Custom,
+        (None, Calculate::None) => Mode::None,
+        (None, Calculate::Simple { .. }) => Mode::Simple,
+        (None, Calculate::Notation(_)) => Mode::Notation,
     };
     let mut m = mode;
     widgets::radio_value(ui, &mut m, Mode::None, tl!("Value is not calculated"));
     widgets::radio_value(ui, &mut m, Mode::Simple, tl!("Value is the"));
-    if m != mode {
-        d.calculate = match m {
-            Mode::None => Calculate::None,
-            Mode::Simple => Calculate::Simple { op: CalcOp::Sum, fields: Vec::new() },
-            Mode::Notation => Calculate::Notation(String::new()),
-        };
-    }
-    if let Calculate::Simple { op, fields } = &mut d.calculate {
+    if let (Mode::Simple, Calculate::Simple { op, fields }) = (mode, &mut d.calculate) {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
             craft_ui::ComboBox::from_id_salt("calc-op").selected_text(tl!(op.label())).show_ui(ui, |ui| {
@@ -375,17 +405,32 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
             }
         });
     }
-    let mut m2 = match d.calculate {
-        Calculate::Notation(_) => Mode::Notation,
-        _ => m,
-    };
-    if widgets::radio_value(ui, &mut m2, Mode::Notation, tl!("Simplified field notation:")).clicked()
-        && !matches!(d.calculate, Calculate::Notation(_))
-    {
-        d.calculate = Calculate::Notation(String::new());
-    }
-    if let Calculate::Notation(expr) = &mut d.calculate {
-        ui.add(crate::widgets::block(expr).hint_text("Price * Quantity").desired_rows(2).desired_width(420.0));
+    widgets::radio_value(ui, &mut m, Mode::Notation, tl!("Simplified field notation:"));
+    if let (Mode::Notation, Calculate::Notation(expr)) = (mode, &mut d.calculate) {
+        ui.add(crate::widgets::block(expr).hint_text("Price * Quantity").desired_rows(2).desired_width(f32::INFINITY));
         ui.label(egui::RichText::new(tl!("Field names with + - * / and parentheses; put \\ before spaces in names.")).small().color(t.text_faint));
+    }
+    widgets::radio_value(ui, &mut m, Mode::Custom, tl!("Custom calculation script:"));
+    if let Some(script) = d.custom_calculate.as_mut() {
+        crate::widgets::script_editor(ui, script, "custom-calculate", 8, f32::INFINITY, Some("event.value = …"), env);
+    }
+    if m != mode {
+        // Custom brings back the field's own script, if it had one, and leaves the built-in
+        // calculation as it was: the script replaces it in the calculation order's place.
+        let original = d.original.as_ref().as_ref();
+        d.custom_calculate = (m == Mode::Custom).then(|| original.and_then(|o| o.custom_calculate.clone()).unwrap_or_default());
+        let kept = |want: Mode| {
+            original.map(|o| o.calculate.clone()).filter(|c| match want {
+                Mode::Simple => matches!(c, Calculate::Simple { .. }),
+                Mode::Notation => matches!(c, Calculate::Notation(_)),
+                _ => false,
+            })
+        };
+        match m {
+            Mode::None => d.calculate = Calculate::None,
+            Mode::Simple => d.calculate = kept(Mode::Simple).unwrap_or(Calculate::Simple { op: CalcOp::Sum, fields: Vec::new() }),
+            Mode::Notation => d.calculate = kept(Mode::Notation).unwrap_or(Calculate::Notation(String::new())),
+            Mode::Custom => {}
+        }
     }
 }

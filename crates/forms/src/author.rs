@@ -74,6 +74,32 @@ impl NewField {
     }
 }
 
+/// A custom script of a text field or drop-down list: what the Format, Validate and Calculate
+/// tabs run when "custom" is chosen instead of a built-in format, range or calculation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldScript {
+    /// Shows the value (`/AA /F`).
+    Format,
+    /// Checks each keystroke (`/AA /K`).
+    Keystroke,
+    /// Checks a committed value (`/AA /V`).
+    Validate,
+    /// Computes the value (`/AA /C`).
+    Calculate,
+}
+
+impl FieldScript {
+    /// The event's name, as [`crate::set_field_script`] takes it.
+    pub fn event(self) -> &'static str {
+        match self {
+            FieldScript::Format => "format",
+            FieldScript::Keystroke => "keystroke",
+            FieldScript::Validate => "validate",
+            FieldScript::Calculate => "calculate",
+        }
+    }
+}
+
 /// Field properties the Properties dialog edits (`None` leaves a value unchanged).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldProps {
@@ -105,6 +131,10 @@ pub struct FieldProps {
     pub format: Option<crate::af::Format>,
     pub validate: Option<crate::af::Validate>,
     pub calculate: Option<crate::af::Calculate>,
+    /// Custom scripts (text fields and drop-down lists): each event's new JavaScript, or `None` to
+    /// remove it. Written after `format`, `validate` and `calculate`, so a script replaces the
+    /// built-in choice for its event.
+    pub scripts: Vec<(FieldScript, Option<String>)>,
     /// Options-tab flags (`/Ff` bits from [`crate::flags`]) to set or clear.
     pub flags: Vec<(u32, bool)>,
     /// Alignment (`/Q`): 0 left, 1 centre, 2 right.

@@ -1,4 +1,4 @@
-use super::{Calculate, FieldLook, FieldProps, FormField, FormFieldKind, Format, Validate};
+use super::{Calculate, FieldLook, FieldProps, FieldScript, FormField, FormFieldKind, Format, Validate};
 
 // ───────────────────────────────────────────────────────────────────────── Field Properties
 
@@ -141,6 +141,12 @@ pub struct FieldDraft {
     pub format: Format,
     pub validate: Validate,
     pub calculate: Calculate,
+    /// Format tab: the custom format and keystroke scripts, when "Custom" is chosen.
+    pub custom_format: Option<(String, String)>,
+    /// Validate tab: the custom validation script, when it is chosen.
+    pub custom_validate: Option<String>,
+    /// Calculate tab: the custom calculation script, when it is chosen.
+    pub custom_calculate: Option<String>,
     /// Every other field's name (the Calculate tab picks from them).
     pub others: Vec<String>,
     /// Actions tab: each trigger's action, and the one being added.
@@ -211,6 +217,12 @@ impl FieldDraft {
             format: f.actions.format.clone(),
             validate: f.actions.validate.clone(),
             calculate: f.actions.calculate.clone(),
+            // A script that is not one of the built-in choices shows as "Custom", so it is seen
+            // and can be edited rather than shown as "not calculated".
+            custom_format: (f.actions.scripts.format.is_some() || f.actions.scripts.keystroke.is_some())
+                .then(|| (f.actions.scripts.format.clone().unwrap_or_default(), f.actions.scripts.keystroke.clone().unwrap_or_default())),
+            custom_validate: f.actions.scripts.validate.clone(),
+            custom_calculate: f.actions.scripts.calculate.clone(),
             others: Vec::new(),
             actions: Vec::new(),
             new_action: ActionDraft::default(),
@@ -272,6 +284,7 @@ impl FieldDraft {
             format: (self.format != o.format).then(|| self.format.clone()),
             validate: (self.validate != o.validate).then(|| self.validate.clone()),
             calculate: (self.calculate != o.calculate).then(|| self.calculate.clone()),
+            scripts: self.script_changes(o),
             flags: OPTION_FLAGS.iter().filter(|b| (self.flags ^ o.flags) & **b != 0).map(|b| (*b, self.flags & b != 0)).collect(),
             quadding: (self.quadding != o.quadding).then_some(self.quadding),
             locked: ch(self.locked, o.locked),
@@ -279,6 +292,31 @@ impl FieldDraft {
             default_value: (self.default != o.default).then(|| (!self.default.is_empty()).then(|| self.default.clone())),
         };
         (p != FieldProps::default()).then_some(p)
+    }
+}
+
+impl FieldDraft {
+    /// The custom scripts that changed. A script that is now chosen and differs is written; one
+    /// no longer chosen is removed unless a built-in choice replaces it (that is written in its
+    /// place). An empty script counts as none.
+    fn script_changes(&self, o: &FieldDraft) -> Vec<(FieldScript, Option<String>)> {
+        let mut out = Vec::new();
+        let mut one = |script: FieldScript, now: Option<&String>, was: Option<&String>, built_in_changed: bool| {
+            let now = now.filter(|s| !s.trim().is_empty());
+            let was = was.filter(|s| !s.trim().is_empty());
+            match (now, was) {
+                (Some(n), w) if Some(n) != w => out.push((script, Some(n.clone()))),
+                (None, Some(_)) if !built_in_changed => out.push((script, None)),
+                _ => {}
+            }
+        };
+        let (format, keystroke) = (self.custom_format.as_ref().map(|f| &f.0), self.custom_format.as_ref().map(|f| &f.1));
+        let (was_format, was_keystroke) = (o.custom_format.as_ref().map(|f| &f.0), o.custom_format.as_ref().map(|f| &f.1));
+        one(FieldScript::Format, format, was_format, self.format != o.format);
+        one(FieldScript::Keystroke, keystroke, was_keystroke, self.format != o.format);
+        one(FieldScript::Validate, self.custom_validate.as_ref(), o.custom_validate.as_ref(), self.validate != o.validate);
+        one(FieldScript::Calculate, self.custom_calculate.as_ref(), o.custom_calculate.as_ref(), self.calculate != o.calculate);
+        out
     }
 }
 

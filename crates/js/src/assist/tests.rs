@@ -128,11 +128,68 @@ fn document_scripts_share_their_declarations() {
 #[test]
 fn suggestions_are_near_misses_only() {
     use super::lint::suggest;
-    assert_eq!(suggest("alret", ["alert", "beep"]), Some("alert"));
-    assert_eq!(suggest("TOTAL", ["Total", "Totals"]), Some("Total"));
-    assert_eq!(suggest("x", ["alert"]), None);
-    assert_eq!(suggest("borderStyle", ["display", "value"]), None);
-    assert_eq!(suggest("", ["a"]), None);
+    let near = |name: &str, candidates: &[&'static str]| suggest(name, candidates.iter().copied(), &mut { usize::MAX });
+    assert_eq!(near("alret", &["alert", "beep"]), Some("alert"));
+    assert_eq!(near("TOTAL", &["Total", "Totals"]), Some("Total"));
+    assert_eq!(near("x", &["alert"]), None);
+    assert_eq!(near("borderStyle", &["display", "value"]), None);
+    assert_eq!(near("", &["a"]), None);
+    // Each comparison is paid for: with too little left, none is made.
+    let mut budget = 10;
+    assert_eq!(suggest("alret", ["alert"], &mut budget), None);
+    let mut budget = 100;
+    assert_eq!(suggest("alret", ["alert"], &mut budget), Some("alert"));
+    assert_eq!(budget, 100 - 36, "six by six steps");
+}
+
+#[test]
+fn event_target_is_a_field_in_brackets_too_and_only_on_event() {
+    let found = warnings("(event).target.valeu = 1;\n((event)).target.fillColour = 1;");
+    let at: Vec<&str> = found.iter().map(|(at, _)| at.as_str()).collect();
+    assert_eq!(at, ["valeu", "fillColour"], "{found:?}");
+    // A field has no `target` of its own, and nothing is known about what one would hold.
+    let found = warnings("event.target.target.anything;");
+    let at: Vec<&str> = found.iter().map(|(at, _)| at.as_str()).collect();
+    assert_eq!(at, ["target"], "{found:?}");
+}
+
+#[test]
+fn thousands_of_unknown_field_names_are_linted_in_a_moment() {
+    // Long field names, all the same length, and a script naming thousands the form lacks: every
+    // one compared with every field would take minutes.
+    let fields: Vec<String> = (0..5000).map(|i| format!("{i:0>60}")).collect();
+    let source: String = (0..3000).map(|i| format!("getField(\"{:0>59}x\");\n", i * 7)).collect();
+    let started = std::time::Instant::now();
+    let found = lint(&source, Knowledge { fields: Some(&fields), shared: &[] });
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(found.len(), 100, "the most reported");
+    assert!(found.iter().all(|d| d.message.starts_with("this form has no field named")), "{:?}", found.first());
+}
+
+#[test]
+fn a_name_bound_some_other_way_anywhere_is_not_taken_for_a_field() {
+    for source in [
+        "function a() { var f = this.getField(\"Total\"); f.value = 1; }\nfunction b(f) { return f.toFixed(2); }",
+        "var f = getField(\"Total\");\ntry { x(); } catch (f) { f.toFixed(); }",
+        "var f = getField(\"Total\");\nfor (var f of [1]) { f.toFixed(); }",
+        "function a() { var f = getField(\"Total\"); }\nfunction b() { var f = 2; f.toFixed(); }",
+    ] {
+        let found = warnings(source);
+        assert!(found.iter().all(|(_, m)| !m.contains("Field objects")), "{source}: {found:?}");
+    }
+    // Set from getField everywhere: still a Field.
+    let found = warnings("var f = getField(\"Total\");\nf.valeu = 1;");
+    assert!(found.iter().any(|(at, m)| at == "valeu" && m.contains("Field objects")), "{found:?}");
+}
+
+#[test]
+fn generators_and_async_functions_are_declared() {
+    for source in ["async function load() {}\nload = null;", "function* rows() {}\nrows = null;", "async function* feed() {}\nfeed = null;"] {
+        assert_eq!(warnings(source), Vec::<(String, String)>::new(), "{source}");
+    }
+    let mut names = declared_names("async function load() {}\nfunction* rows() {}");
+    names.sort();
+    assert_eq!(names, ["load", "rows"]);
 }
 
 fn labels(c: &Option<Completion>) -> Vec<String> {
@@ -162,6 +219,80 @@ fn field_names_are_suggested_inside_get_field() {
     assert_eq!(labels(&at("getField(\"|\")").1).len(), 6);
     assert_eq!(at("app.alert(\"to|\")").1, None);
     assert_eq!(at("getField(\"Qty\"|)").1, None);
+}
+
+#[test]
+fn a_name_chosen_in_an_unclosed_string_keeps_the_code_after_it() {
+    // Typing `"` between the brackets of `getField()` leaves a string that runs to the line end.
+    for (marked, kept) in [("x = getField(\"T|).value;", ").value;"), ("x = getField(\"T|o, 1);", ", 1);"), ("getField('|", "")] {
+        let (source, c) = at(marked);
+        let c = c.expect("suggestions");
+        let mut chosen = source.clone();
+        chosen.replace_range(c.replace.clone(), &c.items[0].insert);
+        assert!(chosen.ends_with(kept), "{marked}: {chosen}");
+        assert!(chosen.contains("getField(\"Total\"") || chosen.contains("getField('address.city'"), "{marked}: {chosen}");
+    }
+}
+
+#[test]
+fn a_quote_that_pairs_with_a_later_string_is_still_unclosed() {
+    let (source, c) = at("var s = getField(\"T|).value + \" USD\";");
+    let c = c.expect("suggestions");
+    let mut chosen = source.clone();
+    chosen.replace_range(c.replace.clone(), &c.items[0].insert);
+    assert_eq!(chosen, "var s = getField(\"Total\").value + \" USD\";");
+    // With a comma or a bracket after the later string too.
+    for (marked, expected) in [
+        ("x = getField(\"T|).value + \", \" + y;", "x = getField(\"Total\").value + \", \" + y;"),
+        ("x = getField(\"T|).value.split(\",\");", "x = getField(\"Total\").value.split(\",\");"),
+        ("event.value = getField(\"T| + \", \" + first;", "event.value = getField(\"Total\" + \", \" + first;"),
+        ("x = getField(\"q|.join(\", \");", "x = getField(\"Qty\".join(\", \");"),
+        ("event.value = \"(\" + getField(\"q| + \")\";", "event.value = \"(\" + getField(\"Qty\" + \")\";"),
+        ("getField(\"T|); // say \"hi", "getField(\"Total\"); // say \"hi"),
+    ] {
+        let (source, c) = at(marked);
+        let c = c.expect("suggestions");
+        let mut chosen = source.clone();
+        chosen.replace_range(c.replace.clone(), &c.items[0].insert);
+        assert_eq!(chosen, expected);
+    }
+    // A closed argument with more arguments or code after it stays closed, brackets in it or not.
+    let (_, c) = at("getField(\"T|\", 1)");
+    assert_eq!(c.expect("suggestions").items[0].insert, "Total");
+    let (source, c) = at("x = getField(\"T|\") + \", \" + getField(\"Qty\");");
+    let c = c.expect("suggestions");
+    assert_eq!((c.items[0].insert.as_str(), source.get(c.replace.clone())), ("Total", Some("T")), "later strings closed");
+    let fields = vec!["Total (USD)".to_string()];
+    let source = "getField(\"Total (USD)\")";
+    let c = complete(source, 14, &fields).expect("suggestions");
+    assert_eq!((c.items[0].insert.as_str(), source.get(c.replace.clone())), ("Total (USD)", Some("Total (USD)")));
+}
+
+#[test]
+fn a_chosen_name_is_escaped_for_the_string_it_goes_in() {
+    let fields = vec!["Owner's Name".to_string(), "a\\b".to_string()];
+    let source = "getField('Own";
+    let c = complete(source, source.len(), &fields).expect("suggestions");
+    assert_eq!(c.items[0].insert, "Owner\\'s Name'");
+    assert_eq!(c.items[0].label, "Owner's Name", "shown as it is");
+    let source = "getField(\"a\")";
+    let c = complete(source, source.len() - 2, &fields).expect("suggestions");
+    assert_eq!(c.items[0].insert, "a\\\\b");
+    let c = complete("getField(\"Own", 13, &fields).expect("suggestions");
+    assert_eq!(c.items[0].insert, "Owner's Name\"", "the other quote needs no escape");
+}
+
+#[test]
+fn a_keyword_just_finished_offers_nothing() {
+    assert_eq!(at("do|").1, None);
+    assert_eq!(at("x in|").1, None);
+    assert!(!labels(&at("doc|").1).is_empty(), "a longer word is no keyword");
+}
+
+#[test]
+fn a_variable_set_from_get_field_with_a_space_is_a_field() {
+    assert_eq!(labels(&at("var f = getField (\"Qty\");\nf.valueAs|").1), ["valueAsString"]);
+    assert_eq!(labels(&at("var f = this.getField (\"Qty\");\nf.valueAs|").1), ["valueAsString"]);
 }
 
 #[test]
@@ -207,7 +338,7 @@ proptest! {
         if let Some(c) = complete(&source, caret, &fields) {
             prop_assert!(c.replace.start <= caret && caret <= c.replace.end && c.replace.end <= source.len());
             prop_assert!(source.is_char_boundary(c.replace.start) && source.is_char_boundary(c.replace.end));
-            prop_assert!(!c.items.is_empty() && c.items.len() <= MAX_SUGGESTIONS_FOR_TEST);
+            prop_assert!(!c.items.is_empty() && c.items.len() <= complete::MAX_SUGGESTIONS);
         }
         for d in lint(&source, Knowledge { fields: Some(&fields), shared: &[] }) {
             if let Some(at) = d.at {
@@ -216,5 +347,3 @@ proptest! {
         }
     }
 }
-
-const MAX_SUGGESTIONS_FOR_TEST: usize = complete::MAX_SUGGESTIONS;

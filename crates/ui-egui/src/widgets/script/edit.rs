@@ -2,7 +2,9 @@
 //! keeping the indentation on Enter, Tab and Shift+Tab on lines, taking a level off a line when
 //! its `}` is typed, and finding the bracket that matches the one at the caret.
 //!
-//! Positions are character indices (what egui's cursors count) unless a name says bytes.
+//! Positions are character indices (what egui's cursors count) unless a name says bytes. Lines
+//! end as JavaScript's do: at `\n`, `\r\n`, a lone `\r` (old Acrobat scripts use it), U+2028 or
+//! U+2029.
 
 use std::ops::Range;
 
@@ -35,7 +37,7 @@ pub(super) fn char_of(text: &str, byte: usize) -> usize {
 /// fewest spaces any line is indented by (2 to 8), else two spaces.
 pub(super) fn indent_unit(text: &str) -> String {
     let mut fewest: Option<usize> = None;
-    for line in text.lines().take(MAX_LINES_FOR_UNIT) {
+    for (line, _) in lines_with_ends(text).take(MAX_LINES_FOR_UNIT) {
         if line.trim().is_empty() {
             continue;
         }
@@ -53,11 +55,52 @@ pub(super) fn indent_unit(text: &str) -> String {
     " ".repeat(fewest.unwrap_or(2).min(8))
 }
 
+/// Whether `c` ends a line.
+pub(super) fn is_line_end(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+/// How many lines `text` has (`\r\n` ends one).
+pub(super) fn line_count(text: &str) -> usize {
+    text.chars().filter(|c| is_line_end(*c)).count().saturating_sub(text.matches("\r\n").count()).saturating_add(1)
+}
+
+/// The line end the script uses (its first), for a line the editor adds: `\n` for one with none.
+pub(super) fn line_end(text: &str) -> &'static str {
+    match text.find(is_line_end).and_then(|i| text.get(i..)) {
+        Some(rest) if rest.starts_with("\r\n") => "\r\n",
+        Some(rest) if rest.starts_with('\r') => "\r",
+        _ => "\n",
+    }
+}
+
+/// Whether character `index` of `text` is the `\n` of a `\r\n`, with the `\r` before it.
+pub(super) fn inside_crlf(text: &str, index: usize) -> bool {
+    let at = byte_of(text, index);
+    index > 0 && text.get(..at).is_some_and(|b| b.ends_with('\r')) && text.get(at..).is_some_and(|a| a.starts_with('\n'))
+}
+
 /// The byte range of the line holding byte `at` (without its line end).
 fn line_at(text: &str, at: usize) -> Range<usize> {
-    let start = text.get(..at).and_then(|b| b.rfind('\n')).map_or(0, |i| i.saturating_add(1));
-    let end = text.get(at..).and_then(|a| a.find('\n')).map_or(text.len(), |i| at.saturating_add(i));
+    let start = text.get(..at).and_then(|b| b.char_indices().rev().find(|(_, c)| is_line_end(*c))).map_or(0, |(i, c)| i.saturating_add(c.len_utf8()));
+    let end = text.get(at..).and_then(|a| a.find(is_line_end)).map_or(text.len(), |i| at.saturating_add(i));
     start..end.max(start)
+}
+
+/// `block` cut into lines, each with the line end after it (empty for the last).
+fn lines_with_ends(block: &str) -> impl Iterator<Item = (&str, &str)> {
+    let mut rest = Some(block);
+    std::iter::from_fn(move || {
+        let text = rest?;
+        let Some(at) = text.find(is_line_end) else {
+            rest = None;
+            return Some((text, ""));
+        };
+        let end = if text.get(at..).is_some_and(|r| r.starts_with("\r\n")) { 2 } else { text.get(at..)?.chars().next()?.len_utf8() };
+        let after = at.saturating_add(end);
+        rest = text.get(after..);
+        Some((text.get(..at)?, text.get(at..after)?))
+    })
 }
 
 fn leading_whitespace(line: &str) -> &str {
@@ -76,45 +119,56 @@ pub(super) fn replace(text: &str, selection: Range<usize>, insert: &str) -> Edit
     Edit { text: out, selection: caret..caret }
 }
 
-/// Enter: a new line indented as the caret's line, one level more after an opening bracket.
-/// Between a bracket pair (`{|}`) the closing one moves to its own line below.
+/// Enter: a new line indented as the caret's line (no deeper than the caret, when it is in the
+/// indentation), one level more after an opening bracket. Between a bracket pair (`{|}`) the
+/// closing one moves to its own line below. The line ends as the script's lines do.
 pub(super) fn newline(text: &str, selection: Range<usize>, unit: &str) -> Edit {
     let at = byte_of(text, selection.start);
     let line = line_at(text, at);
     let current = text.get(line.clone()).unwrap_or_default();
-    let indent = leading_whitespace(current).to_string();
+    let lead = leading_whitespace(current);
+    // Spaces and tabs are one byte each, so any cut of `lead` is on a character boundary.
+    let indent = lead.get(..lead.len().min(at.saturating_sub(line.start))).unwrap_or(lead).to_string();
+    let end = line_end(text);
     let before = text.get(line.start..at).unwrap_or_default().trim_end();
     let opens = before.ends_with(['{', '(', '[']);
     let after = text.get(byte_of(text, selection.end.max(selection.start))..).unwrap_or_default();
     let closes = after.trim_start_matches([' ', '\t']).starts_with(['}', ')', ']']);
     if opens {
-        let inner = format!("\n{indent}{unit}");
+        let inner = format!("{end}{indent}{unit}");
         if closes {
-            let edit = replace(text, selection, &format!("{inner}\n{indent}"));
-            let caret = edit.selection.start.saturating_sub(indent.chars().count().saturating_add(1));
+            let edit = replace(text, selection, &format!("{inner}{end}{indent}"));
+            let caret = edit.selection.start.saturating_sub(indent.chars().count().saturating_add(end.chars().count()));
             return Edit { selection: caret..caret, ..edit };
         }
         return replace(text, selection, &inner);
     }
-    replace(text, selection, &format!("\n{indent}"))
+    replace(text, selection, &format!("{end}{indent}"))
 }
 
 /// The character range of the lines `selection` covers. A selection that ends at the start of
 /// a line does not take that line.
 fn lines_of(text: &str, selection: &Range<usize>) -> Range<usize> {
     let (from, mut to) = (byte_of(text, selection.start), byte_of(text, selection.end.max(selection.start)));
-    if to > from && text.get(..to).is_some_and(|b| b.ends_with('\n')) {
-        to = to.saturating_sub(1);
+    if to > from
+        && let Some(before) = text.get(..to)
+    {
+        let end = if before.ends_with("\r\n") { 2 } else { before.chars().next_back().filter(|c| is_line_end(*c)).map_or(0, char::len_utf8) };
+        // Never back past the selection's start (a selection of only the `\n` of a `\r\n`).
+        to = to.saturating_sub(end).max(from);
     }
     let first = line_at(text, from);
     let last = line_at(text, to);
     char_of(text, first.start)..char_of(text, last.end)
 }
 
-/// Whether Tab should indent lines rather than type: the selection spans more than one line.
-pub(super) fn spans_lines(text: &str, selection: &Range<usize>) -> bool {
+/// Whether Tab should indent lines rather than type over the selection: it takes in a line end,
+/// or a whole line.
+pub(super) fn indents_lines(text: &str, selection: &Range<usize>) -> bool {
     let (from, to) = (byte_of(text, selection.start), byte_of(text, selection.end.max(selection.start)));
-    text.get(from..to).is_some_and(|s| s.trim_end_matches('\n').contains('\n'))
+    let Some(selected) = text.get(from..to).filter(|s| !s.is_empty()) else { return false };
+    let line = line_at(text, from);
+    selected.contains(is_line_end) || (from == line.start && to == line.end)
 }
 
 /// Tab (or Shift+Tab, `outdent`) on the lines the selection covers: each non-empty line gains
@@ -122,14 +176,12 @@ pub(super) fn spans_lines(text: &str, selection: &Range<usize>) -> bool {
 pub(super) fn indent_lines(text: &str, selection: Range<usize>, outdent: bool, unit: &str) -> Edit {
     let lines = lines_of(text, &selection);
     let (from, to) = (byte_of(text, lines.start), byte_of(text, lines.end));
+    let (from, to) = (from.min(to), to.max(from));
     let block = text.get(from..to).unwrap_or_default();
     let mut out = String::with_capacity(block.len().saturating_add(unit.len().saturating_mul(16)));
     // Characters added (positive) or removed on the first line, and in all.
     let (mut first_delta, mut total_delta, mut first) = (0isize, 0isize, true);
-    for (i, line) in block.split('\n').enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
+    for (line, end) in lines_with_ends(block) {
         let delta: isize = if line.trim().is_empty() {
             out.push_str(line);
             0
@@ -143,6 +195,7 @@ pub(super) fn indent_lines(text: &str, selection: Range<usize>, outdent: bool, u
             out.push_str(line);
             isize::try_from(unit.chars().count()).unwrap_or(0)
         };
+        out.push_str(end);
         if first {
             first_delta = delta;
             first = false;
@@ -255,6 +308,7 @@ mod tests {
         assert_eq!(indent_unit("a\n  b"), "  ");
         assert_eq!(indent_unit("plain"), "  ");
         assert_eq!(indent_unit("a\n                          b"), "        ", "at most eight");
+        assert_eq!(indent_unit("if (a) {\r\tx();\r}"), "\t", "lines ended by a lone \\r");
     }
 
     #[test]
@@ -267,6 +321,16 @@ mod tests {
         assert_eq!(show(&newline(&t, s, "  ")), "  f({\n    |\n  })");
         let (t, s) = at("é|");
         assert_eq!(show(&newline(&t, s, "\t")), "é\n|");
+        // In the indentation: the new line gets no more of it than is before the caret.
+        let (t, s) = at("|  x = 1;");
+        assert_eq!(show(&newline(&t, s, "  ")), "\n|  x = 1;");
+        let (t, s) = at("  |  x");
+        assert_eq!(show(&newline(&t, s, "  ")), "  \n  |  x");
+        // The script's own line ends.
+        let (t, s) = at("a;\r  b;|");
+        assert_eq!(show(&newline(&t, s, "  ")), "a;\r  b;\r  |");
+        let (t, s) = at("a;\r\nif (a) {|}");
+        assert_eq!(show(&newline(&t, s, "  ")), "a;\r\nif (a) {\r\n  |\r\n}");
     }
 
     #[test]
@@ -278,7 +342,16 @@ mod tests {
         // A selection ending at the start of a line leaves that line alone.
         let (t, s) = at("«a\n»b");
         assert_eq!(show(&indent_lines(&t, s, false, "\t")), "«\ta\n»b");
-        assert!(spans_lines("a\nb", &(0..3)) && !spans_lines("ab\n", &(0..3)));
+        // Tab indents a selection that takes in a line end or a whole line, and types over one
+        // inside a line.
+        assert!(indents_lines("a\nb", &(0..3)) && indents_lines("a\nb", &(0..2)) && indents_lines("  x;", &(0..4)));
+        assert!(!indents_lines("ab\n", &(0..1)) && !indents_lines("ab", &(1..1)));
+        // Lines ended by a lone `\r` or U+2028 are lines too.
+        let (t, s) = at("«a\rb\u{2028}c»");
+        assert_eq!(show(&indent_lines(&t, s, false, "  ")), "«  a\r  b\u{2028}  c»");
+        let (t, s) = at("«a\r\n»b");
+        assert_eq!(show(&indent_lines(&t, s, false, "  ")), "«  a\r\n»b");
+        assert_eq!((line_count("a\rb\r\nc\nd"), line_count("")), (4, 1));
     }
 
     #[test]

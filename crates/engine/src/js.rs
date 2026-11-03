@@ -6,15 +6,15 @@
 //! Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript is [`Session::set_javascript`]; with it
 //! off, scripts don't run and AF calls keep working natively.
 //!
-//! Script editors colour a script with [`highlight`] and report its syntax errors with [`check`],
-//! neither of which runs it.
+//! Script editors colour a script with [`highlight`], report its syntax errors and likely mistakes
+//! with [`assist::lint`] and suggest names with [`assist::complete`], none of which runs it.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
 /// Help for writing scripts: suggestions, warnings and the object model.
 pub use pdfcraft_js::assist;
 pub use pdfcraft_js::{
-    Diagnostic, Limits, Location, MAX_SCRIPT_BYTES, Message, MessageButtons, MessageIcon, Outcome, Panel, Request, Severity, Token, TokenKind, check,
-    highlight,
+    Diagnostic, Limits, Location, MAX_SCRIPT_BYTES, Message, MessageButtons, MessageIcon, Outcome, Panel, Request, Severity, Token, TokenKind,
+    Wording, check, highlight,
 };
 
 use crate::{DocId, Edit, EditError, Session};

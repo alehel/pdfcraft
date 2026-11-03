@@ -1,7 +1,8 @@
 //! What scripts can reach: the names on each object of the form object model, read from a live
-//! sandbox set up exactly as [`crate::run`] sets one up, so the editor's suggestions and warnings
-//! cannot drift from what the engine provides. A one-line description of each name lives in
-//! [`DESCRIPTIONS`]; a test keeps the two equal.
+//! sandbox with the same globals [`crate::run`] installs (`event` is added by hand, as running
+//! adds it per script), so the editor's suggestions and warnings cannot drift from what the
+//! engine provides. A one-line description of each name lives in [`DESCRIPTIONS`]; a test keeps
+//! the two equal.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
@@ -49,23 +50,6 @@ impl Object {
         Object::ALL.into_iter().find(|o| o.global() == Some(name))
     }
 
-    /// How a message names the object: "app", "Field objects", "the document".
-    pub fn label(self) -> &'static str {
-        match self {
-            Object::Document => "the document",
-            Object::Field => "Field objects",
-            other => other.global().unwrap_or_default(),
-        }
-    }
-
-    /// "app has", "Field objects have": the subject of a message about the object's names.
-    pub fn has(self) -> String {
-        match self {
-            Object::Field => "Field objects have".into(),
-            other => format!("{} has", other.label()),
-        }
-    }
-
     pub const ALL: [Object; 8] =
         [Object::Document, Object::App, Object::Util, Object::Console, Object::Display, Object::Color, Object::Event, Object::Field];
 }
@@ -93,7 +77,8 @@ impl Model {
 }
 
 /// The model, read once from a sandbox. Empty if the sandbox could not be built, which turns the
-/// warnings that depend on it off rather than making every name unknown.
+/// warnings that depend on it (unknown names, undeclared assignments) off rather than making
+/// every name unknown.
 pub fn model() -> Arc<Model> {
     static MODEL: OnceLock<Arc<Model>> = OnceLock::new();
     MODEL.get_or_init(|| Arc::new(read().unwrap_or_default())).clone()

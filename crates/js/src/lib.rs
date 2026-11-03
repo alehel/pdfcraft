@@ -21,8 +21,9 @@
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
 //! in an [`Outcome`] for the caller to apply.
 //!
-//! Script editors use [`highlight`] to colour a script and [`check`] to report its syntax errors
-//! with their place, both without running it.
+//! Script editors use [`highlight`] to colour a script, [`assist::lint`] to report its syntax
+//! errors and likely mistakes with their place, and [`assist::complete`] to suggest names, none
+//! of which runs it. [`check`] reports the syntax error alone.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -46,7 +47,7 @@ mod host;
 mod model;
 mod run;
 
-pub use check::{Diagnostic, Location, Severity, Token, TokenKind, check, highlight};
+pub use check::{Diagnostic, Location, Severity, Token, TokenKind, Wording, check, highlight};
 #[cfg(test)]
 pub(crate) use format::PRINTD_SCANNED;
 use format::{printd, printf, printx, scand};

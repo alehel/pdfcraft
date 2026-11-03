@@ -106,7 +106,7 @@ fn an_empty_box_says_nothing() {
     let ctx = egui::Context::default();
     let mut text = String::from("  \n");
     let (_, said) = frame(&ctx, &mut text, 1.0);
-    assert!(!said.iter().any(|s| s.contains("syntax") || s.starts_with("Line")), "{said:?}");
+    assert!(!said.iter().any(|s| s == "No problems found" || s.starts_with("Line") || s.starts_with("Syntax")), "{said:?}");
 }
 
 fn palette() -> Palette {
@@ -148,7 +148,7 @@ fn a_mark_on_a_line_end_moves_onto_the_last_character_before_it() {
 
 #[test]
 fn problems_without_a_place_say_so() {
-    let d = Diagnostic { severity: Severity::Error, message: "the script is nested too deeply to run safely".into(), at: None };
+    let d = Diagnostic { severity: Severity::Error, message: "the script is nested too deeply to run safely".into(), at: None, wording: None };
     assert_eq!(describe(&d), "Syntax error: the script is nested too deeply to run safely");
 }
 
@@ -342,7 +342,7 @@ fn a_dot_opens_suggestions_that_enter_takes_and_escape_closes() {
 #[test]
 fn the_list_shows_eight_rows_after_a_shorter_list() {
     let fields: Vec<String> = (1..=12).map(|i| format!("Field{i:02}")).collect();
-    let mut t = Typing::new("getField(\"Field0", ScriptEnv { fields: Some(fields), doc_scripts: Vec::new() });
+    let mut t = Typing::new("getField(\"Field0", ScriptEnv::new(Some(fields), Vec::new()));
     // Rows padded as the app's theme pads buttons, taller than the text alone.
     t.ctx.global_style_mut(|s| s.spacing.button_padding.y = 8.0);
     t.select(16..16);
@@ -412,7 +412,7 @@ fn the_box_keeps_its_dialog_inside_the_window() {
 
 #[test]
 fn field_names_are_suggested_and_checked_against_the_document() {
-    let env = ScriptEnv { fields: Some(vec!["Total".into(), "Qty".into()]), doc_scripts: vec!["var rate = 2;".into()] };
+    let env = ScriptEnv::new(Some(vec!["Total".into(), "Qty".into()]), vec!["var rate = 2;".into()]);
     let mut t = Typing::new("getField(\"", env);
     t.select(10..10);
     t.typed("T");
@@ -427,7 +427,7 @@ fn field_names_are_suggested_and_checked_against_the_document() {
     assert!(warning.starts_with("Line 1, column 17, warning: ") && warning.contains("did you mean \"Total\""), "{:?}", t.said);
     assert!(!t.said.iter().any(|s| s.contains("not declared")), "rate is declared by a document script: {:?}", t.said);
     // Without that document script, it is not.
-    let mut alone = Typing::new("rate = getField(\"Total\").value;", ScriptEnv { fields: Some(vec!["Total".into()]), doc_scripts: Vec::new() });
+    let mut alone = Typing::new("rate = getField(\"Total\").value;", ScriptEnv::new(Some(vec!["Total".into()]), Vec::new()));
     alone.pause();
     assert!(alone.said.iter().any(|s| s.contains("\"rate\" is not declared")), "{:?}", alone.said);
 }
@@ -438,8 +438,204 @@ fn a_warning_about_the_word_being_completed_waits_for_it() {
         severity: Severity::Warning,
         message: "app has no \"al\"".into(),
         at: Some(pdfcraft_engine::js::Location { line: 1, column: 5, bytes }),
+        wording: None,
     };
     let found = vec![warning(4..6), warning(10..12)];
     assert_eq!(unfinished(&found, Some(&(4..6))), vec![warning(10..12)]);
     assert_eq!(unfinished(&found, None), found);
+    // A field name's warning covers its quotes; the name being completed is inside them.
+    let field = vec![warning(9..14), warning(20..22)];
+    assert_eq!(unfinished(&field, Some(&(10..13))), vec![warning(20..22)]);
+}
+
+#[test]
+fn tab_on_whole_lines_indents_them_and_never_types_over_them() {
+    // A selection from a line's start to the next line's start (Shift+Down), and one whole line.
+    let mut t = Typing::new("a\nb", ScriptEnv::default());
+    t.select(0..2);
+    t.key(egui::Key::Tab, egui::Modifiers::NONE);
+    assert_eq!(t.text, "  a\nb");
+    let mut t = Typing::new("  x;", ScriptEnv::default());
+    t.select(0..4);
+    t.key(egui::Key::Tab, egui::Modifiers::NONE);
+    assert_eq!(t.text, "    x;");
+}
+
+#[test]
+fn shift_keeps_its_keys_while_the_list_is_open() {
+    let mut t = Typing::new("app", ScriptEnv::default());
+    t.select(3..3);
+    t.typed(".");
+    assert!(!t.suggest().is_empty(), "the list is open");
+    t.key(egui::Key::Tab, egui::Modifiers::SHIFT);
+    assert_eq!(t.text, "app.", "Shift+Tab outdents (nothing here), it does not take a suggestion");
+}
+
+#[test]
+fn a_brace_typed_with_other_text_goes_in_with_it_in_order() {
+    let mut t = Typing::new("if (a) {\n    ", ScriptEnv::default());
+    t.select(13..13);
+    t.frame(vec![egui::Event::Text("a".into()), egui::Event::Text("}".into())]);
+    assert_eq!(t.text, "if (a) {\n    a}");
+}
+
+#[test]
+fn clicking_a_suggestion_takes_it() {
+    let mut t = Typing::new("app", ScriptEnv::default());
+    t.select(3..3);
+    t.typed(".");
+    t.frame(Vec::new());
+    assert_eq!(t.suggest().first().map(String::as_str), Some("alert"));
+    let list = t.ctx.memory(|m| m.area_rect(t.id.with("script-suggest"))).expect("the list is shown");
+    // On its first row, inside its frame's margin.
+    let at = list.left_top() + egui::vec2(40.0, 14.0);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    t.frame(vec![egui::Event::PointerMoved(at)]);
+    t.frame(vec![button(true)]);
+    t.frame(vec![button(false)]);
+    t.frame(Vec::new());
+    assert_eq!(t.text, "app.alert");
+    assert!(t.ctx.memory(|m| m.has_focus(t.id)), "the box keeps its focus");
+}
+
+#[test]
+fn lines_ended_by_a_lone_carriage_return_are_lines_and_numbered() {
+    // Acrobat's own line end: egui breaks rows only at `\n`, so the box lays a lone `\r` out as one.
+    let mut t = Typing::new("var a = 1;\rvar b = 2;\r\nvar c = 3;", ScriptEnv::default());
+    t.frame(Vec::new());
+    let numbers: Vec<&str> = t.said.iter().map(String::as_str).filter(|s| s.chars().all(|c| c.is_ascii_digit())).collect();
+    assert_eq!(numbers, ["1", "2", "3"]);
+    assert_eq!(t.text, "var a = 1;\rvar b = 2;\r\nvar c = 3;", "the script keeps its own line ends");
+    let job = layout_job("a\rb\r\nc", &[], &[], &palette(), &egui::FontId::monospace(12.0));
+    assert_eq!(job.text, "a\nb\r\nc");
+}
+
+#[test]
+fn an_edit_the_editor_makes_scrolls_the_box_to_the_caret() {
+    // Six rows of box, twelve lines of script, the caret at the end: Enter is the editor's own
+    // edit, which the text box does not see, so the editor scrolls it there.
+    let script: String = (1..=12).map(|i| format!("x{i} = {i};")).collect::<Vec<_>>().join("\n");
+    let mut t = Typing::new(&script, ScriptEnv::default());
+    let end = script.chars().count();
+    t.select(end..end);
+    t.frame(Vec::new());
+    let top = |t: &Typing| t.shapes.iter().find(|(s, _, _)| s.starts_with("x1 =")).map(|(_, rect, clip)| (rect.top(), clip.top()));
+    let (before, clip) = top(&t).expect("the script is drawn");
+    t.key(egui::Key::Enter, egui::Modifiers::NONE);
+    // egui animates the scroll.
+    for _ in 0..10 {
+        t.frame(Vec::new());
+    }
+    let (after, _) = top(&t).expect("the script is drawn");
+    assert!(after < clip && after < before, "scrolled down to the new line: {before} → {after} (box top {clip})");
+}
+
+#[test]
+fn an_edit_the_editor_makes_closes_the_list() {
+    // Shift+Tab outdents with the list open; the list kept the old place, and Enter then put its
+    // suggestion there.
+    let mut t = Typing::new("  x = app", ScriptEnv::default());
+    t.select(9..9);
+    t.typed(".al");
+    assert!(!t.suggest().is_empty(), "the list is open");
+    t.key(egui::Key::Tab, egui::Modifiers::SHIFT);
+    assert_eq!(t.text, "x = app.al");
+    assert!(t.suggest().is_empty(), "closed by the outdent");
+    t.key(egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(t.text, "x = app.al\n", "Enter adds a line, it takes no stale suggestion");
+}
+
+#[test]
+fn shift_escape_closes_the_list_and_not_the_dialog() {
+    let mut t = Typing::new("app", ScriptEnv::default());
+    t.select(3..3);
+    t.typed(".");
+    assert!(!t.suggest().is_empty());
+    t.key(egui::Key::Escape, egui::Modifiers::SHIFT);
+    assert!(t.suggest().is_empty() && !t.escape_left, "the list's, not the dialog's");
+}
+
+#[test]
+fn a_caret_inside_a_windows_line_end_is_before_it() {
+    // End puts egui's caret after the `\r` of a `\r\n`: Enter split the line end there, and Tab
+    // on just the `\n` doubled the `\r`.
+    let mut t = Typing::new("  a;\r\n  b;", ScriptEnv::default());
+    t.select(5..5);
+    t.key(egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(t.text, "  a;\r\n  \r\n  b;");
+    let mut t = Typing::new("  a;\r\n  b;", ScriptEnv::default());
+    t.select(5..6);
+    t.key(egui::Key::Tab, egui::Modifiers::NONE);
+    assert_eq!(t.text, "    a;\r\n  b;");
+}
+
+#[test]
+fn the_arrows_cross_a_windows_line_end() {
+    // egui stops between the `\r` and the `\n`; moved back there every frame, Right never got past.
+    let mut t = Typing::new("a;\r\nb;", ScriptEnv::default());
+    t.select(2..2);
+    t.key(egui::Key::ArrowRight, egui::Modifiers::NONE);
+    t.key(egui::Key::ArrowRight, egui::Modifiers::NONE);
+    t.frame(Vec::new());
+    assert_eq!(t.caret(), Some(4..4));
+    t.select(2..2);
+    t.key(egui::Key::ArrowRight, egui::Modifiers::SHIFT);
+    t.key(egui::Key::ArrowRight, egui::Modifiers::SHIFT);
+    t.frame(Vec::new());
+    assert_eq!(t.caret(), Some(2..4));
+    // Typing with the caret inside it goes before the line end.
+    t.select(3..3);
+    t.typed("x");
+    assert_eq!(t.text, "a;x\r\nb;");
+}
+
+#[test]
+fn ctrl_tab_leaves_the_selection_alone() {
+    let mut t = Typing::new("a\nb", ScriptEnv::default());
+    t.select(0..3);
+    t.key(egui::Key::Tab, egui::Modifiers::CTRL);
+    assert_eq!(t.text, "a\nb");
+}
+
+#[test]
+fn an_edit_keeps_a_backward_selection_backward() {
+    let mut t = Typing::new("a\nb\nc", ScriptEnv::default());
+    set_selection_facing(&t.ctx, t.id, 0..3, true);
+    t.key(egui::Key::Tab, egui::Modifiers::NONE);
+    assert_eq!(t.text, "  a\n  b\nc");
+    assert!(selected_backward(&t.ctx, t.id), "the caret stays at the start");
+}
+
+#[test]
+fn a_selection_closes_the_list() {
+    let mut t = Typing::new("app", ScriptEnv::default());
+    t.select(3..3);
+    t.typed(".");
+    assert!(!t.suggest().is_empty());
+    t.key(egui::Key::A, egui::Modifiers::COMMAND);
+    t.frame(Vec::new());
+    assert!(t.suggest().is_empty(), "Enter must not take a suggestion over a selection");
+}
+
+#[test]
+fn backspace_and_delete_inside_a_windows_line_end_act_on_the_whole_of_it() {
+    // End puts the caret after the `\r`: Backspace removed only that and Delete only the `\n`, so
+    // nothing showed, or half a line end was left behind.
+    let mut t = Typing::new("a;\r\nb;", ScriptEnv::default());
+    t.select(3..3);
+    t.key(egui::Key::Backspace, egui::Modifiers::NONE);
+    assert_eq!(t.text, "a\r\nb;");
+    let mut t = Typing::new("a;\r\nb;", ScriptEnv::default());
+    t.select(3..3);
+    t.key(egui::Key::Delete, egui::Modifiers::NONE);
+    assert_eq!(t.text, "a;b;");
+}
+
+#[test]
+fn copy_takes_no_half_of_a_windows_line_end() {
+    // A selection up to End stops after the `\r`; pasted elsewhere, a lone `\r` is a line break.
+    let mut t = Typing::new("ab\r\nc", ScriptEnv::default());
+    t.select(0..3);
+    t.frame(vec![egui::Event::Copy]);
+    assert_eq!(t.caret(), Some(0..2));
 }

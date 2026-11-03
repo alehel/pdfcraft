@@ -1149,7 +1149,7 @@ fn translation_gaps_report() {
         }
     }
     pdfcraft_engine::catalog::TOOL_CATEGORIES.iter().for_each(|category| add(category.label));
-    let engine: [&[&str]; 9] = [
+    let engine: [&[&str]; 10] = [
         pdfcraft_engine::a11y::WORDINGS,
         pdfcraft_engine::a11y::REPORT_WORDS,
         pdfcraft_engine::pdfa::WORDINGS,
@@ -1159,8 +1159,10 @@ fn translation_gaps_report() {
         pdfcraft_engine::EDIT_LABELS,
         pdfcraft_engine::BATCH_LABELS,
         pdfcraft_engine::field_table::WORDINGS,
+        pdfcraft_engine::js::assist::WORDINGS,
     ];
     engine.into_iter().flatten().for_each(|s| add(s));
+    pdfcraft_engine::js::assist::descriptions().for_each(&mut add);
     pdfcraft_engine::sign::AppearanceLabels::default().fields().into_iter().for_each(|(_, label)| add(label));
     crate::credits::NameMode::ALL.iter().for_each(|mode| add(mode.label()));
     for key in crate::credits::SortKey::ALL {

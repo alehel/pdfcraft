@@ -15,6 +15,10 @@ const LIST_WIDTH: f32 = 320.0;
 /// Suggestions shown before the list scrolls.
 pub(super) const VISIBLE_ROWS: usize = 8;
 
+/// The list's layer: above every dialog, which egui raises to the top of the foreground on each
+/// press inside it.
+pub(super) const ORDER: egui::Order = egui::Order::Tooltip;
+
 /// The list's state, kept between frames.
 #[derive(Clone, Default)]
 pub(super) struct Suggest {
@@ -26,6 +30,8 @@ pub(super) struct Suggest {
     pub for_caret: usize,
     /// From one row's top to the next's, as last drawn (the theme pads the rows); 0 until then.
     row_pitch: f32,
+    /// The row last scrolled into view: the list follows the choice, and the wheel otherwise.
+    pub scrolled_to: Option<usize>,
 }
 
 /// What a key did to an open list.
@@ -37,24 +43,26 @@ pub(super) enum Key {
 }
 
 impl Suggest {
-    /// Up, Down, Enter, Tab and Escape while the list is open, taken before the text box sees them.
+    /// Up, Down, Enter, Tab and Escape while the list is open, taken before the text box sees
+    /// them. Only without modifiers: Shift+Tab still outdents, Shift+Down still selects.
     pub fn keys(&mut self, ui: &egui::Ui) -> Option<Key> {
         let count = self.open.as_ref().map_or(0, |c| c.items.len());
         if count == 0 {
             return None;
         }
-        let none = egui::Modifiers::NONE;
         ui.input_mut(|i| {
-            if i.consume_key(none, egui::Key::ArrowDown) {
+            if take(i, egui::Key::ArrowDown) {
                 self.selected = (self.selected.saturating_add(1)) % count;
             }
-            if i.consume_key(none, egui::Key::ArrowUp) {
+            if take(i, egui::Key::ArrowUp) {
                 self.selected = self.selected.checked_sub(1).unwrap_or(count.saturating_sub(1));
             }
-            if i.consume_key(none, egui::Key::Enter) || i.consume_key(none, egui::Key::Tab) {
+            if take(i, egui::Key::Enter) || take(i, egui::Key::Tab) {
                 return Some(Key::Accept);
             }
-            if i.consume_key(none, egui::Key::Escape) {
+            // Escape with any modifier: the dialog around the box would take Shift+Escape too.
+            if i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. })) {
+                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, .. }));
                 return Some(Key::Close);
             }
             None
@@ -74,7 +82,7 @@ impl Suggest {
         let t = Tokens::get(ctx);
         let mut clicked = None;
         let mut measured = None;
-        egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
+        egui::Area::new(id).order(ORDER).fixed_pos(at).constrain(true).show(ctx, |ui| {
             egui::Frame::new()
                 .fill(t.card)
                 .stroke(Stroke::new(1.0, t.border))
@@ -109,11 +117,12 @@ impl Suggest {
                                 measured = Some(height + gap);
                             }
                             let response = match item.detail {
-                                Some(detail) => response.on_hover_text(detail),
+                                Some(detail) => response.on_hover_text(crate::i18n::t(detail)),
                                 None => response,
                             };
-                            if selected {
+                            if selected && self.scrolled_to != Some(i) {
                                 response.scroll_to_me(None);
+                                self.scrolled_to = Some(i);
                             }
                             if response.clicked() {
                                 clicked = Some(i);
@@ -123,7 +132,7 @@ impl Suggest {
                     // The chosen name's description, under the list.
                     if let Some(detail) = completion.items.get(self.selected).and_then(|i| i.detail) {
                         ui.separator();
-                        ui.add(egui::Label::new(egui::RichText::new(detail).small().color(t.text_muted)).wrap());
+                        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::t(detail)).small().color(t.text_muted)).wrap());
                     }
                 });
         });
@@ -132,4 +141,12 @@ impl Suggest {
         }
         clicked
     }
+}
+
+/// Takes a press of `key` with no modifier held, if there is one. egui's own `consume_key` also
+/// takes it with Shift or Alt held.
+fn take(input: &mut egui::InputState, key: egui::Key) -> bool {
+    let before = input.events.len();
+    input.events.retain(|e| !matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none()));
+    input.events.len() < before
 }

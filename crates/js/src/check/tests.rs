@@ -168,6 +168,10 @@ proptest! {
     }
 }
 
+fn byte_at(source: &str, line: u32, column: u32) -> usize {
+    Lines::new(source).byte_at(source, line, column)
+}
+
 #[test]
 fn places_past_a_line_or_the_source_end_clamp_to_it() {
     assert_eq!(byte_at("ab\ncd", 1, 9), 2, "past the line end: its line terminator");
@@ -175,6 +179,64 @@ fn places_past_a_line_or_the_source_end_clamp_to_it() {
     assert_eq!(byte_at("ab\ncd", 2, 2), 4);
     assert_eq!(byte_at("ab", 5, 1), 2, "past the last line: the end");
     assert_eq!(byte_at("", 1, 1), 0);
+}
+
+/// The places as they were found before [`Lines`]: by walking the script from its start.
+mod walked {
+    fn walk(source: &str, mut visit: impl FnMut(usize, u32, u32) -> bool) {
+        let (mut line, mut column) = (1u32, 1u32);
+        let mut chars = source.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if visit(i, line, column) {
+                return;
+            }
+            match c {
+                '\r' => {
+                    if chars.peek().is_some_and(|(_, n)| *n == '\n') {
+                        chars.next();
+                    }
+                    (line, column) = (line.saturating_add(1), 1);
+                }
+                '\n' | '\u{2028}' | '\u{2029}' => (line, column) = (line.saturating_add(1), 1),
+                _ => column = column.saturating_add(1),
+            }
+        }
+        visit(source.len(), line, column);
+    }
+
+    pub fn byte_at(source: &str, line: u32, column: u32) -> usize {
+        let mut found = source.len();
+        walk(source, |i, l, c| {
+            if l > line || (l == line && c >= column) {
+                found = i;
+                return true;
+            }
+            false
+        });
+        if line_column(source, found).0 > line {
+            found = source.get(..found).and_then(|s| s.char_indices().next_back()).map_or(0, |(i, _)| i);
+        }
+        found
+    }
+
+    pub fn line_column(source: &str, at: usize) -> (u32, u32) {
+        let mut found = (1, 1);
+        walk(source, |i, l, c| {
+            found = (l, c);
+            i >= at
+        });
+        found
+    }
+}
+
+proptest! {
+    /// Lines and columns placed through [`Lines`] are those walking the script finds.
+    #[test]
+    fn places_match_walking_the_script(source in "[ab\n\ré\u{2028}]{0,24}", line in 0u32..8, column in 0u32..8, at in 0usize..40) {
+        let lines = Lines::new(&source);
+        prop_assert_eq!(lines.byte_at(&source, line, column), walked::byte_at(&source, line, column), "{:?} {} {}", source, line, column);
+        prop_assert_eq!(lines.line_column(&source, at), walked::line_column(&source, at), "{:?} {}", source, at);
+    }
 }
 
 #[test]
@@ -201,4 +263,12 @@ fn a_slash_after_a_keyword_s_brackets_or_a_block_starts_a_regex() {
     assert!(kinds("if (x) /'/.test(s);").contains(&(TokenKind::Regex, "/'/".into())), "after a keyword's brackets");
     assert!(kinds("{}\n/a/.test(s);").contains(&(TokenKind::Regex, "/a/".into())), "after a block");
     assert!(!kinds("x = (a + b) / 2 / c;").iter().any(|(k, _)| *k == TokenKind::Regex), "division after a value's bracket");
+}
+
+#[test]
+fn a_wording_is_said_with_its_values_whole() {
+    let w = Wording { text: "no \"{name}\"; did you mean \"{near}\"?", holes: vec![("name", "{near}".into()), ("near", "Total".into())] };
+    assert_eq!(w.said(w.text), "no \"{near}\"; did you mean \"Total\"?", "a value is not read again");
+    assert_eq!(w.said("«{near}» ou «{name}»"), "«Total» ou «{near}»", "a translation may reorder the holes");
+    assert_eq!(w.said("{other} {name"), "{other} {name", "holes it does not fill, and an unclosed brace, stay as written");
 }

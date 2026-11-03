@@ -312,7 +312,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             return false;
         }
         Dialog::FieldProps => {
-            let env = crate::js_ui::script_env(app, None);
+            let env = crate::js_ui::script_env(ui.ctx(), app, None);
             let Some(d) = app.field_props.as_mut() else {
                 req.close = true;
                 return false;

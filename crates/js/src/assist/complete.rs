@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use super::model::{Model, Object, describe, model};
-use crate::check::{TokenKind, highlight};
+use crate::check::{TokenKind, highlight, is_name_part as is_name};
 
 /// Longest script suggestions are made in (the engine's own limit).
 const MAX_SOURCE_BYTES: usize = crate::MAX_SCRIPT_BYTES;
@@ -17,6 +17,9 @@ pub const MAX_SUGGESTIONS: usize = 50;
 
 /// How far back from the caret the object before a `.` is looked for, in bytes.
 const MAX_LOOK_BACK: usize = 512;
+
+/// The description of `event`, which is no object's member (each script gets its own).
+pub(super) const EVENT_DETAIL: &str = "the event the script runs for: value, change, rc, target, …";
 
 /// What a suggestion is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,10 +52,6 @@ pub struct Completion {
     pub items: Vec<Suggestion>,
 }
 
-fn is_name(c: char) -> bool {
-    c == '$' || c == '_' || c.is_alphanumeric()
-}
-
 /// Suggestions for the caret at byte `cursor` of `source`, given the form's `fields`. `None` where
 /// there is nothing to suggest: in a comment, a number or another string, past the end, or a
 /// bare word that is already complete.
@@ -66,6 +65,8 @@ pub fn complete(source: &str, cursor: usize, fields: &[String]) -> Option<Comple
         match t.kind {
             TokenKind::String => return field_names(source, cursor, t.bytes.clone(), fields),
             TokenKind::Comment | TokenKind::Template | TokenKind::Regex | TokenKind::Number => return None,
+            // A keyword just finished (`do`, `in`): Enter after it means a new line, not `documentFileName`.
+            TokenKind::Keyword if cursor == t.bytes.end => return None,
             TokenKind::Keyword | TokenKind::Literal | TokenKind::Api => {}
         }
     }
@@ -93,12 +94,7 @@ pub fn complete(source: &str, cursor: usize, fields: &[String]) -> Option<Comple
         None => {
             let mut items = members(&model, Object::Document, prefix);
             if matches("event", &prefix.to_lowercase()) {
-                items.push(Suggestion {
-                    label: "event".into(),
-                    insert: "event".into(),
-                    kind: SuggestionKind::Property,
-                    detail: Some("the event the script runs for: value, change, rc, target, …"),
-                });
+                items.push(Suggestion { label: "event".into(), insert: "event".into(), kind: SuggestionKind::Property, detail: Some(EVENT_DETAIL) });
             }
             rank(&mut items, prefix);
             // A word already written out in full needs no suggestion.
@@ -111,11 +107,17 @@ pub fn complete(source: &str, cursor: usize, fields: &[String]) -> Option<Comple
     (!items.is_empty()).then_some(Completion { replace: start..end, items })
 }
 
+/// Whether the string `text` (its quotes included) has its closing quote.
+fn is_closed(text: &str) -> bool {
+    let Some(quote) = text.chars().next() else { return false };
+    text.len() >= 2 && text.ends_with(quote) && !text.ends_with(&format!("\\{quote}"))
+}
+
 /// Field names for the caret inside the string `token`, when the string is `getField`'s argument.
 fn field_names(source: &str, cursor: usize, token: Range<usize>, fields: &[String]) -> Option<Completion> {
     let text = source.get(token.clone())?;
     let quote = text.chars().next()?;
-    let closed = text.len() >= 2 && text.ends_with(quote) && !text.ends_with(&format!("\\{quote}"));
+    let closed = is_closed(text);
     if closed && cursor == token.end {
         return None;
     }
@@ -125,19 +127,47 @@ fn field_names(source: &str, cursor: usize, token: Range<usize>, fields: &[Strin
         return None;
     }
     let inner = token.start.saturating_add(quote.len_utf8());
-    let inner_end = if closed { token.end.saturating_sub(quote.len_utf8()) } else { token.end };
+    // A quote just typed pairs with the next string on the line (`getField("|).value + ", "`), which
+    // leaves a later string open, or the text inside closes a bracket it did not open (a quote in
+    // a comment after it): either way this string is the one left open.
+    let line = source.get(token.end..).unwrap_or_default();
+    let line = line.get(..line.find(['\n', '\r']).unwrap_or(line.len())).unwrap_or_default();
+    let later_open = highlight(line).iter().any(|t| t.kind == TokenKind::String && line.get(t.bytes.clone()).is_some_and(|s| !is_closed(s)));
+    let inside = source.get(inner..token.end.saturating_sub(quote.len_utf8())).unwrap_or_default();
+    let mut depth = 0i32;
+    let balanced = inside.chars().all(|c| {
+        depth = match c {
+            '(' => depth.saturating_add(1),
+            ')' => depth.saturating_sub(1),
+            _ => depth,
+        };
+        depth >= 0
+    });
+    let closed = closed && balanced && !later_open;
+    let inner_end = if closed {
+        token.end.saturating_sub(quote.len_utf8())
+    } else {
+        // An unclosed string runs to the end of the line: only the word being typed is replaced,
+        // not the code after it (`getField("|).value`, `getField("|.join(`).
+        let rest = source.get(cursor..token.end).unwrap_or_default();
+        cursor.saturating_add(rest.find(|c: char| !is_name(c)).unwrap_or(rest.len()))
+    };
     let prefix = source.get(inner..cursor)?;
     let lower = prefix.to_lowercase();
     let mut items: Vec<Suggestion> = fields
         .iter()
         // From its start or the start of a part ("city" in "address.city").
         .filter(|f| matches(f, &lower) || f.split('.').any(|part| part.to_lowercase().starts_with(&lower)))
-        .map(|f| Suggestion {
-            label: f.clone(),
-            // An unclosed string gets its closing quote.
-            insert: if closed { f.clone() } else { format!("{f}{quote}") },
-            kind: SuggestionKind::Field,
-            detail: None,
+        .map(|f| {
+            // Inside the string, a name's own quotes and backslashes are escaped.
+            let escaped = f.replace('\\', "\\\\").replace(quote, &format!("\\{quote}"));
+            Suggestion {
+                label: f.clone(),
+                // An unclosed string gets its closing quote.
+                insert: if closed { escaped } else { format!("{escaped}{quote}") },
+                kind: SuggestionKind::Field,
+                detail: None,
+            }
         })
         .collect();
     rank(&mut items, prefix);
@@ -181,7 +211,8 @@ fn set_from_get_field(source: &str, name: &str) -> bool {
         let rest = source.get(at.saturating_add(name.len())..).unwrap_or_default().trim_start();
         let Some(value) = rest.strip_prefix('=').filter(|v| !v.starts_with('=')) else { return false };
         let value = value.trim_start();
-        starts_word && (value.starts_with("getField(") || value.starts_with("this.getField("))
+        let call = value.strip_prefix("this.").unwrap_or(value);
+        starts_word && call.strip_prefix("getField").is_some_and(|args| args.trim_start().starts_with('('))
     })
 }
 
@@ -214,9 +245,10 @@ fn matches(name: &str, prefix: &str) -> bool {
 /// in alphabetical order; at most [`MAX_SUGGESTIONS`].
 fn rank(items: &mut Vec<Suggestion>, prefix: &str) {
     let lower = prefix.to_lowercase();
-    items.sort_by(|a, b| {
-        let (la, lb) = (a.label.to_lowercase(), b.label.to_lowercase());
-        (!la.starts_with(&lower), la).cmp(&(!lb.starts_with(&lower), lb))
+    // Each label lowered once, not at every comparison: inside `getField("` every field is one.
+    items.sort_by_cached_key(|i| {
+        let label = i.label.to_lowercase();
+        (!label.starts_with(&lower), label)
     });
     items.dedup_by(|a, b| a.label == b.label);
     items.truncate(MAX_SUGGESTIONS);

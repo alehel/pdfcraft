@@ -21,10 +21,46 @@ use super::run::refuse;
 pub struct Diagnostic {
     /// An error stops the script from running; a warning is a likely mistake that runs.
     pub severity: Severity,
-    /// What is wrong, without the position (that is in `at`): the parser's words for an error.
+    /// What is wrong, without the position (that is in `at`), in English: the parser's words for
+    /// an error.
     pub message: String,
     /// Where, when the problem has a place (a script that is too long or too deeply nested has none).
     pub at: Option<Location>,
+    /// For a warning, its wording with its values apart, for an interface that says it in its own
+    /// language; `None` for an error, which is the parser's.
+    pub wording: Option<Wording>,
+}
+
+/// A message in two parts, as an interface translates it: one of the [`crate::assist::WORDINGS`]
+/// with named holes (`{name}`), and what goes in each, from the script.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Wording {
+    pub text: &'static str,
+    pub holes: Vec<(&'static str, String)>,
+}
+
+impl Wording {
+    /// The message read with `wording` (the interface's translation of [`text`](Self::text), or
+    /// the text itself). A value goes in as it stands and is not read again, so a name with
+    /// braces in it stays whole; a hole the wording lacks is left out, and one it has but this
+    /// does not fill stays as written.
+    pub fn said(&self, wording: &str) -> String {
+        let mut out = String::with_capacity(wording.len().saturating_add(self.holes.iter().map(|(_, v)| v.len()).sum::<usize>()));
+        let mut rest = wording;
+        while let Some(open) = rest.find('{') {
+            // `{` and `}` are ASCII, so these are character boundaries.
+            let Some(close) = rest.get(open..).and_then(|r| r.find('}')).map(|c| open.saturating_add(c)) else { break };
+            let name = rest.get(open.saturating_add(1)..close).unwrap_or_default();
+            out.push_str(rest.get(..open).unwrap_or_default());
+            match self.holes.iter().find(|(hole, _)| *hole == name) {
+                Some((_, value)) => out.push_str(value),
+                None => out.push_str(rest.get(open..=close).unwrap_or_default()),
+            }
+            rest = rest.get(close.saturating_add(1)..).unwrap_or_default();
+        }
+        out.push_str(rest);
+        out
+    }
 }
 
 /// How serious a [`Diagnostic`] is.
@@ -38,11 +74,11 @@ pub enum Severity {
 
 impl Diagnostic {
     pub(crate) fn error(message: impl Into<String>, at: Option<Location>) -> Self {
-        Diagnostic { severity: Severity::Error, message: message.into(), at }
+        Diagnostic { severity: Severity::Error, message: message.into(), at, wording: None }
     }
 
-    pub(crate) fn warning(message: impl Into<String>, at: Option<Location>) -> Self {
-        Diagnostic { severity: Severity::Warning, message: message.into(), at }
+    pub(crate) fn warning(wording: Wording, at: Option<Location>) -> Self {
+        Diagnostic { severity: Severity::Warning, message: wording.said(wording.text), at, wording: Some(wording) }
     }
 }
 
@@ -61,20 +97,21 @@ pub struct Location {
 /// Syntax-check `source` as a script, without running it. Returns the problems found, empty for a
 /// script the engine accepts. The parser stops at the first syntax error, so there is at most one.
 pub fn check(source: &str) -> Vec<Diagnostic> {
-    with_script(source, |_, _| Vec::new())
+    with_script(source, |_, _| ()).err().into_iter().collect()
 }
 
-/// Parse `source` and, if it parses, return what `then` finds in its syntax tree; if it does not,
+/// Parse `source` and, if it parses, return what `then` makes of its syntax tree; if it does not,
 /// the syntax error. On the script thread's stack, as running does: the guard ([`refuse`]) bounds
 /// brackets, but nested conditionals still recurse a few thousand levels in the parser and in
 /// anything that walks the tree.
-pub(crate) fn with_script<F>(source: &str, then: F) -> Vec<Diagnostic>
+pub(crate) fn with_script<T, F>(source: &str, then: F) -> Result<T, Diagnostic>
 where
-    F: FnOnce(&boa_engine::ast::Script, &Interner) -> Vec<Diagnostic> + Send,
+    T: Send,
+    F: FnOnce(&boa_engine::ast::Script, &Interner) -> T + Send,
 {
     // The same guard as running: a script the runner refuses would also take the parser too deep.
     if let Some(why) = refuse(source) {
-        return vec![Diagnostic::error(why, None)];
+        return Err(Diagnostic::error(why, None));
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -82,8 +119,8 @@ where
             let spawned =
                 std::thread::Builder::new().name("pdfcraft-js-check".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || parse(source, then));
             match spawned {
-                Ok(thread) => thread.join().unwrap_or_else(|_| vec![Diagnostic::error("the syntax check stopped with an internal error", None)]),
-                Err(e) => vec![Diagnostic::error(format!("the syntax check could not start: {e}"), None)],
+                Ok(thread) => thread.join().unwrap_or_else(|_| Err(Diagnostic::error("the syntax check stopped with an internal error", None))),
+                Err(e) => Err(Diagnostic::error(format!("the syntax check could not start: {e}"), None)),
             }
         })
     }
@@ -91,22 +128,23 @@ where
     parse(source, then)
 }
 
-fn parse<F>(source: &str, then: F) -> Vec<Diagnostic>
+fn parse<T, F>(source: &str, then: F) -> Result<T, Diagnostic>
 where
-    F: FnOnce(&boa_engine::ast::Script, &Interner) -> Vec<Diagnostic>,
+    F: FnOnce(&boa_engine::ast::Script, &Interner) -> T,
 {
     let mut parser = Parser::new(Source::from_bytes(source));
     let mut interner = Interner::default();
     match parser.parse_script(&Scope::new_global(), &mut interner) {
-        Ok(script) => then(&script, &interner),
-        Err(e) => vec![diagnostic(source, &e)],
+        Ok(script) => Ok(then(&script, &interner)),
+        Err(e) => Err(diagnostic(source, &e)),
     }
 }
 
 /// `e` as a [`Diagnostic`] placed in `source`.
 fn diagnostic(source: &str, e: &ParseError) -> Diagnostic {
+    let lines = Lines::new(source);
     let point = |line: u32, column: u32| {
-        let start = byte_at(source, line, column);
+        let start = lines.byte_at(source, line, column);
         Some(Location { line, column, bytes: start..char_end(source, start) })
     };
     match e {
@@ -115,16 +153,16 @@ fn diagnostic(source: &str, e: &ParseError) -> Diagnostic {
                 [one] => format!("expected '{one}', got '{found}'"),
                 many => format!("expected one of {}, got '{found}'", many.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ")),
             };
-            Diagnostic::error(message, Some(spanned(source, span.start(), span.end())))
+            Diagnostic::error(message, Some(spanned(&lines, source, span.start(), span.end())))
         }
         ParseError::Unexpected { message, found, span } => {
-            Diagnostic::error(format!("unexpected '{found}': {message}"), Some(spanned(source, span.start(), span.end())))
+            Diagnostic::error(format!("unexpected '{found}': {message}"), Some(spanned(&lines, source, span.start(), span.end())))
         }
         ParseError::AbruptEnd => {
             // The script stops in the middle of something; point at its last character.
             let end = source.trim_end().len();
             let start = source.get(..end).and_then(|s| s.char_indices().next_back()).map_or(0, |(i, _)| i);
-            let (line, column) = line_column(source, start);
+            let (line, column) = lines.line_column(source, start);
             Diagnostic::error(
                 "the script ends before what it opened is closed (a bracket, string, comment or statement)",
                 Some(Location { line, column, bytes: start..char_end(source, start) }),
@@ -134,7 +172,7 @@ fn diagnostic(source: &str, e: &ParseError) -> Diagnostic {
         // boa reports an unclosed string or template without a place; the lexer below finds it.
         ParseError::Lex { err: LexError::IO(e) } => {
             let at = lex(source).1.map(|start| {
-                let (line, column) = line_column(source, start);
+                let (line, column) = lines.line_column(source, start);
                 Location { line, column, bytes: start..char_end(source, start) }
             });
             Diagnostic::error(e.to_string(), at)
@@ -145,10 +183,10 @@ fn diagnostic(source: &str, e: &ParseError) -> Diagnostic {
 }
 
 /// The location from `start` to `end` (both boa positions), at least one character wide.
-pub(crate) fn spanned(source: &str, start: boa_engine::ast::Position, end: boa_engine::ast::Position) -> Location {
+pub(crate) fn spanned(lines: &Lines, source: &str, start: boa_engine::ast::Position, end: boa_engine::ast::Position) -> Location {
     let (line, column) = (start.line_number(), start.column_number());
-    let from = byte_at(source, line, column);
-    let to = byte_at(source, end.line_number(), end.column_number()).max(char_end(source, from));
+    let from = lines.byte_at(source, line, column);
+    let to = lines.byte_at(source, end.line_number(), end.column_number()).max(char_end(source, from));
     Location { line, column, bytes: from..to }
 }
 
@@ -157,57 +195,67 @@ fn char_end(source: &str, at: usize) -> usize {
     source.get(at..).and_then(|rest| rest.chars().next()).map_or(at, |c| at.saturating_add(c.len_utf8()))
 }
 
-/// Calls `visit(byte, line, column)` for each character of `source` and once more for its end,
-/// counting lines as JavaScript does, until `visit` returns `true`.
-fn walk(source: &str, mut visit: impl FnMut(usize, u32, u32) -> bool) {
-    let (mut line, mut column) = (1u32, 1u32);
-    let mut chars = source.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if visit(i, line, column) {
-            return;
-        }
-        match c {
-            '\r' => {
-                if chars.peek().is_some_and(|(_, n)| *n == '\n') {
-                    chars.next();
-                }
-                (line, column) = (line.saturating_add(1), 1);
-            }
-            '\n' | '\u{2028}' | '\u{2029}' => (line, column) = (line.saturating_add(1), 1),
-            _ => column = column.saturating_add(1),
-        }
-    }
-    visit(source.len(), line, column);
+/// Where each line of a script starts, counting line ends as JavaScript does (`\n`, `\r\n`, a
+/// lone `\r`, U+2028, U+2029): each place is then found within its own line, not by walking the
+/// script from its start, which made a long script with many warnings slow.
+pub(crate) struct Lines {
+    /// Bytes; the first is 0.
+    starts: Vec<usize>,
 }
 
-/// The byte where 1-based `line` and `column` fall: the end of the line for a column past it,
-/// the end of the source for a line past it.
-fn byte_at(source: &str, line: u32, column: u32) -> usize {
-    let mut found = source.len();
-    walk(source, |i, l, c| {
-        if l > line || (l == line && c >= column) {
-            found = i;
-            return true;
+impl Lines {
+    pub(crate) fn new(source: &str) -> Self {
+        let mut starts = vec![0];
+        let mut chars = source.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            let next = match c {
+                '\r' => match chars.peek() {
+                    Some(&(n, '\n')) => {
+                        chars.next();
+                        n.saturating_add(1)
+                    }
+                    _ => i.saturating_add(1),
+                },
+                '\n' | '\u{2028}' | '\u{2029}' => i.saturating_add(c.len_utf8()),
+                _ => continue,
+            };
+            starts.push(next);
         }
-        false
-    });
-    // A column past the line's end lands on the next line's first character; step back to the
-    // line end, which is where the parser was.
-    if line_column(source, found).0 > line {
-        found = source.get(..found).and_then(|s| s.char_indices().next_back()).map_or(0, |(i, _)| i);
+        Lines { starts }
     }
-    found
-}
 
-/// The 1-based line and column of the first character at or after byte `at` (the `\n` of a `\r\n`
-/// belongs to its `\r`, so its byte gives the next line's start).
-fn line_column(source: &str, at: usize) -> (u32, u32) {
-    let mut found = (1, 1);
-    walk(source, |i, l, c| {
-        found = (l, c);
-        i >= at
-    });
-    found
+    /// The byte where 1-based `line` and `column` fall: the end of the line for a column past it
+    /// (where the parser was), the end of the source for a line past it.
+    pub(crate) fn byte_at(&self, source: &str, line: u32, column: u32) -> usize {
+        let Some(index) = usize::try_from(line).ok().and_then(|l| l.checked_sub(1)) else { return 0 };
+        let Some(&start) = self.starts.get(index) else { return source.len() };
+        let next = self.starts.get(index.saturating_add(1)).copied();
+        let text = source.get(start..next.unwrap_or(source.len())).unwrap_or_default();
+        let wanted = usize::try_from(column).unwrap_or(usize::MAX).saturating_sub(1);
+        match (text.char_indices().nth(wanted), next) {
+            (Some((i, _)), _) => start.saturating_add(i),
+            // The line's last character: its line end.
+            (None, Some(next)) => source.get(..next).and_then(|s| s.char_indices().next_back()).map_or(0, |(i, _)| i),
+            (None, None) => source.len(),
+        }
+    }
+
+    /// The 1-based line and column of the first character at or after byte `at` (the `\n` of a
+    /// `\r\n` belongs to its `\r`, so its byte gives the next line's start).
+    pub(crate) fn line_column(&self, source: &str, at: usize) -> (u32, u32) {
+        let mut at = at.min(source.len());
+        while !source.is_char_boundary(at) {
+            at = at.saturating_add(1);
+        }
+        if at > 0 && source.get(at.saturating_sub(1)..).is_some_and(|r| r.starts_with("\r\n")) {
+            at = at.saturating_add(1);
+        }
+        let index = self.starts.partition_point(|s| *s <= at).saturating_sub(1);
+        let start = self.starts.get(index).copied().unwrap_or(0);
+        let column = source.get(start..at).map_or(0, |before| before.chars().count());
+        let number = |n: usize| u32::try_from(n.saturating_add(1)).unwrap_or(u32::MAX);
+        (number(index), number(column))
+    }
 }
 
 /// What a stretch of script is, for colouring.
@@ -556,7 +604,7 @@ fn is_name_start(c: char) -> bool {
     c == '$' || c == '_' || c.is_alphabetic()
 }
 
-fn is_name_part(c: char) -> bool {
+pub(crate) fn is_name_part(c: char) -> bool {
     is_name_start(c) || c.is_alphanumeric() || c == '\u{200C}' || c == '\u{200D}'
 }
 

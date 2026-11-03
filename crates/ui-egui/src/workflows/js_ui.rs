@@ -1,6 +1,8 @@
 //! Acrobat JavaScript in the shell: what scripts ask for (alerts, printing, navigation, links),
 //! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
 
+use std::sync::Arc;
+
 use egui::{Align, Layout};
 use pdfcraft_engine::js::{JsOutput, Message, MessageIcon, Panel, Request};
 use pdfcraft_engine::{DocId, Edit};
@@ -228,15 +230,29 @@ fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> 
 }
 
 /// What a script edited here runs with: the active document's field names and document-level
-/// scripts (except `editing`, the one being edited, whose declarations are in the editor).
-pub(crate) fn script_env(app: &PdfCraftApp, editing: Option<&str>) -> crate::widgets::ScriptEnv {
-    match app.active_ids().and_then(|(_, id)| app.session.get(id)) {
-        Some(doc) => crate::widgets::ScriptEnv {
-            fields: Some(doc.form.iter().map(|f| f.name.clone()).collect()),
-            doc_scripts: doc.document_scripts().into_iter().filter(|(n, _)| Some(n.as_str()) != editing).map(|(_, s)| s).collect(),
-        },
-        None => crate::widgets::ScriptEnv::default(),
+/// scripts (except `editing`, the one being edited, whose declarations are in the editor). Read
+/// from the document again only after an edit: the editors ask every frame, and the scripts are
+/// decoded from the file.
+pub(crate) fn script_env(ctx: &egui::Context, app: &PdfCraftApp, editing: Option<&str>) -> Arc<crate::widgets::ScriptEnv> {
+    let Some((id, doc)) = app.active_ids().and_then(|(_, id)| app.session.get(id).map(|doc| (id, doc))) else {
+        return Arc::default();
+    };
+    // One per document: the script being edited changes as its name is typed.
+    let cache = egui::Id::unique(("pdfcraft-script-env", id));
+    let generation = doc.edit_generation();
+    let editing = editing.map(str::to_owned);
+    if let Some((at, of, env)) = ctx.data(|d| d.get_temp::<(u64, Option<String>, Arc<crate::widgets::ScriptEnv>)>(cache))
+        && at == generation
+        && of == editing
+    {
+        return env;
     }
+    let env = Arc::new(crate::widgets::ScriptEnv::new(
+        Some(doc.form.iter().map(|f| f.name.clone()).collect()),
+        doc.document_scripts().into_iter().filter(|(n, _)| Some(n) != editing.as_ref()).map(|(_, s)| s).collect(),
+    ));
+    ctx.data_mut(|d| d.insert_temp(cache, (generation, editing, env.clone())));
+    env
 }
 
 /// The JavaScript console. Returns `true` to close.
@@ -261,7 +277,7 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     });
     ui.add_space(6.0);
     let hint = tl!("JavaScript, e.g. getField(\"total\").value");
-    let env = script_env(app, None);
+    let env = script_env(ui.ctx(), app, None);
     let input = crate::widgets::script_editor(ui, &mut app.js_console.input, "js-console-input", 6, f32::INFINITY, Some(hint), &env);
     let run_key = input.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
     ui.add_space(8.0);
@@ -302,7 +318,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.add_space(6.0);
     let editing = app.doc_js.name.trim().to_string();
-    let env = script_env(app, Some(&editing));
+    let env = script_env(ui.ctx(), app, Some(&editing));
     crate::widgets::script_editor(ui, &mut app.doc_js.script, "doc-js-script", 12, f32::INFINITY, None, &env);
     ui.add_space(8.0);
     let name = app.doc_js.name.trim().to_string();

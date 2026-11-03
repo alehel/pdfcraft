@@ -36,16 +36,18 @@ const MAX_HEIGHT: f32 = 900.0;
 /// which turns the field name check off.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ScriptEnv {
-    pub fields: Option<Vec<String>>,
-    pub doc_scripts: Vec<String>,
+    fields: Option<Vec<String>>,
+    doc_scripts: Vec<String>,
+    /// Both hashed, once: the editors look at it every frame.
+    key: u64,
 }
 
 impl ScriptEnv {
-    fn key(&self) -> u64 {
+    pub(crate) fn new(fields: Option<Vec<String>>, doc_scripts: Vec<String>) -> Self {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.fields.hash(&mut h);
-        self.doc_scripts.hash(&mut h);
-        h.finish()
+        fields.hash(&mut h);
+        doc_scripts.hash(&mut h);
+        Self { fields, doc_scripts, key: h.finish() }
     }
 }
 
@@ -108,8 +110,7 @@ fn editor_and_status(
     let (check_id, colours_id, shared_id, suggest_id) =
         (id.with("script-check"), id.with("script-colours"), id.with("script-shared"), id.with("script-suggest"));
     let now = ui.input(|i| i.time);
-    // The environment's hash, once a frame: it covers every field name and document script.
-    let doc_key = env.key();
+    let doc_key = env.key;
     // A script shown for the first time is checked at once (a saved script with an error says so on opening).
     let stored: Option<Check> = ui.data(|d| d.get_temp(check_id));
     // Text the box did not type itself (another field's script loaded into the same box) starts
@@ -122,71 +123,24 @@ fn editor_and_status(
         state.set_undoer(undoer);
         state.store(ui.ctx(), id);
     }
-    let mut check =
-        stored.unwrap_or_else(|| Check { seen: hash(text) ^ doc_key, shown: hash(text), edited_at: now - CHECK_AFTER, checked: None });
+    let mut check = stored.unwrap_or_else(|| Check { seen: hash(text) ^ doc_key, shown: hash(text), edited_at: now - CHECK_AFTER, checked: None });
     let mut colours: Colours = ui.data(|d| d.get_temp(colours_id)).unwrap_or_else(|| Colours { hash: hash(""), tokens: Arc::default() });
     let mut suggest: suggest::Suggest = ui.data(|d| d.get_temp(suggest_id)).unwrap_or_default();
     let palette = Palette::for_kind(Tokens::get(ui.ctx()).kind);
     let font = egui::TextStyle::Monospace.resolve(ui.style());
     let fields: &[String] = env.fields.as_deref().unwrap_or_default();
 
-    // Keys the editor handles itself, before the text box sees them.
-    let focused = ui.memory(|m| m.has_focus(id));
-    let mut requested = false;
-    if focused && let Some(selection) = selection(ui.ctx(), id) {
-        let mut done: Option<edit::Edit> = None;
-        match suggest.keys(ui) {
-            Some(suggest::Key::Accept) => {
-                if let Some((bytes, insert)) = suggest.chosen() {
-                    let range = edit::char_of(text, bytes.start)..edit::char_of(text, bytes.end);
-                    done = Some(edit::replace(text, range, &insert));
-                }
-                suggest.open = None;
-            }
-            Some(suggest::Key::Close) => suggest.open = None,
-            None => {
-                let (tab, shift_tab, enter, space) = ui.input_mut(|i| {
-                    let none = egui::Modifiers::NONE;
-                    // Shift+Tab first: a plain key also matches when Shift is held.
-                    let shift_tab = i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab);
-                    (
-                        i.consume_key(none, egui::Key::Tab),
-                        shift_tab,
-                        i.consume_key(none, egui::Key::Enter),
-                        i.consume_key(egui::Modifiers::COMMAND, egui::Key::Space),
-                    )
-                });
-                requested = space;
-                let brace = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == "}")));
-                if tab || shift_tab {
-                    let unit = edit::indent_unit(text);
-                    done = Some(if shift_tab || edit::spans_lines(text, &selection) {
-                        edit::indent_lines(text, selection.clone(), shift_tab, &unit)
-                    } else {
-                        edit::replace(text, selection.clone(), &unit)
-                    });
-                } else if enter {
-                    done = Some(edit::newline(text, selection.clone(), &edit::indent_unit(text)));
-                } else if brace && let Some(e) = edit::close_brace(text, selection.clone(), &edit::indent_unit(text)) {
-                    ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t == "}")));
-                    done = Some(e);
-                }
-            }
-        }
-        if let Some(e) = done {
-            *text = e.text;
-            set_selection(ui.ctx(), id, e.selection.clone());
-            // An edit the editor made is not typing: it opens no suggestions.
-            suggest.for_text = hash(text);
-            suggest.for_caret = e.selection.end;
-        }
-    }
+    let (requested, edited) = editor_keys(ui, text, id, &mut suggest);
+    // The caret the editor moved itself (an edit above, or a suggestion or problem clicked last
+    // frame): the text box does not see it move, so the box is scrolled to it here.
+    let reveal_id = id.with("script-reveal");
+    let reveal = edited || ui.data_mut(|d| d.remove_temp::<bool>(reveal_id)).unwrap_or_default();
 
     // The box: coloured, with problems underlined, in a frame that can be dragged taller. While
     // suggestions are open, a warning about the word being completed ("app has no al") is noise.
     let typing = suggest.open.as_ref().map(|c| c.replace.clone());
     let checked = check.checked.clone().map(|(key, found)| (key, Arc::new(unfinished(&found, typing.as_ref()))));
-    let digits = text.lines().count().max(1).to_string().len().max(2);
+    let digits = edit::line_count(text).to_string().len().max(2);
     let digit_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
     let gutter = digit_width * digits as f32 + 12.0;
     let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
@@ -247,15 +201,32 @@ fn editor_and_status(
                 if let Some(hint) = hint {
                     edit = edit.hint_text(hint);
                 }
-                output = Some(edit.show(ui));
+                // A click on the suggestion list (a layer of its own) must not take the box's
+                // focus: the list would close before it saw the click.
+                let list = egui::LayerId::new(suggest::ORDER, suggest_id);
+                let on_list = suggest.open.is_some() && ui.ctx().pointer_interact_pos().and_then(|p| ui.ctx().layer_id_at(p)) == Some(list);
+                let surrender = ui.ctx().options(|o| o.input_options.surrender_focus_on);
+                if on_list {
+                    ui.ctx().options_mut(|o| o.input_options.surrender_focus_on = egui::SurrenderFocusOn::Never);
+                }
+                let shown = edit.show(ui);
+                ui.ctx().options_mut(|o| o.input_options.surrender_focus_on = surrender);
+                if reveal && let Some(range) = shown.cursor_range {
+                    let caret = shown.galley.pos_from_cursor(range.primary).translate(shown.galley_pos.to_vec2());
+                    ui.scroll_to_rect(caret.expand(4.0), None);
+                }
+                output = Some(shown);
             });
         });
     let Some(output) = output else { return ui.label("") };
     if viewport.height().is_finite() {
         ui.data_mut(|d| d.insert_temp(height_id, (frame, viewport.height())));
     }
-    let response = output.response.response.clone().accessible_name(tl!("JavaScript"));
-    paint_gutter(ui, &output, gutter, &font, viewport);
+    let mut response = output.response.response.clone().accessible_name(tl!("JavaScript"));
+    if edited {
+        response.mark_changed();
+    }
+    paint_gutter(ui, &output, text, gutter, &font, viewport);
     let caret = output.cursor_range.map(|r| r.primary.index.0);
     if let Some(caret) = caret.filter(|_| response.has_focus()) {
         paint_brackets(ui, &output, text, &colours.tokens, caret, palette.bracket, viewport);
@@ -279,8 +250,10 @@ fn editor_and_status(
             suggest.open = found.filter(|_| wanted).map(Arc::new);
             if !keep {
                 suggest.selected = 0;
+                suggest.scrolled_to = None;
             }
-        } else if caret != suggest.for_caret {
+        } else if caret != suggest.for_caret || output.cursor_range.is_some_and(|r| r.primary.index != r.secondary.index) {
+            // The caret moved, or a selection appeared around it (Cmd+A at the end of the text).
             suggest.open = None;
         }
         suggest.for_text = text_hash;
@@ -297,12 +270,19 @@ fn editor_and_status(
                 let range = edit::char_of(text, bytes.start)..edit::char_of(text, bytes.end);
                 let e = edit::replace(text, range, &insert);
                 *text = e.text;
-                set_selection(ui.ctx(), id, e.selection);
+                set_selection(ui.ctx(), id, e.selection.clone());
                 ui.memory_mut(|m| m.request_focus(id));
+                suggest.for_caret = e.selection.end;
+                ui.data_mut(|d| d.insert_temp(reveal_id, true));
+                ui.ctx().request_repaint();
+                response.mark_changed();
             }
             suggest.open = None;
             suggest.for_text = hash(text);
         }
+    }
+    if suggest.open.is_none() {
+        suggest.scrolled_to = None;
     }
     // Escape is the box's while the list is open, from the next frame on (the box was drawn
     // before the list opened or closed this frame). egui keeps the filter only while the box has
@@ -336,7 +316,10 @@ fn editor_and_status(
     }
     let typing = suggest.open.as_ref().map(|c| c.replace.clone());
     let shown = Check { checked: check.checked.clone().map(|(k, found)| (k, Arc::new(unfinished(&found, typing.as_ref())))), ..check.clone() };
-    problems(ui, text, &shown, key, id, &palette);
+    if problems(ui, text, &shown, key, id, &palette) {
+        ui.data_mut(|d| d.insert_temp(reveal_id, true));
+        ui.ctx().request_repaint();
+    }
     ui.data_mut(|d| {
         d.insert_temp(check_id, check);
         d.insert_temp(colours_id, colours);
@@ -346,6 +329,99 @@ fn editor_and_status(
     response
 }
 
+/// The keys the editor handles itself, before the text box sees them: the suggestion list's, Tab
+/// and Shift+Tab, Enter, a typed `}` and the shortcut that opens the list. Returns whether the
+/// list was asked for, and whether the text was edited.
+fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id, suggest: &mut suggest::Suggest) -> (bool, bool) {
+    let (mut requested, mut edited) = (false, false);
+    if !ui.memory(|m| m.has_focus(id)) {
+        return (requested, edited);
+    }
+    // On anything that edits or copies there (typing, Backspace or Delete would split the line
+    // end, and Copy take half of it), but not on the keys that only move: moved back every frame, Right could never cross a line end.
+    let editing = ui.input(|i| {
+        i.events.iter().any(|e| match e {
+            egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Copy | egui::Event::Ime(_) => true,
+            egui::Event::Key { key, pressed: true, .. } => !matches!(
+                key,
+                egui::Key::ArrowLeft
+                    | egui::Key::ArrowRight
+                    | egui::Key::ArrowUp
+                    | egui::Key::ArrowDown
+                    | egui::Key::Home
+                    | egui::Key::End
+                    | egui::Key::PageUp
+                    | egui::Key::PageDown
+            ),
+            _ => false,
+        })
+    });
+    if editing {
+        snap_off_crlf(ui.ctx(), id, text);
+    }
+    let Some(selection) = selection(ui.ctx(), id) else { return (requested, edited) };
+    let backward = selected_backward(ui.ctx(), id);
+    let mut done: Option<edit::Edit> = None;
+    match suggest.keys(ui) {
+        Some(suggest::Key::Accept) => {
+            if let Some((bytes, insert)) = suggest.chosen() {
+                let range = edit::char_of(text, bytes.start)..edit::char_of(text, bytes.end);
+                done = Some(edit::replace(text, range, &insert));
+            }
+            suggest.open = None;
+        }
+        Some(suggest::Key::Close) => suggest.open = None,
+        None => {
+            let (tab, shift_tab, enter, space) = ui.input_mut(|i| {
+                let none = egui::Modifiers::NONE;
+                // The box would type a tab over the selection for Ctrl+Tab: a key that is not typing.
+                i.events.retain(
+                    |e| !matches!(e, egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. } if modifiers.ctrl || modifiers.command),
+                );
+                // Shift+Tab first: a plain key also matches when Shift is held.
+                let shift_tab = i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab);
+                (
+                    i.consume_key(none, egui::Key::Tab),
+                    shift_tab,
+                    i.consume_key(none, egui::Key::Enter),
+                    // Ctrl+Space everywhere; ⌘Space too, where the system leaves it to apps.
+                    i.consume_key(egui::Modifiers::CTRL, egui::Key::Space) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Space),
+                )
+            });
+            requested = space;
+            // Only a `}` typed on its own: one among other text this frame goes in with it, in order.
+            let brace = ui.input(|i| {
+                let mut typed = i.events.iter().filter_map(|e| if let egui::Event::Text(t) = e { Some(t) } else { None });
+                typed.next().is_some_and(|t| t == "}") && typed.next().is_none()
+            });
+            if tab || shift_tab {
+                let unit = edit::indent_unit(text);
+                done = Some(if shift_tab || edit::indents_lines(text, &selection) {
+                    edit::indent_lines(text, selection.clone(), shift_tab, &unit)
+                } else {
+                    edit::replace(text, selection.clone(), &unit)
+                });
+            } else if enter {
+                done = Some(edit::newline(text, selection.clone(), &edit::indent_unit(text)));
+            } else if brace && let Some(e) = edit::close_brace(text, selection.clone(), &edit::indent_unit(text)) {
+                ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t == "}")));
+                done = Some(e);
+            }
+        }
+    }
+    if let Some(e) = done {
+        *text = e.text;
+        set_selection_facing(ui.ctx(), id, e.selection.clone(), backward);
+        // An edit the editor made is not typing: it opens no suggestions, and closes the
+        // list, whose place in the text it may have moved.
+        suggest.open = None;
+        suggest.for_text = hash(text);
+        suggest.for_caret = e.selection.end;
+        edited = true;
+    }
+    (requested, edited)
+}
+
 /// The keys the box keeps while it has focus: the arrows, Tab (it indents), and Escape while
 /// the suggestion list is open. Without Escape, egui takes the box's focus away on Escape before
 /// the box sees the key, and a dialog the box is in closes instead of the list.
@@ -353,9 +429,11 @@ fn keys_kept(escape: bool) -> egui::EventFilter {
     egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape }
 }
 
-/// `found` without warnings about exactly the bytes `typing`: the word suggestions are open for.
+/// `found` without warnings about the word suggestions are open for (`typing`): the warning's
+/// place takes it in (`"Tot"` for the name inside the quotes).
 fn unfinished(found: &[Diagnostic], typing: Option<&Range<usize>>) -> Vec<Diagnostic> {
-    found.iter().filter(|d| d.severity == Severity::Error || typing.is_none_or(|t| d.at.as_ref().is_none_or(|at| at.bytes != *t))).cloned().collect()
+    let about = |d: &Diagnostic, t: &Range<usize>| d.at.as_ref().is_some_and(|at| at.bytes.start <= t.start && t.end <= at.bytes.end);
+    found.iter().filter(|d| d.severity == Severity::Error || typing.is_none_or(|t| !about(d, t))).cloned().collect()
 }
 
 /// The selection of text box `id`, in characters, from its stored state.
@@ -366,21 +444,49 @@ fn selection(ctx: &egui::Context, id: egui::Id) -> Option<Range<usize>> {
     Some(a.index.0..b.index.0)
 }
 
+/// A caret (or selection end) egui put between the `\r` and the `\n` of a line end, as End and a
+/// click past a line's end do, moved before the `\r`: Enter, Tab and typing there would split it.
+fn snap_off_crlf(ctx: &egui::Context, id: egui::Id, text: &str) {
+    let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) else { return };
+    let Some(range) = state.cursor.char_range() else { return };
+    let snap = |c: CCursor| if edit::inside_crlf(text, c.index.0) { CCursor::new(c.index.0.saturating_sub(1)) } else { c };
+    let (primary, secondary) = (snap(range.primary), snap(range.secondary));
+    if (primary, secondary) != (range.primary, range.secondary) {
+        state.cursor.set_char_range(Some(CCursorRange::two(secondary, primary)));
+        state.store(ctx, id);
+    }
+}
+
+/// Whether the selection of text box `id` was made backward (its caret at the start).
+fn selected_backward(ctx: &egui::Context, id: egui::Id) -> bool {
+    egui::text_edit::TextEditState::load(ctx, id).and_then(|s| s.cursor.char_range()).is_some_and(|r| r.primary.index.0 < r.secondary.index.0)
+}
+
 fn set_selection(ctx: &egui::Context, id: egui::Id, selection: Range<usize>) {
+    set_selection_facing(ctx, id, selection, false);
+}
+
+/// Put the selection of text box `id` on `selection`, its caret at the start when `backward`.
+fn set_selection_facing(ctx: &egui::Context, id: egui::Id, selection: Range<usize>, backward: bool) {
     let mut state = egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
-    state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(selection.start), CCursor::new(selection.end))));
+    let (start, end) = (CCursor::new(selection.start), CCursor::new(selection.end));
+    let range = if backward { CCursorRange::two(end, start) } else { CCursorRange::two(start, end) };
+    state.cursor.set_char_range(Some(range));
     state.store(ctx, id);
 }
 
 /// Line numbers in the box's left margin, by the first row of each line (a wrapped line has one).
-/// Only the rows in `viewport`, the part of the scrolled box that shows, are numbered.
-fn paint_gutter(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, gutter: f32, font: &egui::FontId, viewport: egui::Rect) {
+/// Only the rows in `viewport`, the part of the scrolled box that shows, are numbered. A row
+/// starts a line when the one before ends with a line end of `text`: egui marks only `\n` rows,
+/// and breaks rows at a lone `\r` and U+2028 as well.
+fn paint_gutter(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, text: &str, gutter: f32, font: &egui::FontId, viewport: egui::Rect) {
     let t = Tokens::get(ui.ctx());
     let rect = output.response.response.rect.intersect(viewport);
     let painter = ui.painter_at(rect);
     let right = rect.left() + 4.0 + gutter;
     let mut line = 1usize;
     let mut starts_line = true;
+    let mut chars = text.chars();
     for row in &output.galley.rows {
         let y = output.galley_pos.y + row.rect().min.y;
         if starts_line && y + row.rect().height() > rect.top() && y < rect.bottom() {
@@ -389,7 +495,8 @@ fn paint_gutter(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, gutter:
         if starts_line {
             line = line.saturating_add(1);
         }
-        starts_line = row.ends_with_newline;
+        let last = chars.by_ref().take(row.char_count_including_newline().0).last();
+        starts_line = last.is_some_and(edit::is_line_end);
     }
     painter.vline(right, rect.y_range(), Stroke::new(1.0, t.divider));
 }
@@ -418,22 +525,23 @@ fn paint_brackets(
 
 /// The lines under the box: the problems found (the first few, then how many more), or that there
 /// are none. While a check is pending the previous result stays, muted, so the lines do not
-/// flicker on every keystroke. Clicking a problem puts the caret on it.
-fn problems(ui: &mut egui::Ui, text: &str, check: &Check, key: u64, editor: egui::Id, palette: &Palette) {
+/// flicker on every keystroke. Clicking a problem puts the caret on it, and returns `true`.
+fn problems(ui: &mut egui::Ui, text: &str, check: &Check, key: u64, editor: egui::Id, palette: &Palette) -> bool {
     // The line keeps its height when it has nothing to say, so the buttons below never move
     // under the pointer when the first character is typed or the box is cleared.
     let checked = check.checked.as_ref().filter(|_| !text.trim().is_empty());
     let Some((of, found)) = checked else {
         let height = ui.text_style_height(&egui::TextStyle::Small);
         ui.allocate_space(egui::vec2(0.0, height));
-        return;
+        return false;
     };
     let fresh = *of == key;
     let muted = Tokens::get(ui.ctx()).text_muted;
     if found.is_empty() {
         ui.label(egui::RichText::new(tl!("No problems found")).small().color(muted));
-        return;
+        return false;
     }
+    let mut moved = false;
     for problem in found.iter().take(LISTED_PROBLEMS) {
         let colour = match problem.severity {
             _ if !fresh => muted,
@@ -448,6 +556,7 @@ fn problems(ui: &mut egui::Ui, text: &str, check: &Check, key: u64, editor: egui
                     let index = edit::char_of(text, at.bytes.start);
                     set_selection(ui.ctx(), editor, index..index);
                     ui.ctx().memory_mut(|m| m.request_focus(editor));
+                    moved = true;
                 }
             }
             None => {
@@ -459,20 +568,23 @@ fn problems(ui: &mut egui::Ui, text: &str, check: &Check, key: u64, editor: egui
     if more > 0 {
         ui.label(egui::RichText::new(crate::i18n::fmt(tl!("and {n} more"), &[("n", &more.to_string())])).small().color(muted));
     }
+    moved
 }
 
 /// What the problem list says about `problem`.
 fn describe(problem: &Diagnostic) -> String {
+    // A warning in this language, holes and all; an error in the parser's words.
+    let message = problem.wording.as_ref().map_or_else(|| problem.message.clone(), |w| w.said(crate::i18n::t(w.text)));
     match (&problem.at, problem.severity) {
         (Some(at), Severity::Error) => crate::i18n::fmt(
             tl!("Line {line}, column {column}: {message}"),
-            &[("line", &at.line.to_string()), ("column", &at.column.to_string()), ("message", &problem.message)],
+            &[("line", &at.line.to_string()), ("column", &at.column.to_string()), ("message", &message)],
         ),
         (Some(at), Severity::Warning) => crate::i18n::fmt(
             tl!("Line {line}, column {column}, warning: {message}"),
-            &[("line", &at.line.to_string()), ("column", &at.column.to_string()), ("message", &problem.message)],
+            &[("line", &at.line.to_string()), ("column", &at.column.to_string()), ("message", &message)],
         ),
-        (None, _) => crate::i18n::fmt(tl!("Syntax error: {message}"), &[("message", &problem.message)]),
+        (None, _) => crate::i18n::fmt(tl!("Syntax error: {message}"), &[("message", &message)]),
     }
 }
 
@@ -558,8 +670,22 @@ impl Palette {
 }
 
 /// `source` laid out in `font`, its `tokens` coloured and its problems (`marks`) underlined, an
-/// error in red over a tint, a warning in amber.
+/// error in red over a tint, a warning in amber. A lone `\r` (Acrobat's line end) is laid out as
+/// a `\n`: egui starts a row only at `\n`. Both are one byte and one character, so every place in
+/// the layout is still that place in the script, as egui's own password boxes lay out other
+/// characters than they hold.
 fn layout_job(source: &str, tokens: &[Token], marks: &[(Range<usize>, Severity)], palette: &Palette, font: &egui::FontId) -> LayoutJob {
+    let shown: std::borrow::Cow<'_, str> = if source.contains('\r') {
+        let mut chars = source.chars().peekable();
+        let mut out = String::with_capacity(source.len());
+        while let Some(c) = chars.next() {
+            out.push(if c == '\r' && chars.peek() != Some(&'\n') { '\n' } else { c });
+        }
+        out.into()
+    } else {
+        source.into()
+    };
+    let source = shown.as_ref();
     let mut job = LayoutJob::default();
     // Cut points: where a token or a mark starts or ends. Every token and mark sits on
     // character boundaries, so every cut does.
@@ -574,17 +700,24 @@ fn layout_job(source: &str, tokens: &[Token], marks: &[(Range<usize>, Severity)]
     cuts.retain(|c| *c <= source.len() && source.is_char_boundary(*c));
     cuts.sort_unstable();
     cuts.dedup();
+    // The most serious mark covering each piece (`cuts[i]..cuts[i + 1]`): each mark's pieces are
+    // found by its cuts, rather than every mark looked at for every piece of a long script.
+    let mut marked: Vec<Option<Severity>> = vec![None; cuts.len().saturating_sub(1)];
+    for (m, severity) in marks {
+        let (first, last) = (cuts.partition_point(|c| *c < m.start), cuts.partition_point(|c| *c < m.end));
+        for piece in marked.get_mut(first..last).into_iter().flatten() {
+            *piece = Some(piece.map_or(*severity, |s| s.min(*severity)));
+        }
+    }
     let mut token = tokens.iter().peekable();
-    for pair in cuts.windows(2) {
+    for (i, pair) in cuts.windows(2).enumerate() {
         let [from, to] = pair else { continue };
         let Some(piece) = source.get(*from..*to) else { continue };
         while token.next_if(|t| t.bytes.end <= *from).is_some() {}
         let kind = token.peek().filter(|t| t.bytes.start <= *from).map(|t| t.kind);
         let mut format = TextFormat { font_id: font.clone(), color: kind.map_or(palette.text, |k| palette.of(k)), ..Default::default() };
         format.italics = kind == Some(TokenKind::Comment);
-        // The most serious mark covering the piece.
-        let mark = marks.iter().filter(|(m, _)| m.start <= *from && *to <= m.end).map(|(_, s)| *s).min();
-        match mark {
+        match marked.get(i).copied().flatten() {
             Some(Severity::Error) => {
                 format.underline = Stroke::new(1.5, palette.error);
                 format.background = palette.error.gamma_multiply(0.18);

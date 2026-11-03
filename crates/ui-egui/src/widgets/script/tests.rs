@@ -54,14 +54,51 @@ fn the_editor_keeps_its_height_as_the_box_fills_and_empties() {
         let output = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| {
             h = ui.vertical(|ui| script_editor(ui, &mut text, "probe", 4, 300.0, None)).response.rect.height();
         });
+        let said: Vec<String> =
+            output.shapes.iter().filter_map(|c| if let egui::Shape::Text(t) = &c.shape { Some(t.galley.text().to_owned()) } else { None }).collect();
         output.drop_without_applying_deltas();
-        h
+        (h, said)
     };
-    let empty = height("", 1.0);
-    let typed = height("v", 1.1);
-    let error = height("var (", 2.0);
-    let cleared = height("", 3.0);
+    let (empty, _) = height("", 1.0);
+    let (typed, _) = height("v", 1.1);
+    height("var (", 2.0);
+    // Once typing has paused, so the line under the box says what is wrong.
+    let (error, said) = height("var (", 2.5);
+    assert!(said.iter().any(|s| s.starts_with("Line 1")), "the error is shown: {said:?}");
+    let (cleared, _) = height("", 3.0);
     assert!((empty - typed).abs() < 0.5 && (empty - error).abs() < 0.5 && (empty - cleared).abs() < 0.5, "{empty} {typed} {error} {cleared}");
+}
+
+#[test]
+fn undo_never_brings_back_the_script_shown_before() {
+    // One box shows one field's script, then another's (the same box id): Cmd+Z after typing
+    // in the second goes back to the second script as it came, not to the first.
+    let ctx = egui::Context::default();
+    let mut id = egui::Id::NULL;
+    let mut show = |text: &mut String, time: f64, events: Vec<egui::Event>| {
+        let input = egui::RawInput { time: Some(time), events, focused: true, ..Default::default() };
+        let output = ctx.run_ui(input, |ui| {
+            id = ui.make_persistent_id("probe");
+            ui.memory_mut(|m| m.request_focus(id));
+            script_editor(ui, text, "probe", 4, 300.0, None);
+        });
+        output.drop_without_applying_deltas();
+    };
+    let typed = |s: &str| vec![egui::Event::Text(s.into())];
+    let mut first = String::from("first");
+    show(&mut first, 1.0, Vec::new());
+    show(&mut first, 1.1, Vec::new());
+    show(&mut first, 2.0, typed("x"));
+    show(&mut first, 5.0, Vec::new());
+    assert_eq!(first, "firstx");
+
+    let mut second = String::from("second");
+    show(&mut second, 6.0, Vec::new());
+    show(&mut second, 6.1, typed("y"));
+    assert_eq!(second, "secondy");
+    let undo = egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
+    show(&mut second, 6.2, vec![undo]);
+    assert_eq!(second, "second");
 }
 
 #[test]
@@ -140,4 +177,22 @@ fn every_colour_reads_on_its_background() {
             assert!(ratio >= 4.5, "{kind:?} {name}: {ratio:.2}:1");
         }
     }
+}
+
+#[test]
+fn a_check_that_finds_something_asks_for_a_frame_to_underline_it() {
+    // The box is laid out before the check runs: without another frame the underline would wait
+    // for the next input.
+    let ctx = egui::Context::default();
+    let mut text = String::from("var a;");
+    // egui itself asks for the first two frames.
+    for time in [1.0, 5.0, 6.0] {
+        frame(&ctx, &mut text, time);
+    }
+    assert!(!ctx.has_requested_repaint(), "nothing to do: no frame asked for");
+    text = String::from("if (a {");
+    frame(&ctx, &mut text, 7.0);
+    let (check, _) = frame(&ctx, &mut text, 7.5);
+    assert_eq!(found(&check).map(|d| d.len()), Some(1), "checked once typing paused");
+    assert!(ctx.has_requested_repaint(), "the next frame underlines what the check found");
 }

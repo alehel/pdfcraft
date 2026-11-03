@@ -11,7 +11,7 @@
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
 pub use pdfcraft_js::{
-    Diagnostic, Limits, Location, Message, MessageButtons, MessageIcon, Outcome, Panel, Request, Token, TokenKind, check, highlight,
+    Diagnostic, Limits, Location, MAX_SCRIPT_BYTES, Message, MessageButtons, MessageIcon, Outcome, Panel, Request, Token, TokenKind, check, highlight,
 };
 
 use crate::{DocId, Edit, EditError, Session};

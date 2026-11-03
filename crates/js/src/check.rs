@@ -82,10 +82,10 @@ fn diagnostic(source: &str, e: &ParseError) -> Diagnostic {
                 [one] => format!("expected '{one}', got '{found}'"),
                 many => format!("expected one of {}, got '{found}'", many.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ")),
             };
-            Diagnostic { message, at: spanned(source, span.start(), span.end()) }
+            Diagnostic { message, at: Some(spanned(source, span.start(), span.end())) }
         }
         ParseError::Unexpected { message, found, span } => {
-            Diagnostic { message: format!("unexpected '{found}': {message}"), at: spanned(source, span.start(), span.end()) }
+            Diagnostic { message: format!("unexpected '{found}': {message}"), at: Some(spanned(source, span.start(), span.end())) }
         }
         ParseError::AbruptEnd => {
             // The script stops in the middle of something; point at its last character.
@@ -116,11 +116,11 @@ fn diagnostic(source: &str, e: &ParseError) -> Diagnostic {
 }
 
 /// The location from `start` to `end` (both boa positions), at least one character wide.
-fn spanned(source: &str, start: boa_engine::ast::Position, end: boa_engine::ast::Position) -> Option<Location> {
+fn spanned(source: &str, start: boa_engine::ast::Position, end: boa_engine::ast::Position) -> Location {
     let (line, column) = (start.line_number(), start.column_number());
     let from = byte_at(source, line, column);
     let to = byte_at(source, end.line_number(), end.column_number()).max(char_end(source, from));
-    Some(Location { line, column, bytes: from..to })
+    Location { line, column, bytes: from..to }
 }
 
 /// The end of the character starting at byte `at` (`at` itself at the end of `source`).
@@ -170,7 +170,8 @@ fn byte_at(source: &str, line: u32, column: u32) -> usize {
     found
 }
 
-/// The 1-based line and column of byte `at` (rounded down to a character boundary).
+/// The 1-based line and column of the first character at or after byte `at` (the `\n` of a `\r\n`
+/// belongs to its `\r`, so its byte gives the next line's start).
 fn line_column(source: &str, at: usize) -> (u32, u32) {
     let mut found = (1, 1);
     walk(source, |i, l, c| {
@@ -251,7 +252,7 @@ const KEYWORDS: &[&str] = &[
 const LITERALS: &[&str] = &["true", "false", "null", "undefined", "NaN", "Infinity"];
 
 /// Globals PdfCraft provides from Acrobat's object model (see the crate documentation).
-const API: &[&str] = &["app", "color", "console", "display", "event", "getField", "global", "util"];
+pub(crate) const API: &[&str] = &["app", "color", "console", "display", "event", "getField", "util"];
 
 /// Keywords after which a `/` starts a regular expression rather than dividing.
 const BEFORE_REGEX: &[&str] =
@@ -269,7 +270,17 @@ pub fn highlight(source: &str) -> Vec<Token> {
 
 /// [`highlight`]'s tokens, and where the first string or template left open starts.
 fn lex(source: &str) -> (Vec<Token>, Option<usize>) {
-    let mut lexer = Lexer { s: source, i: 0, out: Vec::new(), regex_ok: true, after_dot: false, braces: Vec::new(), unclosed: None };
+    let mut lexer = Lexer {
+        s: source,
+        i: 0,
+        out: Vec::new(),
+        regex_ok: true,
+        after_dot: false,
+        braces: Vec::new(),
+        unclosed: None,
+        keyword_paren: false,
+        parens: Vec::new(),
+    };
     lexer.run();
     (lexer.out, lexer.unclosed)
 }
@@ -287,6 +298,11 @@ struct Lexer<'a> {
     braces: Vec<(usize, usize)>,
     /// Where the first string or template that is never closed starts.
     unclosed: Option<usize>,
+    /// Whether the last token was `if`, `while`, `for` or `with`, whose `(…)` a regular
+    /// expression may follow (`if (x) /re/.test(s)`), unlike other brackets' (`(a + b) / 2`).
+    keyword_paren: bool,
+    /// For each open `(`, whether it was such a keyword's.
+    parens: Vec<bool>,
 }
 
 impl Lexer<'_> {
@@ -352,6 +368,9 @@ impl Lexer<'_> {
                 self.word(start);
             } else {
                 self.bump();
+                // Whether a `/` after `c` starts a regular expression: not after a value's
+                // closing bracket, but after a keyword's `(…)` and after a block's `}`.
+                let mut regex_ok = c != ']';
                 match c {
                     '{' => {
                         if let Some((open, _)) = self.braces.last_mut() {
@@ -363,10 +382,12 @@ impl Lexer<'_> {
                             *open = open.saturating_sub(1);
                         }
                     }
+                    '(' => self.parens.push(self.keyword_paren),
+                    ')' => regex_ok = self.parens.pop().unwrap_or(false),
                     _ => {}
                 }
                 if !c.is_whitespace() {
-                    self.after(!matches!(c, ')' | ']' | '}'), c == '.');
+                    self.after(regex_ok, c == '.');
                 }
             }
         }
@@ -375,6 +396,7 @@ impl Lexer<'_> {
     fn after(&mut self, regex_ok: bool, after_dot: bool) {
         self.regex_ok = regex_ok;
         self.after_dot = after_dot;
+        self.keyword_paren = false;
     }
 
     fn skip_to_line_end(&mut self) {
@@ -384,10 +406,10 @@ impl Lexer<'_> {
     }
 
     /// The rest of a string opened by `quote`, to its close or the end of the line. Returns
-    /// whether it was closed.
+    /// whether it was closed. U+2028 and U+2029 end a line but not a string (ECMAScript 2019).
     fn string(&mut self, quote: char) -> bool {
         while let Some(c) = self.peek() {
-            if is_line_end(c) {
+            if matches!(c, '\n' | '\r') {
                 return false;
             }
             self.bump();
@@ -493,6 +515,7 @@ impl Lexer<'_> {
             self.push(kind, start);
         }
         self.after(BEFORE_REGEX.contains(&word), false);
+        self.keyword_paren = matches!(word, "if" | "while" | "for" | "with");
     }
 }
 

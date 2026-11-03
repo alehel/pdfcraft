@@ -14,9 +14,9 @@ use crate::theme::{ThemeKind, Tokens};
 /// How long typing must pause before the script is checked, in seconds.
 const CHECK_AFTER: f64 = 0.4;
 
-/// Longest script coloured; a longer one (past the engine's own limit, which the check reports)
-/// is shown plain, so a huge paste costs no more than plain text to lay out.
-const MAX_COLOURED_BYTES: usize = 256 * 1024;
+/// Longest script coloured: the engine's own limit. A longer one (which the check reports) is
+/// shown plain, so a huge paste costs no more than plain text to lay out.
+const MAX_COLOURED_BYTES: usize = pdfcraft_engine::js::MAX_SCRIPT_BYTES;
 
 /// The editor's check: the text it last saw (by hash), when that text changed, and the
 /// diagnostics for the text last checked.
@@ -51,8 +51,18 @@ fn editor_and_status(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: u
     let (check_id, colours_id) = (id.with("script-check"), id.with("script-colours"));
     let now = ui.input(|i| i.time);
     // A script shown for the first time is checked at once (a saved script with an error says so on opening).
-    let mut check: Check =
-        ui.data(|d| d.get_temp(check_id)).unwrap_or_else(|| Check { seen: hash(text), edited_at: now - CHECK_AFTER, checked: None });
+    let stored: Option<Check> = ui.data(|d| d.get_temp(check_id));
+    // Text the box did not type itself (another field's script loaded into the same box) starts
+    // its own undo history: Cmd+Z must not bring back the script shown before it.
+    if stored.as_ref().is_none_or(|c| c.seen != hash(text))
+        && let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id)
+    {
+        let mut undoer = egui::util::undoer::Undoer::<(CCursorRange, String)>::default();
+        undoer.feed_state(now, &(state.cursor.char_range().unwrap_or_default(), text.clone()));
+        state.set_undoer(undoer);
+        state.store(ui.ctx(), id);
+    }
+    let mut check = stored.unwrap_or_else(|| Check { seen: hash(text), edited_at: now - CHECK_AFTER, checked: None });
     let mut colours: Colours = ui.data(|d| d.get_temp(colours_id)).unwrap_or_else(|| Colours { hash: hash(""), tokens: Arc::default() });
     let palette = Palette::for_kind(Tokens::get(ui.ctx()).kind);
     let checked = check.checked.clone();
@@ -89,6 +99,8 @@ fn editor_and_status(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: u
         let waited = now - check.edited_at;
         if waited >= CHECK_AFTER {
             check.checked = Some((h, Arc::new(pdfcraft_engine::js::check(text))));
+            // The box was laid out before the check: underline what it found now, not on the next input.
+            ui.ctx().request_repaint();
         } else {
             // `try_` and a fallback: a clock that is not finite must not panic here.
             let wait = std::time::Duration::try_from_secs_f64((CHECK_AFTER - waited).clamp(0.0, CHECK_AFTER)).unwrap_or_default();

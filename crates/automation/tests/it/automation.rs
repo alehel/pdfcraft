@@ -7351,8 +7351,8 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
     }
 }
 
-/// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
-/// lines, every message with its details, and requests.
+/// `js_check` passes a good script and places a syntax error in lines and characters, without
+/// running either; a script too deeply nested to parse is refused without a place.
 #[test]
 fn checking_javascript_syntax_through_tools() {
     let dir = workdir("js-check");
@@ -7369,6 +7369,8 @@ fn checking_javascript_syntax_through_tools() {
     assert!(r["errors"][0].get("line").is_none(), "no place for a script too deep to parse: {r}");
 }
 
+/// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
+/// lines, every message with its details, and requests.
 #[test]
 fn javascript_through_tools() {
     let dir = workdir("js");

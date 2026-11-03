@@ -176,3 +176,29 @@ fn places_past_a_line_or_the_source_end_clamp_to_it() {
     assert_eq!(byte_at("ab", 5, 1), 2, "past the last line: the end");
     assert_eq!(byte_at("", 1, 1), 0);
 }
+
+#[test]
+fn a_line_separator_inside_a_string_does_not_end_it() {
+    // Allowed in string literals since ECMAScript 2019, and the parser accepts it.
+    let source = "var s = \"a\u{2028}b\"; var t = 'c';";
+    assert_eq!(check(source), Vec::new());
+    let strings: Vec<&str> = highlight(source).iter().filter(|t| t.kind == TokenKind::String).filter_map(|t| source.get(t.bytes.clone())).collect();
+    assert_eq!(strings, ["\"a\u{2028}b\"", "'c'"]);
+}
+
+#[test]
+fn every_name_coloured_as_acrobat_s_is_one_the_engine_provides() {
+    for name in API {
+        let script = format!("if (typeof {name} === 'undefined') throw new Error('missing');");
+        let outcome = crate::run(&script, &crate::Event::doc("Open"), &crate::DocInfo::default(), &[], &[], crate::Limits::default());
+        assert_eq!(outcome.error, None, "{name}");
+    }
+}
+
+#[test]
+fn a_slash_after_a_keyword_s_brackets_or_a_block_starts_a_regex() {
+    let kinds = |s: &str| highlight(s).into_iter().map(|t| (t.kind, s.get(t.bytes).unwrap_or_default().to_string())).collect::<Vec<_>>();
+    assert!(kinds("if (x) /'/.test(s);").contains(&(TokenKind::Regex, "/'/".into())), "after a keyword's brackets");
+    assert!(kinds("{}\n/a/.test(s);").contains(&(TokenKind::Regex, "/a/".into())), "after a block");
+    assert!(!kinds("x = (a + b) / 2 / c;").iter().any(|(k, _)| *k == TokenKind::Regex), "division after a value's bracket");
+}

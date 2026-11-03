@@ -7097,6 +7097,27 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
     }
 }
 
+/// `js_run` says which of Acrobat's names a script used that PdfCraft lacks, or has but can't
+/// act on, so that a form doing less than in Acrobat says why.
+#[test]
+fn js_run_reports_what_the_object_model_lacks() {
+    let dir = workdir("js-unsupported");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Name" }));
+    let r = ok(
+        &mut a,
+        "js_run",
+        json!({ "doc": doc, "script": "var f = getField('Name'); f.textSize = 9; f.value = 'Ada'; app.response('Who?'); typeof this.getAnnots" }),
+    );
+    assert_eq!(r["error"], json!(null));
+    assert_eq!(r["result"], "undefined");
+    assert_eq!(r["unsupported"], json!({ "missing": ["Doc.getAnnots", "Field.textSize"], "inert": ["app.response"] }));
+    // What the model has is not reported.
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "getField('Name').value + this.numPages" }));
+    assert_eq!(r["unsupported"], json!({ "missing": [], "inert": [] }));
+}
+
 /// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
 /// lines, every message with its details, and requests.
 #[test]

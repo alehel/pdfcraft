@@ -363,6 +363,8 @@ fn app_alert_titles_are_clipped_and_charged() {
         doc: doc(),
         kept: 0,
         dropped: 0,
+        unsupported: BTreeSet::new(),
+        inert: BTreeSet::new(),
     };
     h.alert(Message { title: Some("Order form".into()), ..Message::plain("Saved") });
     assert_eq!(h.kept, "Saved".len() + "Order form".len());

@@ -16,6 +16,11 @@ pub(crate) struct Host {
     pub(crate) kept: usize,
     /// Alerts, console lines and requests the limits left out.
     pub(crate) dropped: usize,
+    /// Names of Acrobat's object model the script used and the model lacks
+    /// ([`crate::unsupported`]).
+    pub(crate) unsupported: BTreeSet<String>,
+    /// Names the script used that the model has but that do nothing here or give a fixed answer.
+    pub(crate) inert: BTreeSet<String>,
 }
 
 impl Host {

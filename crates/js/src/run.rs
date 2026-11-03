@@ -210,12 +210,14 @@ fn run_here(
         doc: doc.clone(),
         kept: 0,
         dropped: 0,
+        unsupported: BTreeSet::new(),
+        inert: BTreeSet::new(),
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
     let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
-        let ev = event_object(&mut ctx, event);
+        let ev = event_object(&mut ctx, event)?;
         ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
@@ -248,6 +250,8 @@ fn run_here(
         out.alerts = h.alerts;
         out.console = h.console;
         out.requests = h.requests;
+        out.unsupported = h.unsupported.into_iter().collect();
+        out.inert = h.inert.into_iter().collect();
         if h.dropped > 0 {
             out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
         }

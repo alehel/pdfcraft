@@ -289,6 +289,14 @@ pub struct Outcome {
     pub doc_errors: Vec<String>,
     /// The script's completion value (what the console prints), unless undefined.
     pub result: Option<String>,
+    /// Names of Acrobat's object model that the script (or a document script run before it)
+    /// used and PdfCraft lacks, as the *JavaScript for Acrobat API Reference* writes them
+    /// (`Doc.getAnnots`, `Field.textSize`, `app.openDoc`), sorted, at most 64. A read gave the
+    /// script `undefined`; a write was kept on the object and changed nothing else.
+    pub unsupported: Vec<String>,
+    /// Names the script used that PdfCraft has but that do nothing here or give a fixed answer
+    /// (`app.response`, a question asked with `app.alert`, `Doc.calculateNow`), sorted, at most 64.
+    pub inert: Vec<String>,
 }
 
 /// Bounds that keep a script from hanging the viewer.

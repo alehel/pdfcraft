@@ -40,6 +40,7 @@ mod globals;
 mod host;
 mod model;
 mod run;
+mod unsupported;
 
 #[cfg(test)]
 pub(crate) use format::PRINTD_SCANNED;

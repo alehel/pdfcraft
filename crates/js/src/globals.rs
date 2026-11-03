@@ -2,6 +2,7 @@ use super::document::{field_object, get_field, get_nth_field_name, noop, num_fie
 use super::format::{printd, printf, printx, scand};
 use super::host::{arg, function, host, s, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
+use super::unsupported::{APP, COLOR, CONSOLE, DISPLAY, DOC, EVENT, MAX_NAME_CHARS, UTIL, guard, inert};
 use super::{
     Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
     js_string,
@@ -78,6 +79,9 @@ pub(crate) fn message_box_message(args: &[JsValue], ctx: &mut Context) -> JsResu
 /// given in that order or as one object with those keys, and returns 1 (the OK button).
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = alert_message(args, ctx)?;
+    if m.buttons != MessageButtons::Ok {
+        inert(ctx, "app.alert")?;
+    }
     host(ctx)?.borrow_mut().alert(m);
     // Always the OK button for now: the viewer can't ask the user and run the script on with
     // the answer yet (#4291).
@@ -116,18 +120,20 @@ pub(crate) fn menu_item(name: &str) -> Option<Request> {
 }
 
 /// `app.execMenuItem(name)`: queues the request [`menu_item`] gives for the name (Save opens
-/// Save As too); an unknown name does nothing.
+/// Save As too); an unknown name does nothing, and is reported as inert.
 fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let item = text(&arg(args, 0), ctx)?;
-    if let Some(r) = menu_item(&item) {
-        host(ctx)?.borrow_mut().request(r);
+    match menu_item(&item) {
+        Some(r) => host(ctx)?.borrow_mut().request(r),
+        None => inert(ctx, &format!("app.execMenuItem(\"{}\")", item.chars().take(MAX_NAME_CHARS).collect::<String>()))?,
     }
     Ok(JsValue::undefined())
 }
 
 /// `app.response(…)`: always `null`, the answer for a canceled dialog, since no one is there to
 /// type one.
-fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+fn response(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    inert(ctx, "app.response")?;
     // No one to answer: as if the dialog was cancelled.
     Ok(JsValue::null())
 }
@@ -143,9 +149,19 @@ fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
-fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+fn timer(_: &JsValue, _: &[JsValue], name: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    inert(ctx, &name.to_std_string_escaped())?;
     // Timers never fire in the sandbox; scripts get an object they can pass to clear*.
     Ok(ObjectInitializer::new(ctx).build().into())
+}
+
+/// A function of the model that does nothing here, recorded as inert under `name` when called.
+fn inert_fn(name: &'static str) -> NativeFunction {
+    fn call(_: &JsValue, _: &[JsValue], name: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
+        inert(ctx, &name.to_std_string_escaped())?;
+        Ok(JsValue::undefined())
+    }
+    NativeFunction::from_copy_closure_with_captures(call, JsString::from(name))
 }
 
 /// The `color` object: each named color (`transparent`, `black`, `red`, `cyan`, `gray`, …) as
@@ -187,8 +203,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
         ("print", 1, NativeFunction::from_fn_ptr(print)),
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),
-        ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
-        ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
+        ("mailDoc", 1, inert_fn("Doc.mailDoc")),
+        ("calculateNow", 0, inert_fn("Doc.calculateNow")),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
     ];
@@ -228,8 +244,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
-        .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)
-        .function(NativeFunction::from_fn_ptr(timer), js_string!("setInterval"), 2)
+        .function(NativeFunction::from_copy_closure_with_captures(timer, js_string!("app.setTimeOut")), js_string!("setTimeOut"), 2)
+        .function(NativeFunction::from_copy_closure_with_captures(timer, js_string!("app.setInterval")), js_string!("setInterval"), 2)
         .function(NativeFunction::from_fn_ptr(noop), js_string!("clearTimeOut"), 1)
         .function(NativeFunction::from_fn_ptr(noop), js_string!("clearInterval"), 1)
         .property(js_string!("viewerType"), s("Exchange-Pro"), Attribute::READONLY)
@@ -239,6 +255,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .property(js_string!("platform"), s(platform()), Attribute::READONLY)
         .property(js_string!("language"), s("ENU"), Attribute::READONLY)
         .build();
+    guard::<APP>(ctx, &app)?;
     ctx.register_global_property(js_string!("app"), app, rw)?;
     let util = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(printf), js_string!("printf"), 1)
@@ -246,6 +263,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(printx), js_string!("printx"), 2)
         .function(NativeFunction::from_fn_ptr(scand), js_string!("scand"), 2)
         .build();
+    guard::<UTIL>(ctx, &util)?;
     ctx.register_global_property(js_string!("util"), util, rw)?;
     let console = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(println), js_string!("println"), 1)
@@ -253,6 +271,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(noop), js_string!("hide"), 0)
         .function(NativeFunction::from_fn_ptr(console_clear), js_string!("clear"), 0)
         .build();
+    guard::<CONSOLE>(ctx, &console)?;
     ctx.register_global_property(js_string!("console"), console, rw)?;
     let display = ObjectInitializer::new(ctx)
         .property(js_string!("visible"), DISPLAY_VISIBLE, Attribute::READONLY)
@@ -260,9 +279,13 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .property(js_string!("noPrint"), DISPLAY_NO_PRINT, Attribute::READONLY)
         .property(js_string!("noView"), DISPLAY_NO_VIEW, Attribute::READONLY)
         .build();
+    guard::<DISPLAY>(ctx, &display)?;
     ctx.register_global_property(js_string!("display"), display, rw)?;
     let color = color_object(ctx);
+    guard::<COLOR>(ctx, &color)?;
     ctx.register_global_property(js_string!("color"), color, rw)?;
+    // The document is the global object.
+    guard::<DOC>(ctx, &global)?;
     Ok(())
 }
 
@@ -276,9 +299,12 @@ pub(crate) fn platform() -> &'static str {
     }
 }
 
-pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
-    let target = e.target.as_ref().map_or(JsValue::null(), |t| field_object(ctx, t).into());
-    ObjectInitializer::new(ctx)
+pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsResult<JsObject> {
+    let target = match &e.target {
+        Some(t) => field_object(ctx, t)?.into(),
+        None => JsValue::null(),
+    };
+    let event = ObjectInitializer::new(ctx)
         .property(js_string!("name"), s(&e.name), Attribute::all())
         .property(js_string!("type"), s(&e.kind), Attribute::all())
         .property(js_string!("value"), s(&e.value), Attribute::all())
@@ -293,5 +319,7 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
         .property(js_string!("commitKey"), 0, Attribute::all())
         .property(js_string!("modifier"), false, Attribute::all())
         .property(js_string!("shift"), false, Attribute::all())
-        .build()
+        .build();
+    guard::<EVENT>(ctx, &event)?;
+    Ok(event)
 }

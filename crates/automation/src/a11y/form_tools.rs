@@ -25,13 +25,23 @@ fn alert_json(m: &pdfcraft_engine::js::Message) -> Value {
 
 impl Automation {
     /// `js_run`: run `script` in the document, or as button `field`'s script, and report its
-    /// messages, console lines, requests, error, the failing document scripts' errors and result.
+    /// messages, console lines, requests, error, the failing document scripts' errors, result, and
+    /// the names of Acrobat's object model it used that PdfCraft lacks or can't act on.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
         let reqs: Vec<Value> = o.requests.iter().map(request_json).collect();
         let alerts: Vec<Value> = o.alerts.iter().map(alert_json).collect();
-        Ok(json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }))
+        let unsupported = json!({ "missing": o.unsupported, "inert": o.inert });
+        Ok(json!({
+            "alerts": alerts,
+            "console": o.console,
+            "requests": reqs,
+            "error": o.error,
+            "document_errors": o.doc_errors,
+            "result": o.result,
+            "unsupported": unsupported,
+        }))
     }
 
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {

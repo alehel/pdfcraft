@@ -1,5 +1,6 @@
 use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
+use super::unsupported::{FIELD, guard};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
 macro_rules! getter {
@@ -12,7 +13,7 @@ macro_rules! getter {
     }};
 }
 
-pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
+pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsResult<JsObject> {
     let n = JsString::from(name);
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {
@@ -134,7 +135,7 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     let is_box_checked = NativeFunction::from_copy_closure_with_captures(is_box_checked, n.clone());
     let check_this_box = NativeFunction::from_copy_closure_with_captures(check_this_box, n.clone());
     let set_focus = NativeFunction::from_copy_closure_with_captures(set_focus, n.clone());
-    ObjectInitializer::new(ctx)
+    let field = ObjectInitializer::new(ctx)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
         .accessor(js_string!("defaultValue"), Some(default), None, rw)
@@ -154,7 +155,9 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
         .function(set_focus, js_string!("setFocus"), 0)
-        .build()
+        .build();
+    guard::<FIELD>(ctx, &field)?;
+    Ok(field)
 }
 
 // ── the document (global object) ────────────────────────────────────────────────────────────
@@ -163,12 +166,15 @@ pub(crate) fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     let name = text(&arg(args, 0), ctx)?;
     let exists = host(ctx)?.borrow().fields.iter().any(|f| f.name == name);
     if exists {
-        return Ok(field_object(ctx, &name).into());
+        return Ok(field_object(ctx, &name)?.into());
     }
     // A parent name (e.g. "total" for "total.0"): its first kid stands in, as for groups.
     let prefix = format!("{name}.");
     let kid = host(ctx)?.borrow().fields.iter().find(|f| f.name.starts_with(&prefix)).map(|f| f.name.clone());
-    Ok(kid.map_or(JsValue::null(), |k| field_object(ctx, &k).into()))
+    match kid {
+        Some(k) => Ok(field_object(ctx, &k)?.into()),
+        None => Ok(JsValue::null()),
+    }
 }
 
 pub(crate) fn get_nth_field_name(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {

@@ -10,8 +10,11 @@
 //! neither of which runs it.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
+/// Help for writing scripts: suggestions, warnings and the object model.
+pub use pdfcraft_js::assist;
 pub use pdfcraft_js::{
-    Diagnostic, Limits, Location, MAX_SCRIPT_BYTES, Message, MessageButtons, MessageIcon, Outcome, Panel, Request, Token, TokenKind, check, highlight,
+    Diagnostic, Limits, Location, MAX_SCRIPT_BYTES, Message, MessageButtons, MessageIcon, Outcome, Panel, Request, Severity, Token, TokenKind, check,
+    highlight,
 };
 
 use crate::{DocId, Edit, EditError, Session};

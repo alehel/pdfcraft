@@ -227,6 +227,18 @@ fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> 
     clicked
 }
 
+/// What a script edited here runs with: the active document's field names and document-level
+/// scripts (except `editing`, the one being edited, whose declarations are in the editor).
+pub(crate) fn script_env(app: &PdfCraftApp, editing: Option<&str>) -> crate::widgets::ScriptEnv {
+    match app.active_ids().and_then(|(_, id)| app.session.get(id)) {
+        Some(doc) => crate::widgets::ScriptEnv {
+            fields: Some(doc.form.iter().map(|f| f.name.clone()).collect()),
+            doc_scripts: doc.document_scripts().into_iter().filter(|(n, _)| Some(n.as_str()) != editing).map(|(_, s)| s).collect(),
+        },
+        None => crate::widgets::ScriptEnv::default(),
+    }
+}
+
 /// The JavaScript console. Returns `true` to close.
 pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("JavaScript Console")).font(theme::semibold(18.0)));
@@ -249,7 +261,8 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     });
     ui.add_space(6.0);
     let hint = tl!("JavaScript, e.g. getField(\"total\").value");
-    let input = crate::widgets::script_editor(ui, &mut app.js_console.input, "js-console-input", 4, f32::INFINITY, Some(hint));
+    let env = script_env(app, None);
+    let input = crate::widgets::script_editor(ui, &mut app.js_console.input, "js-console-input", 6, f32::INFINITY, Some(hint), &env);
     let run_key = input.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
     ui.add_space(8.0);
     match buttons(ui, "Run", &["Close", "Clear"]).as_deref() {
@@ -288,7 +301,9 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         });
     });
     ui.add_space(6.0);
-    crate::widgets::script_editor(ui, &mut app.doc_js.script, "doc-js-script", 8, f32::INFINITY, None);
+    let editing = app.doc_js.name.trim().to_string();
+    let env = script_env(app, Some(&editing));
+    crate::widgets::script_editor(ui, &mut app.doc_js.script, "doc-js-script", 12, f32::INFINITY, None, &env);
     ui.add_space(8.0);
     let name = app.doc_js.name.trim().to_string();
     let close = match buttons(ui, "Save", &["Close", "Delete"]).as_deref() {

@@ -5,7 +5,7 @@ fn frame(ctx: &egui::Context, text: &mut String, time: f64) -> (Check, Vec<Strin
     let mut id = egui::Id::NULL;
     let output = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| {
         id = ui.make_persistent_id("probe");
-        script_editor(ui, text, "probe", 4, 300.0, None);
+        script_editor(ui, text, "probe", 4, 300.0, None, &ScriptEnv::default());
     });
     let check = ctx.data(|d| d.get_temp::<Check>(id.with("script-check"))).expect("the editor keeps its check");
     let mut said = Vec::new();
@@ -40,7 +40,7 @@ fn a_script_is_checked_on_opening_and_again_once_typing_pauses() {
     assert_eq!(found(&check).map(|d| d.len()), Some(1), "still within the pause");
     let (check, said) = frame(&ctx, &mut text, 1.6);
     assert_eq!(found(&check), Some(Vec::new()), "checked once typing paused");
-    assert!(said.iter().any(|s| s == "No syntax errors"), "{said:?}");
+    assert!(said.iter().any(|s| s == "No problems found"), "{said:?}");
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn the_editor_keeps_its_height_as_the_box_fills_and_empties() {
         let mut text = text.to_owned();
         let mut h = 0.0;
         let output = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| {
-            h = ui.vertical(|ui| script_editor(ui, &mut text, "probe", 4, 300.0, None)).response.rect.height();
+            h = ui.vertical(|ui| script_editor(ui, &mut text, "probe", 4, 300.0, None, &ScriptEnv::default())).response.rect.height();
         });
         let said: Vec<String> =
             output.shapes.iter().filter_map(|c| if let egui::Shape::Text(t) = &c.shape { Some(t.galley.text().to_owned()) } else { None }).collect();
@@ -80,7 +80,7 @@ fn undo_never_brings_back_the_script_shown_before() {
         let output = ctx.run_ui(input, |ui| {
             id = ui.make_persistent_id("probe");
             ui.memory_mut(|m| m.request_focus(id));
-            script_editor(ui, text, "probe", 4, 300.0, None);
+            script_editor(ui, text, "probe", 4, 300.0, None, &ScriptEnv::default());
         });
         output.drop_without_applying_deltas();
     };
@@ -117,8 +117,8 @@ fn palette() -> Palette {
 fn the_layout_keeps_every_character_and_colours_and_marks_the_right_ones() {
     let source = "var s = 'é'; // ok\nif (x {";
     let tokens = pdfcraft_engine::js::highlight(source);
-    let marked = Some(source.find('{').expect("brace")..source.len());
-    let job = layout_job(source, &tokens, marked, &palette(), &egui::FontId::monospace(12.0));
+    let marked = [(source.find('{').expect("brace")..source.len(), Severity::Error)];
+    let job = layout_job(source, &tokens, &marked, &palette(), &egui::FontId::monospace(12.0));
     assert_eq!(job.text, source, "nothing lost or doubled");
     let colour_of = |piece: &str| {
         let at = source.find(piece).expect("piece");
@@ -148,7 +148,7 @@ fn a_mark_on_a_line_end_moves_onto_the_last_character_before_it() {
 
 #[test]
 fn problems_without_a_place_say_so() {
-    let d = Diagnostic { message: "the script is nested too deeply to run safely".into(), at: None };
+    let d = Diagnostic { severity: Severity::Error, message: "the script is nested too deeply to run safely".into(), at: None };
     assert_eq!(describe(&d), "Syntax error: the script is nested too deeply to run safely");
 }
 
@@ -169,8 +169,12 @@ fn every_colour_reads_on_its_background() {
         let on_field =
             [("keyword", p.keyword), ("literal", p.literal), ("string", p.string), ("regex", p.regex), ("comment", p.comment), ("api", p.api)];
         // The error is underlined in the box and written in the status line on the dialog card.
-        let checks =
-            on_field.map(|(name, c)| (name, c, field)).into_iter().chain([("error in the box", p.error, field), ("error message", p.error, card)]);
+        let checks = on_field.map(|(name, c)| (name, c, field)).into_iter().chain([
+            ("error in the box", p.error, field),
+            ("error message", p.error, card),
+            ("warning in the box", p.warning, field),
+            ("warning message", p.warning, card),
+        ]);
         for (name, c, background) in checks {
             let (a, b) = (luminance(c), luminance(background));
             let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
@@ -195,4 +199,141 @@ fn a_check_that_finds_something_asks_for_a_frame_to_underline_it() {
     let (check, _) = frame(&ctx, &mut text, 7.5);
     assert_eq!(found(&check).map(|d| d.len()), Some(1), "checked once typing paused");
     assert!(ctx.has_requested_repaint(), "the next frame underlines what the check found");
+}
+
+/// An editor driven by key events, as a person types into it.
+struct Typing {
+    ctx: egui::Context,
+    text: String,
+    env: ScriptEnv,
+    time: f64,
+    id: egui::Id,
+    said: Vec<String>,
+}
+
+impl Typing {
+    fn new(text: &str, env: ScriptEnv) -> Self {
+        let mut t = Typing { ctx: egui::Context::default(), text: text.into(), env, time: 1.0, id: egui::Id::NULL, said: Vec::new() };
+        t.frame(Vec::new());
+        t.ctx.memory_mut(|m| m.request_focus(t.id));
+        t.frame(Vec::new());
+        t
+    }
+
+    fn frame(&mut self, events: Vec<egui::Event>) {
+        self.time += 0.05;
+        let (mut id, text, env) = (egui::Id::NULL, &mut self.text, &self.env);
+        let output = self.ctx.run_ui(egui::RawInput { time: Some(self.time), events, ..Default::default() }, |ui| {
+            id = ui.make_persistent_id("probe");
+            script_editor(ui, text, "probe", 6, 400.0, None, env);
+        });
+        self.id = id;
+        self.said =
+            output.shapes.iter().filter_map(|c| if let egui::Shape::Text(t) = &c.shape { Some(t.galley.text().to_owned()) } else { None }).collect();
+        output.drop_without_applying_deltas();
+    }
+
+    /// Put the selection on characters `range`, as clicking or dragging would.
+    fn select(&mut self, range: Range<usize>) {
+        set_selection(&self.ctx, self.id, range);
+    }
+
+    fn key(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
+        self.frame(vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }]);
+    }
+
+    fn typed(&mut self, s: &str) {
+        self.frame(vec![egui::Event::Text(s.into())]);
+    }
+
+    fn caret(&self) -> Option<Range<usize>> {
+        selection(&self.ctx, self.id)
+    }
+
+    fn suggest(&self) -> Vec<String> {
+        let s = self.ctx.data(|d| d.get_temp::<suggest::Suggest>(self.id.with("script-suggest"))).unwrap_or_default();
+        s.open.map(|c| c.items.iter().map(|i| i.label.clone()).collect()).unwrap_or_default()
+    }
+
+    /// Wait for the check (typing paused).
+    fn pause(&mut self) {
+        self.time += CHECK_AFTER;
+        self.frame(Vec::new());
+    }
+}
+
+#[test]
+fn enter_keeps_the_indentation_tab_indents_lines_and_a_brace_outdents() {
+    let mut t = Typing::new("if (a) {", ScriptEnv::default());
+    t.select(8..8);
+    t.key(egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(t.text, "if (a) {\n  ");
+    assert_eq!(t.caret(), Some(11..11));
+    t.typed("x;");
+    t.key(egui::Key::Enter, egui::Modifiers::NONE);
+    t.typed("}");
+    assert_eq!(t.text, "if (a) {\n  x;\n}", "the brace goes back to the block's level");
+    // Tab on two selected lines indents both; Shift+Tab takes it back.
+    t.select(0..13);
+    t.key(egui::Key::Tab, egui::Modifiers::NONE);
+    assert_eq!(t.text, "  if (a) {\n    x;\n}");
+    t.select(0..17);
+    t.key(egui::Key::Tab, egui::Modifiers::SHIFT);
+    assert_eq!(t.text, "if (a) {\n  x;\n}");
+    // Tab at a caret types the script's indentation, not a tab character.
+    t.select(0..0);
+    t.key(egui::Key::Tab, egui::Modifiers::NONE);
+    assert_eq!(t.text, "  if (a) {\n  x;\n}");
+}
+
+#[test]
+fn a_dot_opens_suggestions_that_enter_takes_and_escape_closes() {
+    let mut t = Typing::new("app", ScriptEnv::default());
+    t.select(3..3);
+    t.typed(".");
+    let offered = t.suggest();
+    assert_eq!(offered.first().map(String::as_str), Some("alert"), "{offered:?}");
+    t.key(egui::Key::ArrowDown, egui::Modifiers::NONE);
+    t.key(egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(t.text, "app.beep", "the second suggestion, and Enter did not add a line");
+    assert!(t.suggest().is_empty(), "closed after choosing");
+    // Escape closes the list and leaves the text alone.
+    t.typed(".");
+    t.key(egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(t.suggest().is_empty());
+    assert_eq!(t.text, "app.beep.");
+}
+
+#[test]
+fn field_names_are_suggested_and_checked_against_the_document() {
+    let env = ScriptEnv { fields: Some(vec!["Total".into(), "Qty".into()]), doc_scripts: vec!["var rate = 2;".into()] };
+    let mut t = Typing::new("getField(\"", env);
+    t.select(10..10);
+    t.typed("T");
+    assert_eq!(t.suggest(), ["Total"]);
+    t.key(egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(t.text, "getField(\"Total\"", "an unclosed string gets its quote");
+    // A misspelt name is a warning under the box; a document script's variable is known.
+    t.text = "rate = getField(\"Totl\").value;".into();
+    t.frame(Vec::new());
+    t.pause();
+    let warning = t.said.iter().find(|s| s.contains("warning")).cloned().unwrap_or_default();
+    assert!(warning.starts_with("Line 1, column 17, warning: ") && warning.contains("did you mean \"Total\""), "{:?}", t.said);
+    assert!(!t.said.iter().any(|s| s.contains("not declared")), "rate is declared by a document script: {:?}", t.said);
+    // Without that document script, it is not.
+    let mut alone = Typing::new("rate = getField(\"Total\").value;", ScriptEnv { fields: Some(vec!["Total".into()]), doc_scripts: Vec::new() });
+    alone.pause();
+    assert!(alone.said.iter().any(|s| s.contains("\"rate\" is not declared")), "{:?}", alone.said);
+}
+
+#[test]
+fn a_warning_about_the_word_being_completed_waits_for_it() {
+    let warning = |bytes: Range<usize>| Diagnostic {
+        severity: Severity::Warning,
+        message: "app has no \"al\"".into(),
+        at: Some(pdfcraft_engine::js::Location { line: 1, column: 5, bytes }),
+    };
+    let found = vec![warning(4..6), warning(10..12)];
+    assert_eq!(unfinished(&found, Some(&(4..6))), vec![warning(10..12)]);
+    assert_eq!(unfinished(&found, None), found);
 }

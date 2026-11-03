@@ -37,6 +37,7 @@ use boa_engine::property::Attribute;
 use boa_engine::realm::Realm;
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
+pub mod assist;
 mod check;
 mod document;
 mod format;
@@ -45,7 +46,7 @@ mod host;
 mod model;
 mod run;
 
-pub use check::{Diagnostic, Location, Token, TokenKind, check, highlight};
+pub use check::{Diagnostic, Location, Severity, Token, TokenKind, check, highlight};
 #[cfg(test)]
 pub(crate) use format::PRINTD_SCANNED;
 use format::{printd, printf, printx, scand};

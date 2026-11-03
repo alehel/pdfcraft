@@ -246,14 +246,18 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
             5 | 6 => tl!("Field names (comma-separated)"),
             _ => tl!("URL to submit to"),
         };
-        ui.label(if a.kind == 0 { tl!("Script:") } else { tl!("Value:") });
-        if a.kind == 0 {
-            crate::widgets::script_editor(ui, &mut a.text, "action-text", 6, 340.0, Some(hint), env);
-        } else {
+        // A script gets the dialog's whole width, under the grid; a value stays in it.
+        if a.kind != 0 {
+            ui.label(tl!("Value:"));
             ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
+            ui.end_row();
         }
-        ui.end_row();
     });
+    if a.kind == 0 {
+        ui.add_space(4.0);
+        ui.label(tl!("Script:"));
+        crate::widgets::script_editor(ui, &mut a.text, "action-text", 8, f32::INFINITY, Some("JavaScript"), env);
+    }
     let mut error = None;
     let (mut commit, mut discard) = (false, false);
     ui.horizontal(|ui| {

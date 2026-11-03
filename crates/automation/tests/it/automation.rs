@@ -7104,15 +7104,50 @@ fn checking_javascript_syntax_through_tools() {
     let dir = workdir("js-check");
     let mut a = auto(&dir);
     let r = ok(&mut a, "js_check", json!({ "script": "event.value = getField('a').value * 2;" }));
-    assert_eq!(r, json!({ "ok": true, "errors": [] }));
+    assert_eq!(r, json!({ "ok": true, "problems": [] }));
     // Without a document, and the place is in characters: "é" is two bytes but one column.
     let r = ok(&mut a, "js_check", json!({ "script": "var é = 1;\nif (é { }" }));
     assert_eq!(r["ok"], false);
-    assert_eq!((&r["errors"][0]["line"], &r["errors"][0]["column"], &r["errors"][0]["bytes"]), (&json!(2), &json!(7), &json!([19, 20])), "{r}");
+    let p = &r["problems"][0];
+    assert_eq!((&p["severity"], &p["line"], &p["column"], &p["bytes"]), (&json!("error"), &json!(2), &json!(7), &json!([19, 20])), "{r}");
     let deep = format!("x = {}1{};", "[".repeat(500), "]".repeat(500));
     let r = ok(&mut a, "js_check", json!({ "script": deep }));
     assert_eq!(r["ok"], false);
-    assert!(r["errors"][0].get("line").is_none(), "no place for a script too deep to parse: {r}");
+    assert!(r["problems"][0].get("line").is_none(), "no place for a script too deep to parse: {r}");
+}
+
+#[test]
+fn checking_and_completing_javascript_against_a_document_through_tools() {
+    let dir = workdir("js-lint");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Total" }));
+    ok(&mut a, "js_set_document_script", json!({ "doc": doc, "name": "lib", "script": "var rate = 2;" }));
+    // A misspelt field and method are warnings; the document script's variable is known.
+    let script = "rate = getField('Totl').value;\napp.alret(rate);\nother = 1;";
+    let r = ok(&mut a, "js_check", json!({ "script": script, "doc": doc }));
+    assert_eq!(r["ok"], true, "warnings only: {r}");
+    let messages: Vec<&str> = r["problems"].as_array().unwrap().iter().map(|p| p["message"].as_str().unwrap()).collect();
+    assert_eq!(messages.len(), 3, "{r}");
+    assert!(messages[0].contains("no field named \"Totl\"; did you mean \"Total\""), "{r}");
+    assert!(messages[1].contains("did you mean \"alert\""), "{r}");
+    assert!(messages[2].contains("\"other\" is not declared"), "{r}");
+    assert!(r["problems"].as_array().unwrap().iter().all(|p| p["severity"] == "warning"), "{r}");
+    // Without the document: no field check, and rate is undeclared.
+    let r = ok(&mut a, "js_check", json!({ "script": script }));
+    let alone: Vec<&str> = r["problems"].as_array().unwrap().iter().map(|p| p["message"].as_str().unwrap()).collect();
+    assert!(alone.iter().any(|m| m.contains("\"rate\" is not declared")) && !alone.iter().any(|m| m.contains("Totl")), "{r}");
+
+    let r = ok(&mut a, "js_complete", json!({ "script": "getField(\"To", "cursor": 12, "doc": doc }));
+    assert_eq!(r["replace"], json!([10, 12]), "{r}");
+    assert_eq!(r["suggestions"][0], json!({ "label": "Total", "insert": "Total\"", "kind": "field", "detail": null }));
+    let r = ok(&mut a, "js_complete", json!({ "script": "app.al", "cursor": 6 }));
+    assert_eq!((&r["suggestions"][0]["label"], &r["suggestions"][0]["kind"]), (&json!("alert"), &json!("function")), "{r}");
+    assert!(r["suggestions"][0]["detail"].as_str().is_some_and(|d| d.starts_with("app.alert(")), "{r}");
+    let r = ok(&mut a, "js_complete", json!({ "script": "// nothing", "cursor": 5 }));
+    assert_eq!(r, json!({ "replace": null, "suggestions": [] }));
+    let err = a.call("js_complete", &json!({ "script": "é", "cursor": 1 })).unwrap_err();
+    assert!(err.to_string().contains("character boundary"), "{err}");
 }
 
 #[test]

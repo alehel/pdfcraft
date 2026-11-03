@@ -31,7 +31,7 @@ fn alignment(ui: &mut egui::Ui, quadding: &mut i64) {
 }
 
 /// Draw Field Properties; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) -> (bool, bool) {
+pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens, env: &crate::widgets::ScriptEnv) -> (bool, bool) {
     use crate::widgets;
     ui.set_width(600.0);
     ui.label(egui::RichText::new(tl!(d.title())).font(theme::semibold(18.0)));
@@ -181,7 +181,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
             FieldTab::Format => format_tab(ui, d, t),
             FieldTab::Validate => validate_tab(ui, d),
             FieldTab::Calculate => calculate_tab(ui, d, t),
-            FieldTab::Actions => actions_tab(ui, d, t),
+            FieldTab::Actions => actions_tab(ui, d, t, env),
             FieldTab::Options => match d.kind {
                 FormFieldKind::PushButton => {
                     ui.horizontal(|ui| {

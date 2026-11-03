@@ -211,7 +211,8 @@ pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
     }
 }
 
-pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
+/// `env` is what an action's script runs with (the document's fields and document-level scripts).
+pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens, env: &crate::widgets::ScriptEnv) {
     use pdfcraft_engine::FieldTrigger as T;
     let editing = d.editing.is_some();
     ui.label(egui::RichText::new(if editing { tl!("Edit Action") } else { tl!("Add an Action") }).font(theme::semibold(13.0)));
@@ -247,7 +248,7 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
         };
         ui.label(if a.kind == 0 { tl!("Script:") } else { tl!("Value:") });
         if a.kind == 0 {
-            crate::widgets::script_editor(ui, &mut a.text, "action-text", 3, 340.0, Some(hint));
+            crate::widgets::script_editor(ui, &mut a.text, "action-text", 6, 340.0, Some(hint), env);
         } else {
             ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
         }

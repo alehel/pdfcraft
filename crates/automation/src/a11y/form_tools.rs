@@ -34,16 +34,64 @@ impl Automation {
         Ok(json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }))
     }
 
-    /// `js_check`: the syntax errors in `script`, found without running it.
+    /// What a script checked or completed against document `doc` (when given) runs with: the
+    /// form's field names and the names its document-level scripts declare.
+    fn script_env(&self, a: &Args) -> Result<(Option<Vec<String>>, Vec<String>)> {
+        if a.opt_int("doc")?.is_none() {
+            return Ok((None, Vec::new()));
+        }
+        let doc = self.doc(a)?;
+        let fields = doc.form.iter().map(|f| f.name.clone()).collect();
+        let shared = doc.document_scripts().into_iter().flat_map(|(_, s)| pdfcraft_engine::js::assist::declared_names(&s)).collect();
+        Ok((Some(fields), shared))
+    }
+
+    /// `js_check`: the problems in `script` (syntax errors, and warnings about likely mistakes),
+    /// found without running it.
     pub(crate) fn js_check(&self, a: &Args) -> Result<Value> {
-        let errors: Vec<Value> = pdfcraft_engine::js::check(a.str("script")?)
+        use pdfcraft_engine::js::{Severity, assist};
+        let (fields, shared) = self.script_env(a)?;
+        let found = assist::lint(a.str("script")?, assist::Knowledge { fields: fields.as_deref(), shared: &shared });
+        let ok = !found.iter().any(|d| d.severity == Severity::Error);
+        let problems: Vec<Value> = found
             .into_iter()
-            .map(|d| match d.at {
-                Some(at) => json!({ "message": d.message, "line": at.line, "column": at.column, "bytes": [at.bytes.start, at.bytes.end] }),
-                None => json!({ "message": d.message }),
+            .map(|d| {
+                let severity = match d.severity {
+                    Severity::Error => "error",
+                    Severity::Warning => "warning",
+                };
+                match d.at {
+                    Some(at) => json!({ "severity": severity, "message": d.message, "line": at.line, "column": at.column, "bytes": [at.bytes.start, at.bytes.end] }),
+                    None => json!({ "severity": severity, "message": d.message }),
+                }
             })
             .collect();
-        Ok(json!({ "ok": errors.is_empty(), "errors": errors }))
+        Ok(json!({ "ok": ok, "problems": problems }))
+    }
+
+    /// `js_complete`: what the script editors suggest at byte `cursor` of `script`.
+    pub(crate) fn js_complete(&self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::js::assist::{self, SuggestionKind};
+        let script = a.str("script")?;
+        let cursor = usize::try_from(a.int("cursor")?).ok().filter(|c| *c <= script.len() && script.is_char_boundary(*c));
+        let cursor = cursor.ok_or_else(|| ToolError::InvalidArgs("cursor must be a byte offset in the script, on a character boundary".into()))?;
+        let (fields, _) = self.script_env(a)?;
+        let Some(found) = assist::complete(script, cursor, fields.as_deref().unwrap_or_default()) else {
+            return Ok(json!({ "replace": null, "suggestions": [] }));
+        };
+        let suggestions: Vec<Value> = found
+            .items
+            .iter()
+            .map(|i| {
+                let kind = match i.kind {
+                    SuggestionKind::Field => "field",
+                    SuggestionKind::Function => "function",
+                    SuggestionKind::Property => "property",
+                };
+                json!({ "label": i.label, "insert": i.insert, "kind": kind, "detail": i.detail })
+            })
+            .collect();
+        Ok(json!({ "replace": [found.replace.start, found.replace.end], "suggestions": suggestions }))
     }
 
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {

@@ -1181,9 +1181,12 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
                 &["doc", "script"],
             )),
-        t("js_check", "Check JavaScript syntax", "Check a script's syntax without running it, as PdfCraft's script editors do. The parser is the engine's own, so a script that passes is one js_run accepts. Returns ok and the errors found (at most one: parsing stops at the first), each with its message and, when it has a place, its line and column (1-based; columns count characters) and the byte range [start, end) of the script it covers. A script too long or too deeply nested to run is an error without a place.")
+        t("js_check", "Check JavaScript", "Check a script without running it, as PdfCraft's script editors do: its syntax, with the engine's own parser (so a script without errors is one js_run accepts), and, when it parses, likely mistakes as warnings: a getField name the form does not have (with doc; with the nearest name), a name app, util, event, a Field object or another object of the object model does not provide (a typo, with the nearest name, or an Acrobat feature PdfCraft lacks), assigning to a variable never declared (the document-level scripts' declarations count, with doc), an assignment used as a condition, and code after a return, throw, break or continue. Returns ok (no errors) and the problems, errors first, each with its severity (error or warning), message and, when it has a place, its line and column (1-based; columns count characters) and the byte range [start, end) of the script it covers. A script too long or too deeply nested to run is an error without a place.")
             .ro()
-            .with(schema(json!({ "script": { "type": "string" } }), &["script"])),
+            .with(schema(json!({ "script": { "type": "string" }, "doc": doc() }), &["script"])),
+        t("js_complete", "Suggest JavaScript names", "What the script editors suggest with the caret at byte cursor of script: the form's field names inside getField(\"…\") (with doc), an object's names after a dot (event., app., util., this., a Field object), or the document's names for a word. Returns the byte range [start, end) a suggestion replaces (null when there are none) and the suggestions, each with its label, the text to insert, its kind (field, function or property) and a one-line description for the object model's names.")
+            .ro()
+            .with(schema(json!({ "script": { "type": "string" }, "cursor": { "type": "integer", "minimum": 0 }, "doc": doc() }), &["script", "cursor"])),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")
             .ro()
             .cmd("tools.document_js")

@@ -19,6 +19,11 @@ pub(crate) struct Host {
 }
 
 impl Host {
+    /// The state a script starts with: the form's `fields` and the document `doc`, nothing kept yet.
+    pub(crate) fn new(fields: Arc<Vec<FieldState>>, doc: DocInfo) -> Self {
+        Host { fields, changed: BTreeSet::new(), alerts: Vec::new(), console: Vec::new(), requests: Vec::new(), doc, kept: 0, dropped: 0 }
+    }
+
     /// Room for `bytes` more bytes of kept text: charged when there is, a drop counted when not.
     fn room(&mut self, bytes: usize) -> bool {
         match self.kept.checked_add(bytes).filter(|k| *k <= xfa::MAX_PAYLOAD) {

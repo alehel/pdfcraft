@@ -16,13 +16,34 @@ use boa_engine::parser::{Error as ParseError, Parser, lexer::Error as LexError};
 use super::run::SCRIPT_STACK;
 use super::run::refuse;
 
-/// A problem [`check`] found in a script.
+/// A problem [`check`] or [`crate::assist::lint`] found in a script.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
-    /// What is wrong, in the parser's words, without the position (that is in `at`).
+    /// An error stops the script from running; a warning is a likely mistake that runs.
+    pub severity: Severity,
+    /// What is wrong, without the position (that is in `at`): the parser's words for an error.
     pub message: String,
     /// Where, when the problem has a place (a script that is too long or too deeply nested has none).
     pub at: Option<Location>,
+}
+
+/// How serious a [`Diagnostic`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    /// The script will not run: a syntax error, or too long or deeply nested to parse safely.
+    Error,
+    /// The script runs, but probably not as meant.
+    Warning,
+}
+
+impl Diagnostic {
+    pub(crate) fn error(message: impl Into<String>, at: Option<Location>) -> Self {
+        Diagnostic { severity: Severity::Error, message: message.into(), at }
+    }
+
+    pub(crate) fn warning(message: impl Into<String>, at: Option<Location>) -> Self {
+        Diagnostic { severity: Severity::Warning, message: message.into(), at }
+    }
 }
 
 /// A place in a script.
@@ -40,32 +61,44 @@ pub struct Location {
 /// Syntax-check `source` as a script, without running it. Returns the problems found, empty for a
 /// script the engine accepts. The parser stops at the first syntax error, so there is at most one.
 pub fn check(source: &str) -> Vec<Diagnostic> {
+    with_script(source, |_, _| Vec::new())
+}
+
+/// Parse `source` and, if it parses, return what `then` finds in its syntax tree; if it does not,
+/// the syntax error. On the script thread's stack, as running does: the guard ([`refuse`]) bounds
+/// brackets, but nested conditionals still recurse a few thousand levels in the parser and in
+/// anything that walks the tree.
+pub(crate) fn with_script<F>(source: &str, then: F) -> Vec<Diagnostic>
+where
+    F: FnOnce(&boa_engine::ast::Script, &Interner) -> Vec<Diagnostic> + Send,
+{
     // The same guard as running: a script the runner refuses would also take the parser too deep.
     if let Some(why) = refuse(source) {
-        return vec![Diagnostic { message: why, at: None }];
+        return vec![Diagnostic::error(why, None)];
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // On the script thread's stack, as running does: the guard bounds brackets, but nested
-        // conditionals still recurse a few thousand levels.
         std::thread::scope(|scope| {
-            let spawned = std::thread::Builder::new().name("pdfcraft-js-check".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || parse(source));
+            let spawned =
+                std::thread::Builder::new().name("pdfcraft-js-check".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || parse(source, then));
             match spawned {
-                Ok(thread) => {
-                    thread.join().unwrap_or_else(|_| vec![Diagnostic { message: "the syntax check stopped with an internal error".into(), at: None }])
-                }
-                Err(e) => vec![Diagnostic { message: format!("the syntax check could not start: {e}"), at: None }],
+                Ok(thread) => thread.join().unwrap_or_else(|_| vec![Diagnostic::error("the syntax check stopped with an internal error", None)]),
+                Err(e) => vec![Diagnostic::error(format!("the syntax check could not start: {e}"), None)],
             }
         })
     }
     #[cfg(target_arch = "wasm32")]
-    parse(source)
+    parse(source, then)
 }
 
-fn parse(source: &str) -> Vec<Diagnostic> {
+fn parse<F>(source: &str, then: F) -> Vec<Diagnostic>
+where
+    F: FnOnce(&boa_engine::ast::Script, &Interner) -> Vec<Diagnostic>,
+{
     let mut parser = Parser::new(Source::from_bytes(source));
-    match parser.parse_script(&Scope::new_global(), &mut Interner::default()) {
-        Ok(_) => Vec::new(),
+    let mut interner = Interner::default();
+    match parser.parse_script(&Scope::new_global(), &mut interner) {
+        Ok(script) => then(&script, &interner),
         Err(e) => vec![diagnostic(source, &e)],
     }
 }
@@ -82,41 +115,37 @@ fn diagnostic(source: &str, e: &ParseError) -> Diagnostic {
                 [one] => format!("expected '{one}', got '{found}'"),
                 many => format!("expected one of {}, got '{found}'", many.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ")),
             };
-            Diagnostic { message, at: spanned(source, span.start(), span.end()) }
+            Diagnostic::error(message, spanned(source, span.start(), span.end()))
         }
         ParseError::Unexpected { message, found, span } => {
-            Diagnostic { message: format!("unexpected '{found}': {message}"), at: spanned(source, span.start(), span.end()) }
+            Diagnostic::error(format!("unexpected '{found}': {message}"), spanned(source, span.start(), span.end()))
         }
         ParseError::AbruptEnd => {
             // The script stops in the middle of something; point at its last character.
             let end = source.trim_end().len();
             let start = source.get(..end).and_then(|s| s.char_indices().next_back()).map_or(0, |(i, _)| i);
             let (line, column) = line_column(source, start);
-            Diagnostic {
-                message: "the script ends before what it opened is closed (a bracket, string, comment or statement)".into(),
-                at: Some(Location { line, column, bytes: start..char_end(source, start) }),
-            }
+            Diagnostic::error(
+                "the script ends before what it opened is closed (a bracket, string, comment or statement)",
+                Some(Location { line, column, bytes: start..char_end(source, start) }),
+            )
         }
-        ParseError::Lex { err: LexError::Syntax(message, at) } => {
-            Diagnostic { message: message.to_string(), at: point(at.line_number(), at.column_number()) }
-        }
+        ParseError::Lex { err: LexError::Syntax(message, at) } => Diagnostic::error(message.to_string(), point(at.line_number(), at.column_number())),
         // boa reports an unclosed string or template without a place; the lexer below finds it.
         ParseError::Lex { err: LexError::IO(e) } => {
             let at = lex(source).1.map(|start| {
                 let (line, column) = line_column(source, start);
                 Location { line, column, bytes: start..char_end(source, start) }
             });
-            Diagnostic { message: e.to_string(), at }
+            Diagnostic::error(e.to_string(), at)
         }
-        ParseError::General { message, position } => {
-            Diagnostic { message: message.to_string(), at: point(position.line_number(), position.column_number()) }
-        }
-        ParseError::ScopeAnalysis { err } => Diagnostic { message: (*err).to_string(), at: None },
+        ParseError::General { message, position } => Diagnostic::error(message.to_string(), point(position.line_number(), position.column_number())),
+        ParseError::ScopeAnalysis { err } => Diagnostic::error(*err, None),
     }
 }
 
 /// The location from `start` to `end` (both boa positions), at least one character wide.
-fn spanned(source: &str, start: boa_engine::ast::Position, end: boa_engine::ast::Position) -> Option<Location> {
+pub(crate) fn spanned(source: &str, start: boa_engine::ast::Position, end: boa_engine::ast::Position) -> Option<Location> {
     let (line, column) = (start.line_number(), start.column_number());
     let from = byte_at(source, line, column);
     let to = byte_at(source, end.line_number(), end.column_number()).max(char_end(source, from));

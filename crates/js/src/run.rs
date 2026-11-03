@@ -1,7 +1,7 @@
 use super::globals::{event_object, install};
 use super::host::{Host, Shared, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
-use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
+use super::{Arc, Attribute, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -201,16 +201,7 @@ fn run_here(
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    ctx.insert_data(RefCell::new(Host {
-        fields,
-        changed: BTreeSet::new(),
-        alerts: Vec::new(),
-        console: Vec::new(),
-        requests: Vec::new(),
-        doc: doc.clone(),
-        kept: 0,
-        dropped: 0,
-    }));
+    ctx.insert_data(RefCell::new(Host::new(fields, doc.clone())));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
     let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {

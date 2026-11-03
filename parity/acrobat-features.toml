@@ -4710,8 +4710,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_set_script"]
-evidence = ["crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "Custom keystroke (commit), validate, calculate and format scripts run in Acrobat's event order; AF calls still run natively."
+evidence = ["crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/engine/src/tests.rs::custom_field_scripts_are_set_with_the_other_properties_in_one_step", "crates/ui-egui/tests/it/prepare.rs::custom_format_validate_and_calculate_scripts"]
+notes = "Custom keystroke (commit), validate, calculate and format scripts run in Acrobat's event order; AF calls still run natively. Field Properties edits them: Format has a Custom category (a format and a keystroke script), Validate a Run custom validation script option, Calculate a Custom calculation script option, each in the JavaScript editor (colouring, suggestions with the form's field names, warnings, line numbers) at the dialog's full width. A field whose script is not a built-in choice opens on Custom with its script, rather than showing as not formatted, validated or calculated. Scripts are written with the other properties in one undo step; choosing another option removes the script, or the built-in choice replaces it; a custom calculation keeps the field's place in the calculation order and runs at once. form_set_script sets them headlessly. Not yet: a custom script cannot be combined with a built-in choice for the same event (Acrobat has the same either/or), and a blank Custom script writes nothing (the previous choice stays)."
 
 [[feature]]
 id = "form.calculation-order"

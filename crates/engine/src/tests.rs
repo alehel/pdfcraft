@@ -2921,6 +2921,63 @@ fn setting_the_calculation_order_recalculates_and_undoes() {
     assert!(matches!(s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into()] }), Err(EditError::Form(_))));
 }
 
+/// The field properties dialog's custom scripts: set with the other properties in one edit (and
+/// one undo), run in the JavaScript engine, replacing the built-in choice for their event, and
+/// refused, with nothing written, on a field that has no such scripts.
+#[test]
+fn custom_field_scripts_are_set_with_the_other_properties_in_one_step() {
+    use form_scripts::{CalcOp, Calculate};
+    let (mut s, id) = session_with(1);
+    for (i, name) in ["qty", "total"].into_iter().enumerate() {
+        let y = 250.0 - 40.0 * i as f64;
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 180.0, y + 22.0], kind: NewField::Text { multiline: false }, name: Some(name.into()) })
+            .unwrap();
+    }
+    let props = |p: FieldProps| Edit::SetFieldProps { name: "total".into(), props: Box::new(p) };
+    s.apply(id, props(FieldProps { calculate: Some(Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into()] }), ..Default::default() }))
+        .unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    let total = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "total").and_then(|f| f.value.first().cloned()).unwrap_or_default();
+    let actions = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "total").map(|f| f.actions.clone()).unwrap_or_default();
+    assert_eq!(total(&s), "4");
+    // A custom calculation and a tooltip in one edit: the script replaces the sum and runs.
+    let script = "event.value = this.getField(\"qty\").value * 3;".to_string();
+    s.apply(
+        id,
+        props(FieldProps {
+            tooltip: Some("Three times".into()),
+            scripts: vec![(FieldScript::Calculate, Some(script.clone())), (FieldScript::Validate, Some("event.rc = event.value < 100;".into()))],
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    assert_eq!(total(&s), "12", "the script ran");
+    let a = actions(&s);
+    assert_eq!((a.calculate, a.scripts.calculate.as_deref()), (Calculate::None, Some(script.as_str())), "no longer the built-in sum");
+    assert!(a.scripts.validate.is_some());
+    assert_eq!(s.get(id).unwrap().calculation_order().fixed(), ["total"], "still in the calculation order");
+    // One undo takes back the scripts and the tooltip together.
+    s.undo(id).unwrap();
+    let a = actions(&s);
+    assert_eq!((a.calculate, a.scripts.validate), (Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into()] }, None));
+    assert_eq!(total(&s), "4");
+    // Removing a script leaves the field without one.
+    s.redo(id).unwrap();
+    s.apply(id, props(FieldProps { scripts: vec![(FieldScript::Calculate, None)], ..Default::default() })).unwrap();
+    assert_eq!(actions(&s).scripts.calculate, None);
+    // A check box has no such scripts: refused, and its tooltip is not written either.
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 100.0, 40.0, 120.0], kind: NewField::CheckBox, name: Some("ok".into()) }).unwrap();
+    let refused = s.apply(
+        id,
+        Edit::SetFieldProps {
+            name: "ok".into(),
+            props: Box::new(FieldProps { tooltip: Some("x".into()), scripts: vec![(FieldScript::Validate, Some("1".into()))], ..Default::default() }),
+        },
+    );
+    assert!(matches!(refused, Err(EditError::Form(_))), "{refused:?}");
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "ok").and_then(|f| f.tooltip.clone()), None);
+}
+
 /// One 612×300 page with the content stream `body`. Object 4 is Helvetica; `resources` is what
 /// the page's /Resources holds.
 fn one_line_page(resources: &str, body: &str) -> Vec<u8> {

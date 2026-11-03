@@ -125,6 +125,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     }
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    scripts_allowed(&f, props)?;
     let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value)).transpose()?;
     if props.export_value.is_some() && props.options.is_some() {
         return invalid("give export_value or options, not both");
@@ -366,10 +367,27 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     let only = apply_late_widget_props(doc, &f, props, &new_da, rotated_rect)?;
     scroll_list(doc, f.obj, list_picked)?;
     redraw_or_join(doc, &f, name, &new_name, join.as_ref(), only)?;
-    if props.calculate.is_some() {
+    if write_scripts(doc, &new_name, props)? || props.calculate.is_some() {
         crate::recalculate(doc)?;
     }
     Ok(new_name)
+}
+
+/// Custom scripts are only for text fields and drop-down lists; refused before anything is written.
+fn scripts_allowed(f: &Field, props: &FieldProps) -> Result<(), FormError> {
+    if !props.scripts.is_empty() && !matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
+        return invalid("only text fields and drop-down lists have format, keystroke, validate and calculate scripts");
+    }
+    Ok(())
+}
+
+/// Write `props`' custom scripts to field `name`, after its built-in choices. Returns whether a
+/// calculation script changed (the form then recalculates).
+fn write_scripts(doc: &mut Document, name: &str, props: &FieldProps) -> Result<bool, FormError> {
+    for (script, js) in &props.scripts {
+        crate::scripting::set_field_script(doc, name, script.event(), js.as_deref())?;
+    }
+    Ok(props.scripts.iter().any(|(s, _)| *s == super::FieldScript::Calculate))
 }
 
 /// Apply a new name from `props`: rename the field, move it under the parents a full name

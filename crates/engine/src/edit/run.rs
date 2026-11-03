@@ -636,6 +636,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetFieldProps { name, props } => {
             pdfcraft_forms::set_props(doc, name, props)?;
+            // A custom calculation script runs in the JavaScript engine, as SetFieldScript's does
+            // (set_props recalculates only the built-in calculations).
+            if props.scripts.iter().any(|(s, _)| *s == pdfcraft_forms::FieldScript::Calculate)
+                && let Some(js) = cx.js.as_mut()
+            {
+                pdfcraft_forms::recalculate_with(doc, js)?;
+            }
         }
         Edit::DuplicateField { name, pages } => {
             if pdfcraft_forms::duplicate_field(doc, name, pages)? == 0 {

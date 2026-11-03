@@ -584,6 +584,8 @@ impl Automation {
             format: a.get("format").map(format_arg).transpose()?,
             validate: a.get("validate").map(validate_arg).transpose()?,
             calculate: a.get("calculate").map(calculate_arg).transpose()?,
+            // Custom scripts are set with form_set_script.
+            scripts: Vec::new(),
             quadding: match a.opt_str("align")? {
                 None => None,
                 Some("left") => Some(0),

@@ -178,9 +178,9 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                         .labelled_by(l.id);
                 });
             }
-            FieldTab::Format => format_tab(ui, d, t),
-            FieldTab::Validate => validate_tab(ui, d),
-            FieldTab::Calculate => calculate_tab(ui, d, t),
+            FieldTab::Format => format_tab(ui, d, t, env),
+            FieldTab::Validate => validate_tab(ui, d, env),
+            FieldTab::Calculate => calculate_tab(ui, d, t, env),
             FieldTab::Actions => actions_tab(ui, d, t, env),
             FieldTab::Options => match d.kind {
                 FormFieldKind::PushButton => {

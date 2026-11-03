@@ -221,6 +221,61 @@ fn format_validate_and_calculate_tabs() {
     assert_eq!(f.actions.calculate, Calculate::Notation("name".into()));
 }
 
+/// Every format category shows whole in its menu: the seventh, Custom, was cut in half, and a
+/// click on its lower half fell outside the menu.
+#[test]
+fn the_format_menu_shows_every_category_whole() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Format").click();
+    h.run_steps(2);
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("None")).expect("the category menu").click();
+    h.run_steps(3);
+    let custom = h.get_by_label("Custom").rect();
+    let near_bottom = egui::pos2(custom.center().x, custom.bottom() - 3.0);
+    h.input_mut().events.push(egui::Event::PointerMoved(near_bottom));
+    h.step();
+    for pressed in [true, false] {
+        let button = egui::Event::PointerButton { pos: near_bottom, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.input_mut().events.push(button);
+        h.step();
+    }
+    h.run_steps(2);
+    assert!(h.state().field_props.as_ref().is_some_and(|d| d.custom_format.is_some()), "Custom was picked");
+}
+
+/// Escape with the suggestion list open in a custom script closes the list, not Field Properties:
+/// it was Cancel, and the script typed so far was lost.
+#[test]
+fn escape_in_a_custom_script_keeps_field_properties() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Calculate").click();
+    h.run_steps(2);
+    h.get_by_label("Custom calculation script:").click();
+    h.run_steps(4);
+    let editor = h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "JavaScript");
+    editor.focus();
+    editor.type_text("event.value = app.");
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("clearInterval").is_some(), "the list is open");
+    let escape = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    for pressed in [true, false] {
+        h.input_mut().events.push(escape(pressed));
+        h.step();
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("clearInterval").is_none(), "the list closed");
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::FieldProps), "Field Properties stays open");
+    assert_eq!(h.state().field_props.as_ref().and_then(|d| d.custom_calculate.as_deref()), Some("event.value = app."));
+}
+
 /// The Format, Validate and Calculate tabs edit custom scripts: chosen with their radio button or
 /// category, written in one undo step, shown as Custom (not as "not calculated") when the dialog
 /// opens again, and removed by choosing another option.

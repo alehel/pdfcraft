@@ -251,22 +251,79 @@ pub fn set_document_script(doc: &mut Document, name: &str, js: Option<&str>) -> 
     Ok(())
 }
 
+/// A JavaScript action in place of `old`, keeping what was chained after it (`/Next`). With no
+/// script, nothing, unless something was chained: an empty script then carries the chain, which
+/// the form's readers take for no script.
+pub(crate) fn chained_action(doc: &mut Document, js: Option<&str>, old: Option<&Object>) -> Option<Object> {
+    let next = old.and_then(|o| doc.resolve(o).as_dict().and_then(|d| d.get(b"Next").cloned()));
+    if js.is_none() && next.is_none() {
+        return None;
+    }
+    let mut a = pdfcraft_cos::Dict::new();
+    a.set(b"S".to_vec(), Object::name("JavaScript"));
+    a.set(b"JS".to_vec(), PdfString::text(js.unwrap_or_default()));
+    if let Some(next) = next {
+        a.set(b"Next".to_vec(), next);
+    }
+    Some(Object::Ref(doc.add(Object::Dict(a))))
+}
+
+/// `obj`'s additional actions (`/AA`), resolved.
+fn additional_actions(doc: &Document, obj: ObjRef) -> Option<pdfcraft_cos::Dict> {
+    doc.get(obj).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned())
+}
+
+/// Move a field's K, F, V and C actions from its only widget's `/AA` to the field's, where
+/// ISO 32000-2 table 199 has them, when the field has no `/AA` of its own: they are read from the
+/// widget then, and an `/AA` written to the field would hide them. The widget keeps its own
+/// annotation triggers (`/Fo`, `/Bl`, …). Recorded in the repair log.
+pub(crate) fn lift_field_triggers(doc: &mut Document, f: &Field) -> Result<(), FormError> {
+    let [only] = f.widgets.as_slice() else { return Ok(()) };
+    if only.obj == f.obj || additional_actions(doc, f.obj).is_some() {
+        return Ok(());
+    }
+    let Some(mut widget) = additional_actions(doc, only.obj) else { return Ok(()) };
+    let mut field = pdfcraft_cos::Dict::new();
+    for key in [&b"K"[..], b"F", b"V", b"C"] {
+        if let Some(action) = widget.get(key).cloned() {
+            field.set(key.to_vec(), action);
+            widget.remove(key);
+        }
+    }
+    if field.is_empty() {
+        return Ok(());
+    }
+    doc.update_dict(only.obj, |d| {
+        if widget.is_empty() {
+            d.remove(b"AA");
+        } else {
+            d.set(b"AA".to_vec(), Object::Dict(widget));
+        }
+    })?;
+    doc.update_dict(f.obj, |d| d.set(b"AA".to_vec(), Object::Dict(field)))?;
+    doc.note_repair(format!("field {}: its scripts were moved from its widget's actions to the field's", f.name));
+    Ok(())
+}
+
 /// Field Properties ▸ Format / Validate / Calculate ▸ custom script, or Actions ▸ Mouse Up ▸
 /// Run a JavaScript: set (or remove, with `None`) field `name`'s script for `event` — one of
 /// `keystroke`, `format`, `validate`, `calculate` (the field's `/AA` K, F, V, C) or `mouse_up`
-/// (its widgets' `/A`). Calculated fields join the calculation order (`/CO`).
+/// (its widgets' `/A`). Calculated fields join the calculation order (`/CO`). Only text fields and
+/// drop-down lists take the first four (and list boxes `keystroke`, their selection change). What
+/// was chained after a replaced or removed action (`/Next`) stays.
 pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<&str>) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
-    let action = |doc: &mut Document, js: &str| {
-        let mut a = pdfcraft_cos::Dict::new();
-        a.set(b"S".to_vec(), Object::name("JavaScript"));
-        a.set(b"JS".to_vec(), PdfString::text(js));
-        Object::Ref(doc.add(Object::Dict(a)))
-    };
+    let allowed = matches!(f.kind, FieldKind::Text | FieldKind::Combo) || (f.kind == FieldKind::List && event == "keystroke");
+    if event != "mouse_up" && js.is_some() && !allowed {
+        return Err(FormError::Invalid("only text fields and drop-down lists have format, keystroke, validate and calculate scripts".into()));
+    }
     if event == "mouse_up" {
         for w in &f.widgets {
-            let a = js.map(|j| action(doc, j));
+            // Removed, it goes with its chain, as the Actions tab removes one (it lists a mouse-up
+            // action whatever its script).
+            let old = doc.get(w.obj).as_dict().and_then(|d| d.get(b"A").cloned());
+            let a = js.and_then(|j| chained_action(doc, Some(j), old.as_ref()));
             doc.update_dict(w.obj, |d| match a {
                 Some(a) => d.set(b"A".to_vec(), a),
                 None => {
@@ -283,12 +340,11 @@ pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<
         "calculate" => b"C",
         other => return Err(FormError::Invalid(format!("unknown field event {other:?} (keystroke, format, validate, calculate, mouse_up)"))),
     };
-    let mut aa = doc.get(f.obj).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
-    match js {
-        Some(j) => {
-            let a = action(doc, j);
-            aa.set(key.to_vec(), a);
-        }
+    lift_field_triggers(doc, &f)?;
+    let mut aa = additional_actions(doc, f.obj).unwrap_or_default();
+    let old = aa.get(key).cloned();
+    match chained_action(doc, js, old.as_ref()) {
+        Some(a) => aa.set(key.to_vec(), a),
         None => {
             aa.remove(key);
         }

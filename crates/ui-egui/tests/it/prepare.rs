@@ -308,12 +308,23 @@ fn custom_format_validate_and_calculate_scripts() {
     h.run_steps(2);
     let validate = "event.rc = event.value.length < 40;";
     let format = ("event.value = event.value.toUpperCase();", "event.rc = !/[0-9]/.test(event.change);");
-    {
-        let d = h.state_mut().field_props.as_mut().unwrap();
-        d.custom_validate = Some(validate.into());
-        d.custom_format = Some((format.0.into(), format.1.into()));
-    }
+    h.state_mut().field_props.as_mut().unwrap().custom_validate = Some(validate.into());
     h.run_steps(2);
+    // Format ▸ Custom through the menu, and each script typed into its box.
+    h.get_by_label("Format").click();
+    h.run_steps(2);
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("None")).expect("the category menu").click();
+    h.run_steps(3);
+    h.get_by_label("Custom").click();
+    h.run_steps(3);
+    for (i, script) in [format.0, format.1].into_iter().enumerate() {
+        let script_box = h.get_all_by_label("JavaScript").nth(i).expect("the format and keystroke boxes");
+        script_box.focus();
+        h.run_steps(1);
+        h.get_all_by_label("JavaScript").nth(i).expect("the box").type_text(script);
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().field_props.as_ref().unwrap().custom_format, Some((format.0.into(), format.1.into())), "typed into the boxes");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let a = city(&h);
@@ -1686,4 +1697,139 @@ fn button_export_properties_apply_cancel_and_undo() {
         let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap();
         assert_eq!(f.export_of(0), Some(original.as_str()));
     }
+}
+
+/// Field Properties on "city" with `props` set on it first.
+fn city_with(props: pdfcraft_engine::FieldProps) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    let doc = h.state().views[0].id;
+    h.state_mut().session.apply(doc, pdfcraft_engine::Edit::SetFieldProps { name: "city".into(), props: Box::new(props) }).unwrap();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h
+}
+
+fn city_actions(h: &Harness<'static, PdfCraftApp>) -> pdfcraft_engine::form_scripts::Actions {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().actions.clone()
+}
+
+fn open_city(h: &mut Harness<'static, PdfCraftApp>, tab: &str) {
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label(tab).click();
+    h.run_steps(2);
+}
+
+/// Passing through a built-in calculation on the way back to Custom keeps the custom script: OK
+/// wrote the built-in it passed through over it (a sum of nothing), or refused an empty notation.
+#[test]
+fn a_custom_calculation_survives_passing_through_the_built_in_ones() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    let calc = "event.value = 7;";
+    let script =
+        |js: &str| pdfcraft_engine::FieldProps { scripts: vec![(pdfcraft_engine::FieldScript::Calculate, Some(js.into()))], ..Default::default() };
+    let mut h = city_with(script(calc));
+    for through in ["Value is the", "Simplified field notation:", "Value is not calculated"] {
+        open_city(&mut h, "Calculate");
+        h.get_by_label(through).click();
+        h.run_steps(2);
+        h.get_by_label("Custom calculation script:").click();
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().field_props.is_none(), "{through}: the dialog closed (OK was not refused)");
+        let a = city_actions(&h);
+        assert_eq!((a.calculate, a.scripts.calculate.as_deref()), (Calculate::None, Some(calc)), "{through}");
+    }
+    let doc = h.state().views[0].id;
+    assert_eq!(h.state().session.get(doc).unwrap().calculation_order().fixed(), ["city"], "it keeps its place in the order");
+}
+
+/// Choosing Custom and typing nothing leaves the built-in format and range as they were: OK
+/// removed them.
+#[test]
+fn a_blank_custom_script_keeps_the_built_in_choice() {
+    use pdfcraft_engine::form_scripts::{Format, Validate};
+    let number = Format::Number { decimals: 1, sep: 0, neg: 0, currency: String::new(), prepend: true };
+    let range = Validate::Range { min: Some(1.0), max: Some(9.0) };
+    let mut h = city_with(pdfcraft_engine::FieldProps { format: Some(number.clone()), validate: Some(range.clone()), ..Default::default() });
+    open_city(&mut h, "Format");
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Number")).expect("the category menu").click();
+    h.run_steps(3);
+    h.get_by_label("Custom").click();
+    h.run_steps(3);
+    h.get_by_label("Validate").click();
+    h.run_steps(2);
+    h.get_by_label("Run custom validation script:").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let a = city_actions(&h);
+    assert_eq!((a.format, a.validate), (number, range));
+}
+
+/// A custom format typed over a built-in one replaces both of the built-in's scripts: the
+/// built-in's keystroke script stayed when only a format script was typed.
+#[test]
+fn a_custom_format_over_a_built_in_one_replaces_both_of_its_scripts() {
+    use pdfcraft_engine::form_scripts::Format;
+    let number = Format::Number { decimals: 1, sep: 0, neg: 0, currency: String::new(), prepend: true };
+    let mut h = city_with(pdfcraft_engine::FieldProps { format: Some(number), ..Default::default() });
+    open_city(&mut h, "Format");
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Number")).expect("the category menu").click();
+    h.run_steps(3);
+    h.get_by_label("Custom").click();
+    h.run_steps(3);
+    h.state_mut().field_props.as_mut().unwrap().custom_format = Some(("event.value += \" kg\";".into(), String::new()));
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let a = city_actions(&h);
+    assert_eq!((a.format, a.scripts.format.as_deref(), a.scripts.keystroke), (Format::None, Some("event.value += \" kg\";"), None));
+}
+
+/// Picking another choice and coming back to Custom keeps what was typed: a stray click reset the
+/// box to the field's original script, with no way back.
+#[test]
+fn what_was_typed_in_custom_survives_picking_another_choice() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    open_city(&mut h, "Calculate");
+    h.get_by_label("Custom calculation script:").click();
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().unwrap().custom_calculate = Some("event.value = 1;".into());
+    h.run_steps(2);
+    h.get_by_label("Value is not calculated").click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().custom_calculate, None);
+    h.get_by_label("Custom calculation script:").click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().custom_calculate.as_deref(), Some("event.value = 1;"));
+    h.get_by_label("Validate").click();
+    h.run_steps(2);
+    h.get_by_label("Run custom validation script:").click();
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().unwrap().custom_validate = Some("event.rc = false;".into());
+    h.run_steps(2);
+    h.get_by_label("Field value is in range:").click();
+    h.run_steps(2);
+    h.get_by_label("Run custom validation script:").click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().custom_validate.as_deref(), Some("event.rc = false;"));
+    h.get_by_label("Format").click();
+    h.run_steps(2);
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, from: &str, to: &str| {
+        h.get_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some(from)).expect("the category menu").click();
+        h.run_steps(3);
+        h.get_by_label(to).click();
+        h.run_steps(3);
+    };
+    pick(&mut h, "None", "Custom");
+    h.state_mut().field_props.as_mut().unwrap().custom_format = Some(("event.value = 1;".into(), String::new()));
+    h.run_steps(2);
+    pick(&mut h, "Custom", "Number");
+    pick(&mut h, "Number", "Custom");
+    assert_eq!(h.state().field_props.as_ref().unwrap().custom_format, Some(("event.value = 1;".into(), String::new())));
 }

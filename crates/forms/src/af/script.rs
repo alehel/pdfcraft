@@ -242,6 +242,27 @@ pub fn parse_format(js: &str) -> Option<Format> {
     None
 }
 
+/// Whether `js` is nothing but the keystroke script of a built-in format (or a mask).
+pub fn is_built_in_keystroke(js: &str) -> bool {
+    const NAMES: [&str; 8] = [
+        "AFNumber_Keystroke",
+        "AFPercent_Keystroke",
+        "AFDate_KeystrokeEx",
+        "AFDate_Keystroke",
+        "AFTime_KeystrokeEx",
+        "AFTime_Keystroke",
+        "AFSpecial_KeystrokeEx",
+        "AFSpecial_Keystroke",
+    ];
+    let js = js.trim().trim_end_matches(|c: char| c == ';' || c.is_whitespace());
+    NAMES.iter().any(|name| {
+        js.strip_prefix(name).map(str::trim_start).is_some_and(|args| {
+            let mut p = Parser { s: args.as_bytes(), i: 1, depth: 0 };
+            args.starts_with('(') && p.list(b')').is_some() && p.i == args.len()
+        })
+    })
+}
+
 pub fn parse_validate(js: &str) -> Option<Validate> {
     let args = call(js, "AFRange_Validate")?;
     let flag = |i: usize| args.get(i).is_some_and(Arg::truthy);

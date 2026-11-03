@@ -5485,3 +5485,212 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+/// A script replaced or removed keeps the actions chained after it; K, F, V and C on the only
+/// widget move to the field when one is written, leaving the widget's own triggers; and a check box
+/// takes none of them, though a mouse-up script, as a list box takes a keystroke one.
+#[test]
+fn a_script_set_again_keeps_its_chain_and_its_place() {
+    let widget = |name: &str, y: u32, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R {rest} >>", y + 20)
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 8 0 R 9 0 R 11 0 R 12 0 R] >>".into(),
+        "<< /Fields [5 0 R 7 0 R 9 0 R 10 0 R 12 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        widget("chained", 700, "/AA << /V << /S /JavaScript /JS (event.rc = true;) /Next 6 0 R >> >>"),
+        "<< /S /JavaScript /JS (app.beep\\(0\\);) >>".into(),
+        "<< /FT /Tx /T (kid) /Kids [8 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [50 660 250 680] /P 3 0 R /AA << /Fo 6 0 R /F << /S /JavaScript /JS (event.value = 1;) >> /C << /S /JavaScript /JS (event.value = 2;) >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (ok) /Rect [50 620 70 640] /P 3 0 R /A << /S /JavaScript /JS (1) /Next 6 0 R >> >>".into(),
+        "<< /FT /Tx /T (focus) /Kids [11 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 10 0 R /Rect [50 580 250 600] /P 3 0 R /AA << /Fo 6 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (list) /Opt [(a)] /Rect [50 540 250 560] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let aa =
+        |doc: &Document, obj: ObjRef| doc.get(obj).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned());
+    let next_of = |doc: &Document, name: &str, key: &[u8]| {
+        let all = fields(doc);
+        let v = aa(doc, field(&all, name).obj).and_then(|a| a.get(key).cloned()).map(|v| doc.resolve(&v)).and_then(|v| v.as_dict().cloned());
+        v.expect("an action").get(b"Next").cloned()
+    };
+    let beep = Some(Object::Ref(ObjRef::new(6, 0)));
+    set_field_script(&mut doc, "chained", "validate", Some("event.rc = event.value > 0;")).unwrap();
+    assert_eq!(next_of(&doc, "chained", b"V"), beep, "replaced: the chained action stays");
+    set_field_script(&mut doc, "chained", "validate", None).unwrap();
+    assert_eq!(next_of(&doc, "chained", b"V"), beep, "removed: the chained action stays");
+    assert_eq!(field(&fields(&doc), "chained").actions.scripts.validate, None, "and no script is read");
+
+    set_field_script(&mut doc, "kid", "calculate", Some("event.value = 3;")).unwrap();
+    let all = fields(&doc);
+    let kid = field(&all, "kid");
+    let (on_field, on_widget) = (aa(&doc, kid.obj).expect("the field's"), aa(&doc, kid.widgets[0].obj).expect("the widget's"));
+    assert!(on_field.contains(b"F") && on_field.contains(b"C"), "moved to the field");
+    assert!(on_widget.contains(b"Fo") && !on_widget.contains(b"F") && !on_widget.contains(b"C"), "the widget keeps its own trigger");
+    let scripts = kid.actions.scripts.clone();
+    assert_eq!((scripts.format.as_deref(), scripts.calculate.as_deref()), (Some("event.value = 1;"), Some("event.value = 3;")));
+    assert!(doc.repair_log().iter().any(|l| l.contains("kid")), "{:?}", doc.repair_log());
+
+    // A widget with only triggers of its own: the script goes to the field, the widget is left alone.
+    set_field_script(&mut doc, "focus", "format", Some("event.value = 4;")).unwrap();
+    let all = fields(&doc);
+    let focus = field(&all, "focus");
+    assert!(aa(&doc, focus.obj).is_some_and(|a| a.contains(b"F")));
+    assert!(aa(&doc, focus.widgets[0].obj).is_some_and(|a| a.contains(b"Fo") && !a.contains(b"F")));
+    assert_eq!(focus.actions.scripts.format.as_deref(), Some("event.value = 4;"));
+
+    assert!(matches!(set_field_script(&mut doc, "ok", "calculate", Some("event.value = 1;")), Err(FormError::Invalid(_))));
+    set_field_script(&mut doc, "ok", "mouse_up", Some("app.beep(0);")).unwrap();
+    let mouse_up = |doc: &Document| {
+        let all = fields(doc);
+        doc.get(field(&all, "ok").widgets[0].obj).as_dict().and_then(|d| d.get(b"A").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned())
+    };
+    assert_eq!(mouse_up(&doc).and_then(|a| a.get(b"Next").cloned()), beep, "replaced: the chain stays");
+    set_field_script(&mut doc, "ok", "mouse_up", None).unwrap();
+    assert_eq!(mouse_up(&doc), None, "removed: gone with its chain, as the Actions tab removes one");
+    set_field_script(&mut doc, "list", "keystroke", Some("app.beep(0);")).unwrap();
+    assert!(matches!(set_field_script(&mut doc, "list", "format", Some("event.value = 1;")), Err(FormError::Invalid(_))));
+}
+
+/// Removing a built-in format takes its keystroke script with it, but not one of the field's own,
+/// which the dialog does not show beside a built-in format.
+#[test]
+fn a_keystroke_script_of_its_own_outlives_a_built_in_format() {
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &text, Some("own")).unwrap();
+    add_field(&mut doc, 0, [50.0, 660.0, 250.0, 680.0], &text, Some("plain")).unwrap();
+    let number = af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: String::new(), prepend: true };
+    for name in ["own", "plain"] {
+        set_props(&mut doc, name, &FieldProps { format: Some(number.clone()), ..FieldProps::default() }).unwrap();
+    }
+    let own_keystroke = "event.rc = /[0-9]/.test(event.change);";
+    set_field_script(&mut doc, "own", "keystroke", Some(own_keystroke)).unwrap();
+    for name in ["own", "plain"] {
+        set_props(&mut doc, name, &FieldProps { format: Some(af::Format::None), ..FieldProps::default() }).unwrap();
+    }
+    let all = fields(&doc);
+    assert_eq!(field(&all, "own").actions.scripts.keystroke.as_deref(), Some(own_keystroke));
+    let aa = |name: &str| doc.get(field(&all, name).obj).as_dict().and_then(|d| d.get(b"AA").cloned());
+    assert_eq!(aa("plain"), None, "the built-in's keystroke script went with it");
+}
+
+/// A mask is a built-in choice even with code after it: choosing None clears it.
+#[test]
+fn a_mask_with_code_of_its_own_can_be_cleared() {
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("m")).unwrap();
+    set_field_script(&mut doc, "m", "keystroke", Some("AFSpecial_KeystrokeEx(\"999\"); more();")).unwrap();
+    assert_eq!(field(&fields(&doc), "m").actions.format, af::Format::Mask("999".into()));
+    set_props(&mut doc, "m", &FieldProps { format: Some(af::Format::None), ..FieldProps::default() }).unwrap();
+    assert_eq!(field(&fields(&doc), "m").actions.format, af::Format::None, "the mask is gone");
+}
+
+/// A built-in choice written over an action keeps what was chained after it, as a script does.
+#[test]
+fn a_built_in_choice_keeps_the_actions_chained_after_what_it_replaces() {
+    let widget = "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R /AA << /V << /S /JavaScript /JS (event.rc = true;) /Next 6 0 R >> /F << /S /JavaScript /JS (AFNumber_Format\\(2, 0, 0, 0, \"\", true\\);) /Next 6 0 R >> >> >>";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        widget.into(),
+        "<< /S /JavaScript /JS (app.beep\\(0\\);) >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let next = |doc: &Document, key: &[u8]| {
+        let all = fields(doc);
+        let aa = doc
+            .get(field(&all, "a").obj)
+            .as_dict()
+            .and_then(|d| d.get(b"AA").map(|a| doc.resolve(a)))
+            .and_then(|a| a.as_dict().cloned())
+            .expect("/AA");
+        let action = aa.get(key).map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).expect("the action");
+        action.get(b"Next").cloned()
+    };
+    let beep = Some(Object::Ref(ObjRef::new(6, 0)));
+    set_props(&mut doc, "a", &FieldProps { validate: Some(af::Validate::Range { min: Some(1.0), max: None }), ..FieldProps::default() }).unwrap();
+    assert_eq!(next(&doc, b"V"), beep, "a range over a custom validation");
+    set_props(&mut doc, "a", &FieldProps { format: Some(af::Format::None), ..FieldProps::default() }).unwrap();
+    assert_eq!(next(&doc, b"F"), beep, "the format removed");
+    set_field_script(&mut doc, "a", "format", Some("event.value = 1;")).unwrap();
+    assert_eq!(next(&doc, b"F"), beep, "a custom format typed in its place");
+}
+
+#[test]
+fn only_a_built_in_call_is_a_built_in_keystroke() {
+    for js in ["AFNumber_Keystroke(2, 0, 0, 0, \"\", true);", "  AFSpecial_KeystrokeEx(\"999\")\n", "AFDate_KeystrokeEx (\"mm/dd/yyyy\");"] {
+        assert!(af::is_built_in_keystroke(js), "{js}");
+    }
+    for js in
+        ["", "event.rc = true;", "AFNumber_Keystroke(2, 0, 0, 0, \"\", true); event.rc = false;", "AFNumber_Keystroke", "AFNumber_KeystrokeX(1);"]
+    {
+        assert!(!af::is_built_in_keystroke(js), "{js}");
+    }
+}
+
+/// A field other than a text field or drop-down list keeps its appearances.
+#[test]
+fn only_text_fields_and_drop_down_lists_are_drawn_again_for_a_format_script() {
+    struct Never;
+    impl Scripts for Never {
+        fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 70.0, 720.0], &NewField::CheckBox, Some("agree")).unwrap();
+    let appearances = |doc: &Document| {
+        let all = fields(doc);
+        doc.get(field(&all, "agree").widgets[0].obj).as_dict().and_then(|d| d.get(b"AP").cloned())
+    };
+    let before = appearances(&doc);
+    assert!(before.is_some());
+    reformat_with(&mut doc, "agree", &mut Never).unwrap();
+    assert_eq!(appearances(&doc), before);
+}
+
+/// A field drawn again after its Format script changed shows its value as the script formats it.
+#[test]
+fn a_field_is_drawn_again_as_its_new_format_script_shows_it() {
+    struct Dollars;
+    impl Scripts for Dollars {
+        fn run(&mut self, event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field]) -> ScriptResult {
+            let value = if event == FieldEvent::Format { format!("${value}") } else { value.to_string() };
+            ScriptResult { rc: true, value, changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("price")).unwrap();
+    set_value(&mut doc, "price", &FieldValue::Text("5".into())).unwrap();
+    set_field_script(&mut doc, "price", "format", Some("event.value = '$' + event.value;")).unwrap();
+    reformat_with(&mut doc, "price", &mut Dollars).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "price");
+    assert!(ap(&doc, &f.widgets[0]).contains("($5)"), "{}", ap(&doc, &f.widgets[0]));
+    assert!(matches!(reformat_with(&mut doc, "nothing", &mut Dollars), Err(FormError::NoSuchField(_))));
+}
+
+/// A built-in choice written to a field whose scripts are on its only widget leaves them readable:
+/// the new `/AA` on the field hid them.
+#[test]
+fn a_built_in_choice_keeps_the_scripts_on_the_only_widget() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Tx /T (kid) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [50 660 250 680] /P 3 0 R /AA << /C << /S /JavaScript /JS (event.value = 2;) >> >> >>"
+            .into(),
+    ];
+    let mut doc = document(&objs);
+    let range = af::Validate::Range { min: Some(1.0), max: None };
+    set_props(&mut doc, "kid", &FieldProps { validate: Some(range.clone()), ..FieldProps::default() }).unwrap();
+    let actions = field(&fields(&doc), "kid").actions.clone();
+    assert_eq!((actions.validate, actions.scripts.calculate.as_deref()), (range, Some("event.value = 2;")));
+}

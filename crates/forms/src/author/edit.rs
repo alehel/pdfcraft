@@ -108,6 +108,13 @@ fn button_export_options(f: &Field, index: usize, value: &str) -> Result<Vec<Obj
 
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
+    set_props_with(doc, name, props, &mut crate::NoScripts)
+}
+
+/// [`set_props`], recalculating through `scripts`: a dependent field's custom calculation runs and
+/// its custom format draws it. In two passes, the first left it drawn from its raw value, and the
+/// second, finding the value unchanged, did not draw it again.
+pub fn set_props_with(doc: &mut Document, name: &str, props: &FieldProps, scripts: &mut dyn crate::Scripts) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
         return invalid("font size must be a finite, non-negative number");
     }
@@ -316,61 +323,73 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
     }
     apply_widget_style_props(doc, &f, name, props)?;
-    if props.format.is_some() || props.validate.is_some() || props.calculate.is_some() {
-        if !matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
-            return invalid("only text fields and drop-down lists have format, validate and calculate scripts");
-        }
-        let mut aa = doc
-            .get(f.obj)
-            .as_dict()
-            .and_then(|d| d.get(b"AA").cloned())
-            .map(|a| doc.resolve(&a))
-            .and_then(|a| a.as_dict().cloned())
-            .unwrap_or_default();
-        let action = |js: &str| -> Object {
-            let mut a = Dict::new();
-            a.set(b"S".to_vec(), Object::name("JavaScript"));
-            a.set(b"JS".to_vec(), PdfString::literal(js.as_bytes().to_vec()));
-            Object::Dict(a)
-        };
-        if let Some(fm) = &props.format {
-            aa.remove(b"F");
-            aa.remove(b"K");
-            if let Some((fjs, kjs)) = crate::af::format_js(fm) {
-                if !fjs.is_empty() {
-                    aa.set(b"F".to_vec(), action(&fjs));
-                }
-                aa.set(b"K".to_vec(), action(&kjs));
-            }
-        }
-        if let Some(v) = &props.validate {
-            aa.remove(b"V");
-            if let Some(js) = crate::af::validate_js(v) {
-                aa.set(b"V".to_vec(), action(&js));
-            }
-        }
-        if let Some(c) = &props.calculate {
-            aa.remove(b"C");
-            if let Some(js) = crate::af::calculate_js(c) {
-                aa.set(b"C".to_vec(), action(&js));
-            }
-            crate::calc_order::keep_listed(doc, f.obj, *c != crate::af::Calculate::None)?;
-        }
-        doc.update_dict(f.obj, |d| {
-            if aa.is_empty() {
-                d.remove(b"AA");
-            } else {
-                d.set(b"AA".to_vec(), Object::Dict(aa));
-            }
-        })?;
-    }
+    write_built_in_choices(doc, &f, props)?;
     let only = apply_late_widget_props(doc, &f, props, &new_da, rotated_rect)?;
     scroll_list(doc, f.obj, list_picked)?;
     redraw_or_join(doc, &f, name, &new_name, join.as_ref(), only)?;
     if write_scripts(doc, &new_name, props)? || props.calculate.is_some() {
-        crate::recalculate(doc)?;
+        crate::recalculate_with(doc, scripts)?;
     }
     Ok(new_name)
+}
+
+/// Write `props`' built-in format, validation and calculation to `f`'s `/AA`. What was chained
+/// after an action they replace stays.
+fn write_built_in_choices(doc: &mut Document, f: &Field, props: &FieldProps) -> Result<(), FormError> {
+    if props.format.is_none() && props.validate.is_none() && props.calculate.is_none() {
+        return Ok(());
+    }
+    if !matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
+        return invalid("only text fields and drop-down lists have format, validate and calculate scripts");
+    }
+    crate::scripting::lift_field_triggers(doc, f)?;
+    let mut aa =
+        doc.get(f.obj).as_dict().and_then(|d| d.get(b"AA").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
+    let put = |doc: &mut Document, aa: &mut Dict, key: &[u8], js: Option<&str>| {
+        let old = aa.get(key).cloned();
+        match crate::scripting::chained_action(doc, js, old.as_ref()) {
+            Some(a) => aa.set(key.to_vec(), a),
+            None => {
+                aa.remove(key);
+            }
+        }
+    };
+    if let Some(fm) = &props.format {
+        match crate::af::format_js(fm) {
+            Some((fjs, kjs)) => {
+                put(doc, &mut aa, b"F", (!fjs.is_empty()).then_some(fjs.as_str()));
+                put(doc, &mut aa, b"K", Some(&kjs));
+            }
+            None => {
+                put(doc, &mut aa, b"F", None);
+                // A built-in format's keystroke script (or a mask) goes with it; one of the
+                // field's own stays (the dialog does not show it beside a built-in format).
+                let own = aa.get(b"K").is_some_and(|k| {
+                    crate::read::script(doc, k, &mut crate::read::script_budget()).is_none_or(|js| {
+                        !crate::af::is_built_in_keystroke(&js) && !matches!(crate::af::parse_format(&js), Some(crate::af::Format::Mask(_)))
+                    })
+                });
+                if !own {
+                    put(doc, &mut aa, b"K", None);
+                }
+            }
+        }
+    }
+    if let Some(v) = &props.validate {
+        put(doc, &mut aa, b"V", crate::af::validate_js(v).as_deref());
+    }
+    if let Some(c) = &props.calculate {
+        put(doc, &mut aa, b"C", crate::af::calculate_js(c).as_deref());
+        crate::calc_order::keep_listed(doc, f.obj, *c != crate::af::Calculate::None)?;
+    }
+    doc.update_dict(f.obj, |d| {
+        if aa.is_empty() {
+            d.remove(b"AA");
+        } else {
+            d.set(b"AA".to_vec(), Object::Dict(aa));
+        }
+    })?;
+    Ok(())
 }
 
 /// Custom scripts are only for text fields and drop-down lists; refused before anything is written.
@@ -387,7 +406,7 @@ fn write_scripts(doc: &mut Document, name: &str, props: &FieldProps) -> Result<b
     for (script, js) in &props.scripts {
         crate::scripting::set_field_script(doc, name, script.event(), js.as_deref())?;
     }
-    Ok(props.scripts.iter().any(|(s, _)| *s == super::FieldScript::Calculate))
+    Ok(props.sets_script(super::FieldScript::Calculate))
 }
 
 /// Apply a new name from `props`: rename the field, move it under the parents a full name

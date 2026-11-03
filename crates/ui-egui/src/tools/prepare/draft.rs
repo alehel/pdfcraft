@@ -147,6 +147,11 @@ pub struct FieldDraft {
     pub custom_validate: Option<String>,
     /// Calculate tab: the custom calculation script, when it is chosen.
     pub custom_calculate: Option<String>,
+    /// What was typed in Custom on each tab, while another choice is picked: picking Custom again
+    /// brings it back, and nothing is lost to a stray click.
+    pub typed_format: Option<(String, String)>,
+    pub typed_validate: Option<String>,
+    pub typed_calculate: Option<String>,
     /// Every other field's name (the Calculate tab picks from them).
     pub others: Vec<String>,
     /// Actions tab: each trigger's action, and the one being added.
@@ -223,6 +228,9 @@ impl FieldDraft {
                 .then(|| (f.actions.scripts.format.clone().unwrap_or_default(), f.actions.scripts.keystroke.clone().unwrap_or_default())),
             custom_validate: f.actions.scripts.validate.clone(),
             custom_calculate: f.actions.scripts.calculate.clone(),
+            typed_format: None,
+            typed_validate: None,
+            typed_calculate: None,
             others: Vec::new(),
             actions: Vec::new(),
             new_action: ActionDraft::default(),
@@ -281,7 +289,7 @@ impl FieldDraft {
             look: (self.look != o.look).then_some(self.look).flatten(),
             appearance: None,
             check_style: (self.check_style != o.check_style).then_some(self.check_style).flatten(),
-            format: (self.format != o.format).then(|| self.format.clone()),
+            format: if self.replaces_built_in_format(o) { Some(Format::None) } else { (self.format != o.format).then(|| self.format.clone()) },
             validate: (self.validate != o.validate).then(|| self.validate.clone()),
             calculate: (self.calculate != o.calculate).then(|| self.calculate.clone()),
             scripts: self.script_changes(o),
@@ -296,26 +304,36 @@ impl FieldDraft {
 }
 
 impl FieldDraft {
+    /// Whether a custom format is typed over a built-in one: the built-in goes (both of its
+    /// scripts, the one left blank too), and what is typed takes its place.
+    fn replaces_built_in_format(&self, o: &FieldDraft) -> bool {
+        let typed = self.custom_format.as_ref().is_some_and(|(f, k)| !f.trim().is_empty() || !k.trim().is_empty());
+        typed && o.custom_format.is_none() && o.format != Format::None
+    }
+
     /// The custom scripts that changed. A script that is now chosen and differs is written; one
     /// no longer chosen is removed unless a built-in choice replaces it (that is written in its
-    /// place). An empty script counts as none.
+    /// place). An empty script counts as none, so a blank Custom leaves the previous choice (the
+    /// tabs keep it in the draft while Custom is chosen).
     fn script_changes(&self, o: &FieldDraft) -> Vec<(FieldScript, Option<String>)> {
-        let mut out = Vec::new();
-        let mut one = |script: FieldScript, now: Option<&String>, was: Option<&String>, built_in_changed: bool| {
-            let now = now.filter(|s| !s.trim().is_empty());
-            let was = was.filter(|s| !s.trim().is_empty());
-            match (now, was) {
-                (Some(n), w) if Some(n) != w => out.push((script, Some(n.clone()))),
-                (None, Some(_)) if !built_in_changed => out.push((script, None)),
+        let typed = |s: Option<&String>| s.filter(|s| !s.trim().is_empty()).cloned();
+        let one =
+            |out: &mut Vec<(FieldScript, Option<String>)>, script: FieldScript, now: Option<&String>, was: Option<&String>, built_in: bool| match (
+                typed(now),
+                typed(was),
+            ) {
+                (Some(n), w) if Some(&n) != w.as_ref() => out.push((script, Some(n))),
+                (None, Some(_)) if !built_in => out.push((script, None)),
                 _ => {}
-            }
-        };
+            };
+        let mut out = Vec::new();
         let (format, keystroke) = (self.custom_format.as_ref().map(|f| &f.0), self.custom_format.as_ref().map(|f| &f.1));
         let (was_format, was_keystroke) = (o.custom_format.as_ref().map(|f| &f.0), o.custom_format.as_ref().map(|f| &f.1));
-        one(FieldScript::Format, format, was_format, self.format != o.format);
-        one(FieldScript::Keystroke, keystroke, was_keystroke, self.format != o.format);
-        one(FieldScript::Validate, self.custom_validate.as_ref(), o.custom_validate.as_ref(), self.validate != o.validate);
-        one(FieldScript::Calculate, self.custom_calculate.as_ref(), o.custom_calculate.as_ref(), self.calculate != o.calculate);
+        let built_in = self.format != o.format || self.replaces_built_in_format(o);
+        one(&mut out, FieldScript::Format, format, was_format, built_in);
+        one(&mut out, FieldScript::Keystroke, keystroke, was_keystroke, built_in);
+        one(&mut out, FieldScript::Validate, self.custom_validate.as_ref(), o.custom_validate.as_ref(), self.validate != o.validate);
+        one(&mut out, FieldScript::Calculate, self.custom_calculate.as_ref(), o.custom_calculate.as_ref(), self.calculate != o.calculate);
         out
     }
 }

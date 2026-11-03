@@ -155,6 +155,16 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
     }
 }
 
+/// Draw field `name` again after its custom Format script changed: as the script shows its value,
+/// or with JavaScript off as it is (what was drawn may be what a format just removed made of it).
+fn reformat(doc: &mut pdfcraft_cos::Document, name: &str, cx: &mut EditCtx) -> Result<(), EditError> {
+    match cx.js.as_mut() {
+        Some(js) => pdfcraft_forms::reformat_with(doc, name, js)?,
+        None => pdfcraft_forms::reformat_with(doc, name, &mut pdfcraft_forms::NoScripts)?,
+    }
+    Ok(())
+}
+
 /// Dates and unique ids stamped onto what an edit creates.
 pub(crate) struct EditCtx {
     /// Field scripts run (`None`: JavaScript is off) and what they produced.
@@ -635,13 +645,23 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_forms::add_field(doc, *page, *rect, kind, name.as_deref())?;
         }
         Edit::SetFieldProps { name, props } => {
-            pdfcraft_forms::set_props(doc, name, props)?;
-            // A custom calculation script runs in the JavaScript engine, as SetFieldScript's does
-            // (set_props recalculates only the built-in calculations).
-            if props.scripts.iter().any(|(s, _)| *s == pdfcraft_forms::FieldScript::Calculate)
-                && let Some(js) = cx.js.as_mut()
-            {
-                pdfcraft_forms::recalculate_with(doc, js)?;
+            // Custom calculation and format scripts run in the JavaScript engine, as
+            // SetFieldScript's do.
+            let name = match cx.js.as_mut() {
+                Some(js) => pdfcraft_forms::set_props_with(doc, name, props, js)?,
+                None => pdfcraft_forms::set_props(doc, name, props)?,
+            };
+            if props.sets_script(pdfcraft_forms::FieldScript::Format) {
+                reformat(doc, &name, cx)?;
+            } else if pdfcraft_forms::fields(doc).iter().any(|f| f.name == name && f.actions.scripts.format.is_some()) {
+                // Set_props drew the field from its raw value. A custom format draws it again,
+                // whichever property changed; what the script asks of the viewer is for the
+                // edits that run it for its own sake, not for a move or a tooltip.
+                let kept = cx.js.as_mut().map(|js| std::mem::take(&mut js.output));
+                reformat(doc, &name, cx)?;
+                if let (Some(js), Some(kept)) = (cx.js.as_mut(), kept) {
+                    js.output = kept;
+                }
             }
         }
         Edit::DuplicateField { name, pages } => {
@@ -687,6 +707,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
             };
+            if event == "format" {
+                reformat(doc, name, cx)?;
+            }
         }
         Edit::ConvertPdfA { level } => {
             pdfcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;

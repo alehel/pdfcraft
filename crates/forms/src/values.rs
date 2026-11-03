@@ -145,6 +145,19 @@ pub fn recalculate(doc: &mut Document) -> Result<usize, FormError> {
     recalculate_with(doc, &mut NoScripts)
 }
 
+/// Draw field `name` again as its custom Format script, run through `scripts`, shows its value:
+/// after the script changed, the field shows what it formats at once rather than at the next
+/// change of its value. Only text fields and drop-down lists have one: any other field keeps its
+/// appearances (a check box's states, a signature's).
+pub fn reformat_with(doc: &mut Document, name: &str, scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    if !matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
+        return Ok(());
+    }
+    let values = f.value.clone();
+    redraw(doc, &f, &values, scripts)
+}
+
 /// [`recalculate`], running custom Calculate (and Format) scripts through `scripts`.
 pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
     let mut all = fields(doc);

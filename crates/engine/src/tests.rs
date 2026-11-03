@@ -2965,6 +2965,69 @@ fn custom_field_scripts_are_set_with_the_other_properties_in_one_step() {
     s.redo(id).unwrap();
     s.apply(id, props(FieldProps { scripts: vec![(FieldScript::Calculate, None)], ..Default::default() })).unwrap();
     assert_eq!(actions(&s).scripts.calculate, None);
+    // A custom format shows at once: the field is drawn again as the script formats its value.
+    let format = vec![(FieldScript::Format, Some("event.value = \"#\" + event.value;".to_string()))];
+    s.apply(id, Edit::SetFieldProps { name: "qty".into(), props: Box::new(FieldProps { scripts: format, ..Default::default() }) }).unwrap();
+    let cos = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    let qty = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "qty").unwrap().widgets[0].obj;
+    let normal = cos.resolve(cos.get(qty).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(drawn) = &*normal else { panic!("an appearance stream") };
+    assert!(String::from_utf8_lossy(&drawn.decoded().unwrap()).contains("(#4)"), "drawn as the script formats it");
+    // Another property drawn again keeps the format: the field was drawn from its raw value.
+    s.apply(id, Edit::SetFieldProps { name: "qty".into(), props: Box::new(FieldProps { tooltip: Some("Quantity".into()), ..Default::default() }) })
+        .unwrap();
+    let cos = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    let qty = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "qty").unwrap().widgets[0].obj;
+    let normal = cos.resolve(cos.get(qty).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(drawn) = &*normal else { panic!("an appearance stream") };
+    assert!(String::from_utf8_lossy(&drawn.decoded().unwrap()).contains("(#4)"), "still drawn as the script formats it");
+    // A move or a tooltip draws it, but what the script asks of the viewer is not for them.
+    let alerting = vec![(FieldScript::Format, Some("app.alert(\"formatted\"); event.value = \"#\" + event.value;".to_string()))];
+    s.apply(id, Edit::SetFieldProps { name: "qty".into(), props: Box::new(FieldProps { scripts: alerting, ..Default::default() }) }).unwrap();
+    assert_eq!(s.take_js_output(id).alerts.len(), 1, "setting the script runs it for its own sake");
+    s.apply(id, Edit::SetFieldProps { name: "qty".into(), props: Box::new(FieldProps { tooltip: Some("Count".into()), ..Default::default() }) })
+        .unwrap();
+    assert_eq!(s.take_js_output(id).alerts.len(), 0, "a tooltip edit shows no alert");
+    s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "format".into(), script: Some("event.value = \"#\" + event.value;".into()) })
+        .unwrap();
+    let _ = s.take_js_output(id);
+    // A built-in calculation changed draws a dependent field as its custom format shows it.
+    s.apply(
+        id,
+        Edit::AddField { page: 0, rect: [20.0, 60.0, 180.0, 82.0], kind: NewField::Text { multiline: false }, name: Some("dependent".into()) },
+    )
+    .unwrap();
+    // (`total` is listed before it in the calculation order, so it reads the new value.)
+    let dep = |p: FieldProps| Edit::SetFieldProps { name: "dependent".into(), props: Box::new(p) };
+    let calculated = |op: CalcOp, fields: &[&str]| FieldProps {
+        calculate: Some(Calculate::Simple { op, fields: fields.iter().map(|f| f.to_string()).collect() }),
+        ..Default::default()
+    };
+    s.apply(id, props(calculated(CalcOp::Sum, &["qty"]))).unwrap();
+    s.apply(id, dep(calculated(CalcOp::Sum, &["total"]))).unwrap();
+    let format = vec![(FieldScript::Format, Some("event.value = \"=\" + event.value;".to_string()))];
+    s.apply(id, dep(FieldProps { scripts: format, ..Default::default() })).unwrap();
+    s.apply(id, props(calculated(CalcOp::Product, &["qty", "qty"]))).unwrap();
+    let cos = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    let w = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "dependent").unwrap().widgets[0].obj;
+    let normal = cos.resolve(cos.get(w).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(drawn) = &*normal else { panic!("an appearance stream") };
+    assert!(String::from_utf8_lossy(&drawn.decoded().unwrap()).contains("(=16)"), "{}", String::from_utf8_lossy(&drawn.decoded().unwrap()));
+    // What a custom calculation asks of the viewer in the same edit is kept through that drawing.
+    let _ = s.take_js_output(id);
+    let alerting = vec![(FieldScript::Calculate, Some("app.alert(\"calculated\"); event.value = 16;".to_string()))];
+    s.apply(id, dep(FieldProps { scripts: alerting, ..Default::default() })).unwrap();
+    assert_eq!(s.take_js_output(id).alerts.len(), 1, "the calculation's alert");
+    // Removed with JavaScript off, it is drawn as it is, not as the script last formatted it.
+    s.set_javascript(false);
+    s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "format".into(), script: None }).unwrap();
+    let cos = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    let qty = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "qty").unwrap().widgets[0].obj;
+    let normal = cos.resolve(cos.get(qty).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(drawn) = &*normal else { panic!("an appearance stream") };
+    let drawn = String::from_utf8_lossy(&drawn.decoded().unwrap()).into_owned();
+    assert!(drawn.contains("(4)") && !drawn.contains('#'), "{drawn}");
+    s.set_javascript(true);
     // A check box has no such scripts: refused, and its tooltip is not written either.
     s.apply(id, Edit::AddField { page: 0, rect: [20.0, 100.0, 40.0, 120.0], kind: NewField::CheckBox, name: Some("ok".into()) }).unwrap();
     let refused = s.apply(

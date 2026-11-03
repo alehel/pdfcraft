@@ -18,7 +18,7 @@ mod tree;
 
 pub(crate) use tree::ancestor_sets;
 
-pub use edit::set_props;
+pub use edit::{set_props, set_props_with};
 pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};
 pub(crate) use look::button_appearance;
 pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, look, redraw_field, set_button_icon};
@@ -151,6 +151,13 @@ pub struct FieldProps {
     /// Changing between horizontal and vertical swaps that widget's width and height around its
     /// center, unless [`Self::rect`] is also set.
     pub rotation: Option<(usize, i64)>,
+}
+
+impl FieldProps {
+    /// Whether these properties set or remove `script`.
+    pub fn sets_script(&self, script: FieldScript) -> bool {
+        self.scripts.iter().any(|(s, _)| *s == script)
+    }
 }
 
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {

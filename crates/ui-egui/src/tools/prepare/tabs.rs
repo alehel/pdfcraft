@@ -49,34 +49,31 @@ pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme
         ui.label(tl!("Select format category:"));
         // Room for every category and one more: egui's default menu height cuts the seventh in half.
         let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
-        craft_ui::ComboBox::from_id_salt("format-cat")
-            .height(row * (categories.len() + 1) as f32)
-            .selected_text(tl!(match cat {
-                Category::None => "None",
-                Category::Number => "Number",
-                Category::Percent => "Percentage",
-                Category::Date => "Date",
-                Category::Time => "Time",
-                Category::Special => "Special",
-                Category::Custom => "Custom",
-            }))
-            .show_ui(ui, |ui| {
-                for (c, l) in categories {
-                    ui.selectable_value(&mut picked, c, l);
-                }
-            });
+        let shown = categories.iter().find(|(c, _)| *c == cat).map_or("", |(_, l)| *l);
+        craft_ui::ComboBox::from_id_salt("format-cat").height(row * (categories.len() + 1) as f32).selected_text(shown).show_ui(ui, |ui| {
+            for (c, l) in categories {
+                ui.selectable_value(&mut picked, c, l);
+            }
+        });
     });
     if picked != cat {
-        // Custom brings back the field's own scripts, if it had some; a built-in format replaces them.
-        d.custom_format =
-            (picked == Category::Custom).then(|| d.original.as_ref().as_ref().and_then(|o| o.custom_format.clone()).unwrap_or_default());
-        d.format = match picked {
-            Category::None | Category::Custom => Format::None,
-            Category::Number => Format::Number { decimals: 2, sep: 0, neg: 0, currency: String::new(), prepend: true },
-            Category::Percent => Format::Percent { decimals: 2, sep: 0 },
-            Category::Date => Format::Date("mm/dd/yyyy".into()),
-            Category::Time => Format::Time("HH:MM".into()),
-            Category::Special => Format::Special(0),
+        let original = d.original.as_ref().as_ref();
+        if cat == Category::Custom {
+            d.typed_format = d.custom_format.take();
+        }
+        let typed = d.typed_format.clone();
+        d.custom_format = (picked == Category::Custom).then(|| typed.or_else(|| original.and_then(|o| o.custom_format.clone())).unwrap_or_default());
+        // Custom keeps the field's own built-in format until a script is typed (a blank Custom
+        // changes nothing); the field's own category comes back as it was.
+        d.format = match (picked, original) {
+            (Category::Custom, o) => o.map(|o| o.format.clone()).unwrap_or_default(),
+            (picked, Some(o)) if category(&o.format) == picked => o.format.clone(),
+            (Category::None, _) => Format::None,
+            (Category::Number, _) => Format::Number { decimals: 2, sep: 0, neg: 0, currency: String::new(), prepend: true },
+            (Category::Percent, _) => Format::Percent { decimals: 2, sep: 0 },
+            (Category::Date, _) => Format::Date("mm/dd/yyyy".into()),
+            (Category::Time, _) => Format::Time("HH:MM".into()),
+            (Category::Special, _) => Format::Special(0),
         };
     }
     ui.add_space(8.0);
@@ -240,11 +237,18 @@ pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, env: &crate::w
         crate::widgets::script_editor(ui, script, "custom-validate", 8, f32::INFINITY, Some("event.rc = event.value > 0;"), env);
     }
     if m != mode {
-        // Custom brings back the field's own script, if it had one; another choice replaces it.
-        d.custom_validate = (m == Mode::Custom).then(|| d.original.as_ref().as_ref().and_then(|o| o.custom_validate.clone()).unwrap_or_default());
-        d.validate = match m {
-            Mode::Range => Validate::Range { min: Some(0.0), max: Some(100.0) },
-            Mode::None | Mode::Custom => Validate::None,
+        let original = d.original.as_ref().as_ref();
+        if mode == Mode::Custom {
+            d.typed_validate = d.custom_validate.take();
+        }
+        let typed = d.typed_validate.clone();
+        d.custom_validate = (m == Mode::Custom).then(|| typed.or_else(|| original.and_then(|o| o.custom_validate.clone())).unwrap_or_default());
+        // Custom keeps the field's own range until a script is typed, and the field's own range comes back as it was.
+        d.validate = match (m, original) {
+            (Mode::Custom, o) => o.map(|o| o.validate.clone()).unwrap_or_default(),
+            (Mode::Range, Some(o)) if matches!(o.validate, Validate::Range { .. }) => o.validate.clone(),
+            (Mode::Range, _) => Validate::Range { min: Some(0.0), max: Some(100.0) },
+            (Mode::None, _) => Validate::None,
         };
     }
 }
@@ -275,17 +279,16 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
             });
         });
         ui.end_row();
-        let hint = match a.kind {
-            0 => "JavaScript",
-            1 => "https://…",
-            2 => tl!("Fields to reset (comma-separated; empty: all)"),
-            3 => tl!("Print, NextPage, PrevPage, FirstPage or LastPage"),
-            4 => tl!("Page number"),
-            5 | 6 => tl!("Field names (comma-separated)"),
-            _ => tl!("URL to submit to"),
-        };
         // A script gets the dialog's whole width, under the grid; a value stays in it.
         if a.kind != 0 {
+            let hint = match a.kind {
+                1 => "https://…",
+                2 => tl!("Fields to reset (comma-separated; empty: all)"),
+                3 => tl!("Print, NextPage, PrevPage, FirstPage or LastPage"),
+                4 => tl!("Page number"),
+                5 | 6 => tl!("Field names (comma-separated)"),
+                _ => tl!("URL to submit to"),
+            };
             ui.label(tl!("Value:"));
             ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
             ui.end_row();
@@ -419,10 +422,13 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
         crate::widgets::script_editor(ui, script, "custom-calculate", 8, f32::INFINITY, Some("event.value = …"), env);
     }
     if m != mode {
-        // Custom brings back the field's own script, if it had one, and leaves the built-in
-        // calculation as it was: the script replaces it in the calculation order's place.
+        // Custom brings back what was typed in it, else the field's own script, if it had one.
         let original = d.original.as_ref().as_ref();
-        d.custom_calculate = (m == Mode::Custom).then(|| original.and_then(|o| o.custom_calculate.clone()).unwrap_or_default());
+        if mode == Mode::Custom {
+            d.typed_calculate = d.custom_calculate.take();
+        }
+        let typed = d.typed_calculate.clone();
+        d.custom_calculate = (m == Mode::Custom).then(|| typed.or_else(|| original.and_then(|o| o.custom_calculate.clone())).unwrap_or_default());
         let kept = |want: Mode| {
             original.map(|o| o.calculate.clone()).filter(|c| match want {
                 Mode::Simple => matches!(c, Calculate::Simple { .. }),
@@ -430,11 +436,13 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
                 _ => false,
             })
         };
-        match m {
-            Mode::None => d.calculate = Calculate::None,
-            Mode::Simple => d.calculate = kept(Mode::Simple).unwrap_or(Calculate::Simple { op: CalcOp::Sum, fields: Vec::new() }),
-            Mode::Notation => d.calculate = kept(Mode::Notation).unwrap_or(Calculate::Notation(String::new())),
-            Mode::Custom => {}
-        }
+        d.calculate = match m {
+            Mode::None => Calculate::None,
+            Mode::Simple => kept(Mode::Simple).unwrap_or(Calculate::Simple { op: CalcOp::Sum, fields: Vec::new() }),
+            Mode::Notation => kept(Mode::Notation).unwrap_or(Calculate::Notation(String::new())),
+            // The field's own calculation, whatever was picked on the way: a blank Custom
+            // changes nothing, and a script takes its place in the calculation order.
+            Mode::Custom => original.map(|o| o.calculate.clone()).unwrap_or_default(),
+        };
     }
 }

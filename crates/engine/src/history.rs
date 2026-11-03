@@ -40,8 +40,9 @@ pub(crate) fn uses_scripts(edit: &Edit) -> bool {
     match edit {
         Edit::SetFieldValue { .. } | Edit::ApplyScriptChanges { .. } | Edit::SetFieldScript { .. } | Edit::SetCalculationOrder { .. } => true,
         Edit::Batch { edits, .. } => edits.iter().any(uses_scripts),
-        // A custom calculation script set from the field properties dialog runs at once.
-        Edit::SetFieldProps { props, .. } => props.scripts.iter().any(|(s, _)| *s == pdfcraft_forms::FieldScript::Calculate),
+        // The field properties dialog: a custom calculation runs at once, and a custom format
+        // draws the field, whatever else changed (the field is drawn again for any property).
+        Edit::SetFieldProps { .. } => true,
         _ => false,
     }
 }

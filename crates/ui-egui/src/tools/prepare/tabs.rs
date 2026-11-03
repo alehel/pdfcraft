@@ -36,9 +36,21 @@ const SPECIALS: [&str; 5] = ["Zip Code", "Zip Code + 4", "Phone Number", "Social
 pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens, env: &crate::widgets::ScriptEnv) {
     let cat = if d.custom_format.is_some() { Category::Custom } else { category(&d.format) };
     let mut picked = cat;
+    let categories = [
+        (Category::None, tl!("None")),
+        (Category::Number, tl!("Number")),
+        (Category::Percent, tl!("Percentage")),
+        (Category::Date, tl!("Date")),
+        (Category::Time, tl!("Time")),
+        (Category::Special, tl!("Special")),
+        (Category::Custom, tl!("Custom")),
+    ];
     ui.horizontal(|ui| {
         ui.label(tl!("Select format category:"));
+        // Room for every category and one more: egui's default menu height cuts the seventh in half.
+        let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
         craft_ui::ComboBox::from_id_salt("format-cat")
+            .height(row * (categories.len() + 1) as f32)
             .selected_text(tl!(match cat {
                 Category::None => "None",
                 Category::Number => "Number",
@@ -49,15 +61,7 @@ pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme
                 Category::Custom => "Custom",
             }))
             .show_ui(ui, |ui| {
-                for (c, l) in [
-                    (Category::None, tl!("None")),
-                    (Category::Number, tl!("Number")),
-                    (Category::Percent, tl!("Percentage")),
-                    (Category::Date, tl!("Date")),
-                    (Category::Time, tl!("Time")),
-                    (Category::Special, tl!("Special")),
-                    (Category::Custom, tl!("Custom")),
-                ] {
+                for (c, l) in categories {
                     ui.selectable_value(&mut picked, c, l);
                 }
             });

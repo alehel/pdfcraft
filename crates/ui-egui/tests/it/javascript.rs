@@ -70,6 +70,56 @@ fn console_runs_scripts_against_the_document() {
     assert!(h.state().js_console.log.is_empty(), "{:?} {:?}", h.state().js_console.log, h.state().dialog);
 }
 
+/// A key press as a keyboard sends it: the modifiers, the press, then the release a frame later.
+fn press(h: &mut Harness<'static, PdfCraftApp>, modifiers: egui::Modifiers, key: egui::Key) {
+    let event = |pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+    h.input_mut().events.extend([egui::Event::ModifiersChanged(modifiers), event(true)]);
+    h.step();
+    h.input_mut().events.extend([event(false), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+    h.step();
+}
+
+/// The console's script box, focused, holding `script`.
+fn console_with(h: &mut Harness<'static, PdfCraftApp>, script: &str) {
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.run_steps(2);
+    h.state_mut().js_console.input = script.into();
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "JavaScript").focus();
+    h.run_steps(2);
+}
+
+/// ⌘↩ (Ctrl+Enter elsewhere) in the console's box runs the script, as Run does, and adds no line.
+#[test]
+fn command_enter_runs_the_console_script() {
+    let mut h = harness();
+    console_with(&mut h, "");
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "JavaScript").type_text("6 * 7");
+    h.run_steps(2);
+    press(&mut h, egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().js_console.log.contains(&"42".to_string()), "{:?}", h.state().js_console.log);
+    assert_eq!(h.state().js_console.input, "6 * 7");
+}
+
+/// Escape with the suggestion list open closes the list and leaves the dialog open; the next
+/// Escape closes the dialog. (egui drops a text box's focus on Escape unless the box claims it.)
+#[test]
+fn escape_closes_the_suggestion_list_before_the_console() {
+    let mut h = harness();
+    console_with(&mut h, "");
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "JavaScript").type_text("app.");
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("clearInterval").is_some(), "the list is open");
+    press(&mut h, egui::Modifiers::NONE, egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("clearInterval").is_none(), "the list closed");
+    assert_eq!(h.state().dialog, Some(Dialog::JsConsole), "the console stays open");
+    assert_eq!(h.state().js_console.input, "app.");
+    press(&mut h, egui::Modifiers::NONE, egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None, "a second Escape closes the console");
+}
+
 /// A button's script fills a field and its message takes the toast.
 #[test]
 fn button_scripts_run_and_alert() {

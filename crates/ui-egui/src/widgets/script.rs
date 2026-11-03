@@ -195,21 +195,37 @@ fn editor_and_status(
     };
     let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
     let box_width = if width.is_finite() { width } else { ui.available_width() };
+    let min_height = row_height * 2.0 + 14.0;
+    // In a dialog, no taller than the dialog can grow and still fit in the window: a box dragged
+    // past that would push the dialog's own buttons off the screen. The dialog's size is last
+    // frame's, so it is used only if the box was in it then (a box just opened could be measured
+    // against another dialog, and the box keeps a height it is clamped to).
+    let height_id = id.with("script-height");
+    let frame = ui.ctx().cumulative_frame_nr();
+    let last = ui.data(|d| d.get_temp::<(u64, f32)>(height_id)).filter(|(at, _)| at.saturating_add(1) >= frame).map(|(_, h)| h);
+    let max_height = match (crate::widgets::dialog_room(ui), last) {
+        (Some(room), Some(last)) if (last + room).is_finite() => (last + room).clamp(min_height, MAX_HEIGHT.max(min_height)),
+        _ => MAX_HEIGHT,
+    };
     let mut output: Option<egui::text_edit::TextEditOutput> = None;
+    // The part of the box that shows: the gutter and bracket outlines are clipped to it.
+    let mut viewport = egui::Rect::NOTHING;
     egui::Resize::default()
         .id_salt(id.with("size"))
         .resizable([false, true])
         .default_width(box_width)
         .min_width(box_width)
         .default_height(row_height * rows.max(1) as f32 + 14.0)
-        .min_height(row_height * 2.0 + 14.0)
-        .max_height(MAX_HEIGHT)
+        .min_height(min_height)
+        .max_height(max_height)
         .with_stroke(false)
         .show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt(id.with("scroll")).auto_shrink([false, false]).show(ui, |ui| {
+                viewport = ui.clip_rect();
                 let margin = egui::Margin { left: (10.0 + gutter).round().clamp(0.0, 120.0) as i8, right: 10, top: 6, bottom: 6 };
                 let mut edit = crate::widgets::block(text)
                     .code_editor()
+                    .event_filter(keys_kept(suggest.open.is_some()))
                     .margin(margin)
                     .desired_width(f32::INFINITY)
                     .min_size(egui::vec2(0.0, ui.available_height()))
@@ -222,11 +238,14 @@ fn editor_and_status(
             });
         });
     let Some(output) = output else { return ui.label("") };
+    if viewport.height().is_finite() {
+        ui.data_mut(|d| d.insert_temp(height_id, (frame, viewport.height())));
+    }
     let response = output.response.response.clone().accessible_name(tl!("JavaScript"));
-    paint_gutter(ui, &output, gutter, &font);
+    paint_gutter(ui, &output, gutter, &font, viewport);
     let caret = output.cursor_range.map(|r| r.primary.index.0);
     if let Some(caret) = caret.filter(|_| response.has_focus()) {
-        paint_brackets(ui, &output, text, &colours.tokens, caret, palette.bracket);
+        paint_brackets(ui, &output, text, &colours.tokens, caret, palette.bracket, viewport);
     }
 
     // Suggestions: opened by typing a `.`, inside getField("…"), two letters of a name, or Ctrl+Space.
@@ -272,6 +291,10 @@ fn editor_and_status(
             suggest.for_text = hash(text);
         }
     }
+    // Escape is the box's while the list is open, from the next frame on (the box was drawn
+    // before the list opened or closed this frame). egui keeps the filter only while the box has
+    // focus, whether or not the window has.
+    ui.memory_mut(|m| m.set_focus_lock_filter(id, keys_kept(suggest.open.is_some())));
 
     // The check, once typing pauses.
     let mut shared: Shared = ui.data(|d| d.get_temp(shared_id)).unwrap_or_default();
@@ -307,6 +330,13 @@ fn editor_and_status(
     response
 }
 
+/// The keys the box keeps while it has focus: the arrows, Tab (it indents), and Escape while
+/// the suggestion list is open. Without Escape, egui takes the box's focus away on Escape before
+/// the box sees the key, and a dialog the box is in closes instead of the list.
+fn keys_kept(escape: bool) -> egui::EventFilter {
+    egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape }
+}
+
 /// `found` without warnings about exactly the bytes `typing`: the word suggestions are open for.
 fn unfinished(found: &[Diagnostic], typing: Option<&Range<usize>>) -> Vec<Diagnostic> {
     found.iter().filter(|d| d.severity == Severity::Error || typing.is_none_or(|t| d.at.as_ref().is_none_or(|at| at.bytes != *t))).cloned().collect()
@@ -327,17 +357,20 @@ fn set_selection(ctx: &egui::Context, id: egui::Id, selection: Range<usize>) {
 }
 
 /// Line numbers in the box's left margin, by the first row of each line (a wrapped line has one).
-fn paint_gutter(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, gutter: f32, font: &egui::FontId) {
+/// Only the rows in `viewport`, the part of the scrolled box that shows, are numbered.
+fn paint_gutter(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, gutter: f32, font: &egui::FontId, viewport: egui::Rect) {
     let t = Tokens::get(ui.ctx());
-    let rect = output.response.response.rect;
+    let rect = output.response.response.rect.intersect(viewport);
     let painter = ui.painter_at(rect);
     let right = rect.left() + 4.0 + gutter;
     let mut line = 1usize;
     let mut starts_line = true;
     for row in &output.galley.rows {
-        if starts_line {
-            let y = output.galley_pos.y + row.rect().min.y;
+        let y = output.galley_pos.y + row.rect().min.y;
+        if starts_line && y + row.rect().height() > rect.top() && y < rect.bottom() {
             painter.text(egui::pos2(right - 8.0, y), egui::Align2::RIGHT_TOP, line.to_string(), font.clone(), t.text_muted);
+        }
+        if starts_line {
             line = line.saturating_add(1);
         }
         starts_line = row.ends_with_newline;
@@ -345,10 +378,19 @@ fn paint_gutter(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, gutter:
     painter.vline(right, rect.y_range(), Stroke::new(1.0, t.divider));
 }
 
-/// An outline round the bracket at the caret and the one that matches it.
-fn paint_brackets(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, text: &str, tokens: &[Token], caret: usize, colour: Color32) {
+/// An outline round the bracket at the caret and the one that matches it, where they show in
+/// `viewport`.
+fn paint_brackets(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    text: &str,
+    tokens: &[Token],
+    caret: usize,
+    colour: Color32,
+    viewport: egui::Rect,
+) {
     let Some((a, b)) = edit::matching_bracket(text, tokens, caret) else { return };
-    let painter = ui.painter_at(output.text_clip_rect);
+    let painter = ui.painter_at(output.text_clip_rect.intersect(viewport));
     for byte in [a, b] {
         let i = edit::char_of(text, byte);
         let start = output.galley.pos_from_cursor(CCursor::new(i));

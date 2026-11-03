@@ -154,11 +154,27 @@ struct Typing {
     time: f64,
     id: egui::Id,
     said: Vec<String>,
+    /// Each text painted: what it says, where, and the rectangle it is clipped to.
+    shapes: Vec<(String, egui::Rect, egui::Rect)>,
+    /// Whether the last frame left an Escape press for whatever is around the box (a dialog).
+    escape_left: bool,
+    /// Room above the box, as a dialog has (the top of the screen would hide what is painted above it).
+    above: f32,
 }
 
 impl Typing {
     fn new(text: &str, env: ScriptEnv) -> Self {
-        let mut t = Typing { ctx: egui::Context::default(), text: text.into(), env, time: 1.0, id: egui::Id::NULL, said: Vec::new() };
+        let mut t = Typing {
+            ctx: egui::Context::default(),
+            text: text.into(),
+            env,
+            time: 1.0,
+            id: egui::Id::NULL,
+            said: Vec::new(),
+            shapes: Vec::new(),
+            escape_left: false,
+            above: 0.0,
+        };
         t.frame(Vec::new());
         t.ctx.memory_mut(|m| m.request_focus(t.id));
         t.frame(Vec::new());
@@ -167,14 +183,23 @@ impl Typing {
 
     fn frame(&mut self, events: Vec<egui::Event>) {
         self.time += 0.05;
-        let (mut id, text, env) = (egui::Id::NULL, &mut self.text, &self.env);
+        let (mut id, mut escape_left, text, env, above) = (egui::Id::NULL, false, &mut self.text, &self.env, self.above);
         let output = self.ctx.run_ui(egui::RawInput { time: Some(self.time), events, ..Default::default() }, |ui| {
+            ui.add_space(above);
             id = ui.make_persistent_id("probe");
             script_editor(ui, text, "probe", 6, 400.0, None, env);
+            escape_left = ui.input(|i| i.key_pressed(egui::Key::Escape));
         });
-        self.id = id;
-        self.said =
-            output.shapes.iter().filter_map(|c| if let egui::Shape::Text(t) = &c.shape { Some(t.galley.text().to_owned()) } else { None }).collect();
+        (self.id, self.escape_left) = (id, escape_left);
+        self.shapes = output
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some((t.galley.text().to_owned(), egui::Rect::from_min_size(t.pos, t.galley.size()), c.clip_rect)),
+                _ => None,
+            })
+            .collect();
+        self.said = self.shapes.iter().map(|(s, _, _)| s.clone()).collect();
         output.drop_without_applying_deltas();
     }
 
@@ -242,11 +267,92 @@ fn a_dot_opens_suggestions_that_enter_takes_and_escape_closes() {
     t.key(egui::Key::Enter, egui::Modifiers::NONE);
     assert_eq!(t.text, "app.beep", "the second suggestion, and Enter did not add a line");
     assert!(t.suggest().is_empty(), "closed after choosing");
-    // Escape closes the list and leaves the text alone.
-    t.typed(".");
+    // Escape closes the list and leaves the text alone. The key is the box's: it keeps its focus,
+    // and a dialog around it does not close (egui drops a box's focus on Escape unless the box
+    // claims the key, and the dialog then takes it).
+    t.typed("; app.");
+    assert!(!t.suggest().is_empty(), "the list is open");
     t.key(egui::Key::Escape, egui::Modifiers::NONE);
     assert!(t.suggest().is_empty());
-    assert_eq!(t.text, "app.beep.");
+    assert_eq!(t.text, "app.beep; app.");
+    assert!(t.ctx.memory(|m| m.has_focus(t.id)), "the box keeps its focus");
+    assert!(!t.escape_left, "the dialog does not see the Escape");
+    // With the list closed, Escape is no longer the box's.
+    t.key(egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(t.escape_left, "a second Escape is the dialog's");
+}
+
+/// The list shows its eight rows however short the list open before it was: an egui Area lays its
+/// contents out in its last size, which kept a list that grew as short as the one before it.
+#[test]
+fn the_list_shows_eight_rows_after_a_shorter_list() {
+    let fields: Vec<String> = (1..=12).map(|i| format!("Field{i:02}")).collect();
+    let mut t = Typing::new("getField(\"Field0", ScriptEnv { fields: Some(fields), doc_scripts: Vec::new() });
+    // Rows padded as the app's theme pads buttons, taller than the text alone.
+    t.ctx.global_style_mut(|s| s.spacing.button_padding.y = 8.0);
+    t.select(16..16);
+    t.typed("1");
+    t.frame(Vec::new());
+    assert_eq!(t.suggest(), ["Field01"], "a list of one");
+    t.key(egui::Key::Backspace, egui::Modifiers::NONE);
+    t.frame(Vec::new());
+    t.frame(Vec::new());
+    assert_eq!(t.suggest().len(), 9);
+    let shown = t.shapes.iter().filter(|(s, rect, clip)| s.starts_with("Field") && clip.contains_rect(*rect)).count();
+    assert_eq!(shown, suggest::VISIBLE_ROWS, "{:?}", t.shapes.iter().filter(|(s, _, _)| s.starts_with("Field")).collect::<Vec<_>>());
+}
+
+/// Line numbers show only beside the lines in view: a scrolled box painted the numbers of the
+/// lines scrolled out over whatever was above it.
+#[test]
+fn line_numbers_stay_inside_a_scrolled_box() {
+    let text: String = (1..=40).map(|i| format!("var a{i} = {i};\n")).collect();
+    let end = text.chars().count();
+    let mut t = Typing::new(&text, ScriptEnv::default());
+    t.above = 300.0;
+    t.select(end..end);
+    t.typed("x");
+    // The box scrolls to the caret over a few frames.
+    for _ in 0..20 {
+        t.frame(Vec::new());
+    }
+    // The script shows between these heights (its clip, inside the box's margins).
+    let shown = t.shapes.iter().find(|(s, _, _)| s.starts_with("var a1 = 1;")).map(|(_, _, clip)| clip.y_range()).expect("the script is painted");
+    let numbers: Vec<_> = t.shapes.iter().filter(|(s, _, _)| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())).collect();
+    assert!(numbers.iter().any(|(s, rect, clip)| s == "41" && clip.intersects(*rect)), "the caret's line is numbered: {numbers:?}");
+    for (s, rect, clip) in numbers {
+        if clip.intersects(*rect) {
+            let visible = clip.intersect(*rect);
+            // The box's 6-point margins: a number may show in them, beside a line cut by the edge.
+            assert!(
+                visible.top() >= shown.min - 6.5 && visible.bottom() <= shown.max + 6.5,
+                "line {s} shows outside the box ({shown:?}): {rect:?} clipped to {clip:?}"
+            );
+        }
+    }
+}
+
+/// In a dialog, the box is never taller than the dialog can be and still fit in the window: a box
+/// dragged taller pushed the dialog's buttons off the screen, and kept that height when reopened.
+#[test]
+fn the_box_keeps_its_dialog_inside_the_window() {
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 400.0));
+    let mut text = String::new();
+    for frame in 0..6 {
+        let input = egui::RawInput { screen_rect: Some(screen), time: Some(1.0 + f64::from(frame) * 0.05), ..Default::default() };
+        let output = ctx.run_ui(input, |ui| {
+            crate::widgets::show_modal(ui.ctx(), "probe-dialog", |ui| {
+                ui.label("Title");
+                // 80 rows: far more than the window has room for.
+                script_editor(ui, &mut text, "probe", 80, 300.0, None, &ScriptEnv::default());
+                ui.label("Buttons");
+            });
+        });
+        output.drop_without_applying_deltas();
+    }
+    let card: egui::Rect = ctx.data(|d| d.get_temp(egui::Id::unique("probe-dialog").with("card"))).expect("the dialog was shown");
+    assert!(card.top() >= 0.0 && card.bottom() <= screen.bottom(), "the dialog leaves the window: {card:?}");
 }
 
 #[test]

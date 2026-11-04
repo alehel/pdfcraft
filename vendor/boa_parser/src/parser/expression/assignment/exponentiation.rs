@@ -58,6 +58,8 @@ where
     type Output = FormalParameterListOrExpression;
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        // PdfCraft patch: see `Cursor::enter_nesting`.
+        let _nesting = cursor.enter_nesting(interner)?;
         let next = cursor.peek(0, interner).or_abrupt()?;
         match next.kind() {
             TokenKind::Keyword((Keyword::Delete | Keyword::Void | Keyword::TypeOf, _))

@@ -88,6 +88,8 @@ where
     type Output = Expression;
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Expression> {
+        // PdfCraft patch: see `Cursor::enter_nesting`.
+        let _nesting = cursor.enter_nesting(interner)?;
         cursor.set_goal(InputElement::RegExp);
 
         match cursor.peek(0, interner).or_abrupt()?.kind() {

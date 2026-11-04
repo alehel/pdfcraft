@@ -793,8 +793,8 @@ fn deny_unicode_escape_in_null_expression() {
 
 #[test]
 fn stress_test_operations() {
-    let src = ("1 * 2 + /* comment why not */ 3 / 4 % 5 + ".repeat(1_000)
-        + "1; // end of line\n\n")
+    // PdfCraft patch: 800, not 1,000: 5,000 links in one statement pass `MAX_TREE_HEIGHT`.
+    let src = ("1 * 2 + /* comment why not */ 3 / 4 % 5 + ".repeat(800) + "1; // end of line\n\n")
         .repeat(1_000);
 
     assert!(
@@ -802,6 +802,35 @@ fn stress_test_operations() {
             .parse_script(&Scope::new_global(), &mut Interner::default())
             .is_ok()
     );
+}
+
+/// PdfCraft patch: what a script parses to, or the error, on a stack with room for the limits in
+/// a build with no optimization.
+fn parsed(src: &str) -> Result<(), String> {
+    let src = src.to_owned();
+    std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(move || {
+            Parser::new(Source::from_bytes(&src))
+                .parse_script(&Scope::new_global(), &mut Interner::default())
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+        .expect("a thread for the parser")
+        .join()
+        .expect("the parser panicked")
+}
+
+/// PdfCraft patch: the limits on nesting, height and names return ordinary errors. The tests that
+/// hold what they are for, against the engine, are in PdfCraft's `crates/js/tests/crafted_scripts.rs`.
+#[test]
+fn limits_are_ordinary_errors() {
+    assert!(parsed(&format!("{}1", "(".repeat(100_000))).is_err_and(|e| e.contains("nested")));
+    assert!(parsed(&format!("a{}", "+a".repeat(100_000))).is_err_and(|e| e.contains("chain")));
+    let names: String = (0..3000).map(|i| format!("a{i},")).collect();
+    assert!(parsed(&format!("let {names}z")).is_err_and(|e| e.contains("names")));
+    assert!(parsed("a:function b(){a:function c(){}}").is_err_and(|e| e.contains("labelled")));
+    assert!(parsed(&format!("/{}/", "a".repeat(9000))).is_err_and(|e| e.contains("too long")));
 }
 
 #[test]

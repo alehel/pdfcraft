@@ -160,6 +160,8 @@ where
         let bound_names = bound_names(&lexical_declaration);
         let mut names = FxHashSet::default();
         for name in bound_names {
+            // PdfCraft patch: see `Cursor::declare_lexical_name`.
+            cursor.declare_lexical_name(interner)?;
             if name == Sym::LET {
                 return Err(Error::general(
                     "'let' is disallowed as a lexically bound name",

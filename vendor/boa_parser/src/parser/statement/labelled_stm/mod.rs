@@ -71,6 +71,8 @@ where
                 ));
             }
             TokenKind::Keyword((Keyword::Function, _)) => {
+                // PdfCraft patch: see `Cursor::enter_labelled_function`.
+                let _labelled = cursor.enter_labelled_function(interner)?;
                 FunctionDeclaration::new(self.allow_yield, self.allow_await, false)
                     .parse(cursor, interner)?
                     .into()

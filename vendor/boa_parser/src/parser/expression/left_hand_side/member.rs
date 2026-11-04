@@ -61,6 +61,8 @@ where
     type Output = FormalParameterListOrExpression;
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        // PdfCraft patch: see `Cursor::enter_nesting`.
+        let _nesting = cursor.enter_nesting(interner)?;
         cursor.set_goal(InputElement::RegExp);
 
         let token = cursor.peek(0, interner).or_abrupt()?;
@@ -235,6 +237,10 @@ where
 
         cursor.set_goal(InputElement::TemplateTail);
 
+        // PdfCraft patch: taken once, not at each link: a span walks the whole tree under it, so
+        // `a.b.c…` cost the square of its length (36,000 links took 6 s).
+        let lhs_span_start = lhs.span().start();
+
         while let Some(tok) = cursor.peek(0, interner)? {
             match tok.kind() {
                 TokenKind::Punctuator(Punctuator::Dot) => {
@@ -244,7 +250,6 @@ where
 
                     let token = cursor.next(interner).or_abrupt()?;
 
-                    let lhs_span = lhs.span();
                     let access = match token.kind() {
                         TokenKind::IdentifierName((name, _)) => {
                             SimplePropertyAccess::new(lhs, Identifier::new(*name, token.span()))
@@ -271,7 +276,7 @@ where
                         TokenKind::PrivateIdentifier(name) => PrivatePropertyAccess::new(
                             lhs,
                             PrivateName::new(*name, token.span()),
-                            Span::new(lhs_span.start(), token.span().end()),
+                            Span::new(lhs_span_start, token.span().end()),
                         )
                         .into(),
                         _ => {
@@ -285,6 +290,8 @@ where
                     };
 
                     lhs = ast::Expression::PropertyAccess(access);
+                    // PdfCraft patch: see `Cursor::chain_link`.
+                    cursor.chain_link(interner)?;
                 }
                 TokenKind::Punctuator(Punctuator::OpenBracket) => {
                     cursor
@@ -295,6 +302,8 @@ where
                     cursor.expect(Punctuator::CloseBracket, "member expression", interner)?;
                     lhs =
                         ast::Expression::PropertyAccess(SimplePropertyAccess::new(lhs, idx).into());
+                    // PdfCraft patch: see `Cursor::chain_link`.
+                    cursor.chain_link(interner)?;
                 }
                 TokenKind::TemplateNoSubstitution { .. } | TokenKind::TemplateMiddle { .. } => {
                     lhs = TaggedTemplateLiteral::new(
@@ -305,6 +314,8 @@ where
                     )
                     .parse(cursor, interner)?
                     .into();
+                    // PdfCraft patch: see `Cursor::chain_link`.
+                    cursor.chain_link(interner)?;
                 }
                 _ => break,
             }

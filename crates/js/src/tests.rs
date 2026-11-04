@@ -423,8 +423,8 @@ fn a_failing_document_script_does_not_stop_the_field_script() {
     assert!(go("event.value = 1;", &Event::field("Calculate", "total", "")).doc_errors.is_empty());
 }
 
-/// A document script refused before running (too long, or nested too deeply to run safely) is
-/// skipped like one that throws: never run, reported in its place, the rest still run.
+/// A document script that can't run (too long, or nested too deeply to parse) is skipped like one
+/// that throws: never run, reported in its place, the rest still run.
 #[test]
 fn a_document_script_too_big_to_run_is_skipped_and_reported() {
     let docs = [
@@ -508,8 +508,9 @@ fn ordinary_nesting_still_runs() {
     assert_eq!(go(&s, &Event::field("Calculate", "a", "")).value, "1000");
 }
 
-/// Code built from strings at run time would reach the parser without the size and nesting
-/// checks the script itself passed, so `eval` and the `Function` constructors refuse it.
+/// Field scripts have no use for code built from strings at run time, and it would reach the
+/// parser without the length check the script itself passed, so `eval` and the `Function`
+/// constructors refuse it.
 #[test]
 fn scripts_cannot_compile_code_from_strings() {
     for s in [

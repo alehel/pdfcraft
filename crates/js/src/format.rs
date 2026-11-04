@@ -608,12 +608,10 @@ pub(crate) fn printx(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
 
 // ── stack safety ────────────────────────────────────────────────────────────────────────────
 //
-// boa's parser and compiler recurse once per nesting level and have no limit of their own: about
-// a hundred nested parentheses overflow a 2 MiB stack, which aborts the whole app. Scripts come
-// from documents, so `run` refuses nesting no real form needs and runs the engine on a thread
-// with a large stack (address space, committed only as it is used). Together these bound the
-// stack a script can use: brackets and prefix operators by the limits below, and every other
-// construct (a few KiB per level, several bytes of source each) by the length limit.
+// boa's parser, compiler and tree walks recurse on a script's nesting, and a stack overflow aborts
+// the whole app: about a hundred nested parentheses overflow a 2 MiB stack. So the parser limits
+// how deep a script nests and how tall a tree it builds (`vendor/boa_parser`, `Cursor`), and the
+// engine runs on a thread with a large stack (address space, committed only as it is used).
 
 /// Bytes `util.printd` has scanned for runs of a format character, for tests that bound its work.
 #[cfg(test)]

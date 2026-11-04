@@ -92,6 +92,8 @@ macro_rules! expression {
                     match *tok.kind() {
                         TokenKind::Punctuator(op) if $( op == $op )||* => {
                             cursor.advance(interner);
+                            // PdfCraft patch: see `Cursor::chain_link`.
+                            cursor.chain_link(interner)?;
                             lhs = Binary::new(
                                 op.as_binary_op().expect("Could not get binary operation."),
                                 lhs,
@@ -164,6 +166,8 @@ where
                     }
 
                     cursor.advance(interner);
+                    // PdfCraft patch: see `Cursor::chain_link`.
+                    cursor.chain_link(interner)?;
 
                     lhs = Binary::new(
                         Punctuator::Comma
@@ -200,7 +204,6 @@ struct ShortCircuitExpression {
     allow_in: AllowIn,
     allow_yield: AllowYield,
     allow_await: AllowAwait,
-    previous: PreviousExpr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -222,26 +225,6 @@ impl ShortCircuitExpression {
             allow_in: allow_in.into(),
             allow_yield: allow_yield.into(),
             allow_await: allow_await.into(),
-            previous: PreviousExpr::None,
-        }
-    }
-
-    fn with_previous<I, Y, A>(
-        allow_in: I,
-        allow_yield: Y,
-        allow_await: A,
-        previous: PreviousExpr,
-    ) -> Self
-    where
-        I: Into<AllowIn>,
-        Y: Into<AllowYield>,
-        A: Into<AllowAwait>,
-    {
-        Self {
-            allow_in: allow_in.into(),
-            allow_yield: allow_yield.into(),
-            allow_await: allow_await.into(),
-            previous,
         }
     }
 }
@@ -260,7 +243,7 @@ where
             return Ok(current_node);
         };
 
-        let mut previous = self.previous;
+        let mut previous = PreviousExpr::None;
 
         while let Some(tok) = cursor.peek(0, interner)? {
             match tok.kind() {
@@ -274,6 +257,8 @@ where
                         ));
                     }
                     cursor.advance(interner);
+                    // PdfCraft patch: see `Cursor::chain_link`.
+                    cursor.chain_link(interner)?;
                     previous = PreviousExpr::Logical;
                     let rhs =
                         BitwiseORExpression::new(self.allow_in, self.allow_yield, self.allow_await)
@@ -293,15 +278,31 @@ where
                         ));
                     }
                     cursor.advance(interner);
+                    // PdfCraft patch: `a||b||c` is `(a||b)||c`, as the grammar has it, in this
+                    // loop. It was `a||(b||c)`, one recursive call per `||`, and long lists of
+                    // alternatives are ordinary in form scripts. `||` is associative in value and
+                    // in what it evaluates, so only the tree's shape changes. What follows the
+                    // `||` is what binds tighter: its `&&`s.
+                    cursor.chain_link(interner)?;
                     previous = PreviousExpr::Logical;
-                    let rhs = Self::with_previous(
-                        self.allow_in,
-                        self.allow_yield,
-                        self.allow_await,
-                        PreviousExpr::Logical,
-                    )
-                    .parse(cursor, interner)?
-                    .try_into_expression()?;
+                    let mut rhs =
+                        BitwiseORExpression::new(self.allow_in, self.allow_yield, self.allow_await)
+                            .parse(cursor, interner)?
+                            .try_into_expression()?;
+                    while cursor.peek(0, interner)?.is_some_and(|tok| {
+                        tok.kind() == &TokenKind::Punctuator(Punctuator::BoolAnd)
+                    }) {
+                        cursor.advance(interner);
+                        cursor.chain_link(interner)?;
+                        let term = BitwiseORExpression::new(
+                            self.allow_in,
+                            self.allow_yield,
+                            self.allow_await,
+                        )
+                        .parse(cursor, interner)?
+                        .try_into_expression()?;
+                        rhs = Binary::new(BinaryOp::Logical(LogicalOp::And), rhs, term).into();
+                    }
                     current_node =
                         Binary::new(BinaryOp::Logical(LogicalOp::Or), current_node, rhs).into();
                 }
@@ -315,6 +316,8 @@ where
                         ));
                     }
                     cursor.advance(interner);
+                    // PdfCraft patch: see `Cursor::chain_link`.
+                    cursor.chain_link(interner)?;
                     previous = PreviousExpr::Coalesce;
                     let rhs =
                         BitwiseORExpression::new(self.allow_in, self.allow_yield, self.allow_await)
@@ -577,6 +580,8 @@ where
                         || op == Punctuator::GreaterThanOrEq =>
                 {
                     cursor.advance(interner);
+                    // PdfCraft patch: see `Cursor::chain_link`.
+                    cursor.chain_link(interner)?;
                     lhs = Binary::new(
                         op.as_binary_op().expect("Could not get binary operation."),
                         lhs,
@@ -597,6 +602,8 @@ where
                         || (op == Keyword::In && self.allow_in == AllowIn(true)) =>
                 {
                     cursor.advance(interner);
+                    // PdfCraft patch: see `Cursor::chain_link`.
+                    cursor.chain_link(interner)?;
                     lhs = Binary::new(
                         op.as_binary_op().expect("Could not get binary operation."),
                         lhs,

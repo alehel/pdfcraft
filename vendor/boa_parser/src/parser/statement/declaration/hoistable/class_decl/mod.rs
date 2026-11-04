@@ -156,6 +156,9 @@ where
     );
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        // PdfCraft patch: see `Cursor::enter_nesting`. A class body costs a lot of stack for one
+        // `Declaration`.
+        let _nesting = cursor.enter_nesting(interner)?;
         let token = cursor.peek(0, interner).or_abrupt()?;
         let super_ref = match token.kind() {
             TokenKind::Keyword((Keyword::Extends, true)) => {

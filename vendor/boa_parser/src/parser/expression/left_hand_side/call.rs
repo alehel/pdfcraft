@@ -119,8 +119,10 @@ where
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
         let mut lhs = self.call;
 
+        // PdfCraft patch: taken once, not at each link, as in `MemberExpression`.
+        let lhs_span_start = lhs.span().start();
+
         while let Some(token) = cursor.peek(0, interner)?.cloned() {
-            let lhs_span_start = lhs.span().start();
             match token.kind() {
                 TokenKind::Punctuator(Punctuator::OpenParen) => {
                     let (args, args_span) = Arguments::new(self.allow_yield, self.allow_await)
@@ -192,6 +194,8 @@ where
                 }
                 _ => break,
             }
+            // PdfCraft patch: see `Cursor::chain_link`.
+            cursor.chain_link(interner)?;
         }
 
         Ok(lhs)

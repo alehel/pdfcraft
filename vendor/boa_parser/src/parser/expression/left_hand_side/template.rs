@@ -61,6 +61,8 @@ where
         loop {
             match token.kind() {
                 TokenKind::TemplateMiddle(template_string) => {
+                    // PdfCraft patch: as in `TemplateLiteral`.
+                    cursor.chain_link(interner)?;
                     raws.push(template_string.raw());
                     cookeds.push(template_string.cooked());
                     exprs.push(

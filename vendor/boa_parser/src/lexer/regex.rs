@@ -11,6 +11,9 @@ use std::str::{self, FromStr};
 
 const MAXIMUM_REGEX_FLAGS: usize = 8;
 
+/// PdfCraft patch: the longest regular expression literal, in code points.
+const MAX_REGEX_LITERAL: usize = 8192;
+
 /// Regex literal lexing.
 ///
 /// Lexes Division, Assigndiv or Regex literal.
@@ -127,6 +130,18 @@ impl<R> Tokenizer<R> for RegexLiteral {
         }
         let flags: RegExpFlags =
             RegExpFlags::try_from(&flags[..n]).map_err(|e| Error::syntax(e, start_pos))?;
+
+        // PdfCraft patch: `regress` takes the square of the length for some patterns, here to
+        // validate (`(a)|(a)|…`, 87,000 groups took 6 s) and again when the literal is evaluated
+        // (`a|a|…`, 131,000 alternatives took over 25 s). 8192 is about 30 ms a literal at worst.
+        if body.len() > MAX_REGEX_LITERAL {
+            return Err(Error::syntax(
+                format!(
+                    "the regular expression is too long to run safely (the limit is {MAX_REGEX_LITERAL} characters)"
+                ),
+                start_pos,
+            ));
+        }
 
         // We have a vague hint of the size of this vector in the best case scenario.
         let mut body_utf16 = Vec::with_capacity(body.len());

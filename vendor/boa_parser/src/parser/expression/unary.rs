@@ -62,6 +62,8 @@ where
     type Output = FormalParameterListOrExpression;
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        // PdfCraft patch: see `Cursor::enter_nesting`.
+        let _nesting = cursor.enter_nesting(interner)?;
         let tok = cursor.peek(0, interner).or_abrupt()?;
         let token_start = tok.span().start();
         match tok.kind() {

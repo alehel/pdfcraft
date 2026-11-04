@@ -75,6 +75,7 @@ fn renderer_and_security_vendors_remain() {
         "vendor/hayro-postscript",
         "vendor/lopdf",
         "vendor/vello_common",
+        "vendor/boa_parser",
     ] {
         assert!(manifest.contains(&format!("path = \"{vendor}\"")), "{vendor} must stay a path patch");
     }

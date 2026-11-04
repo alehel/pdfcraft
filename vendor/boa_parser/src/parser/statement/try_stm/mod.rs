@@ -56,6 +56,10 @@ where
     type Output = Try;
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        // PdfCraft patch: leaving a `finally`, the compiler copies every jump still pending, with
+        // what each has to do on its way out: 43,000 `break`s inside 250 `try`s took 5 s. Code has
+        // no use for many of these, so one counts as four more levels: see `Cursor::enter_nesting`.
+        let _nesting = cursor.enter_nesting_at(4, interner)?;
         // TRY
         cursor.expect((Keyword::Try, false), "try statement", interner)?;
 

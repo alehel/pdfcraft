@@ -16,84 +16,19 @@ pub(crate) const MAX_PRINTF_OUTPUT_BYTES: usize = 1 << 20;
 /// length costs the script nothing but the host one string per item; real lists are tiny.
 pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 
-/// Deepest nesting of `(`, `[` and `{`.
-const MAX_BRACKET_DEPTH: usize = 64;
-
-/// Longest run of prefix operators (`!`, `~`, `+`, `-`).
-const MAX_PREFIX_RUN: usize = 64;
-
-/// Most `?` (conditional expressions nest without brackets).
-const MAX_CONDITIONALS: usize = 4096;
-
 /// The script thread's stack.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SCRIPT_STACK: usize = 1 << 30;
 
-/// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
-/// and comments are skipped; brackets in regular expressions and templates count, which only
-/// errs on the safe side.
+/// Why `source` is refused before it reaches the parser, if it is: too long. Every other bound on
+/// what a script costs lives in the parser (`vendor/boa_parser`, `Cursor`), which reads the script
+/// as JavaScript: how deep it nests and how tall a tree its chains build, which bound the stack
+/// and every pass that walks the tree, how many names one function declares, and how long a
+/// regular expression is. No byte scanner can do that: it can't tell a regular expression from a
+/// division, or a block's `}` from an object's.
 pub(crate) fn refuse(source: &str) -> Option<String> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
-    }
-    let too_deep = || Some("the script is nested too deeply to run safely".to_string());
-    let b = source.as_bytes();
-    let (mut depth, mut prefix, mut conditionals) = (0usize, 0usize, 0usize);
-    let mut i = 0;
-    while let Some(&c) = b.get(i) {
-        i += 1;
-        match c {
-            b'\'' | b'"' => {
-                // To the closing quote (or the end of the line, where an unclosed string ends).
-                while let Some(&d) = b.get(i) {
-                    i += 1;
-                    if d == b'\\' {
-                        i += 1;
-                    } else if d == c || d == b'\n' {
-                        break;
-                    }
-                }
-                prefix = 0;
-            }
-            b'/' if b.get(i) == Some(&b'/') => {
-                while b.get(i).is_some_and(|d| *d != b'\n') {
-                    i += 1;
-                }
-            }
-            b'/' if b.get(i) == Some(&b'*') => {
-                i += 1;
-                while i < b.len() && !b[i..].starts_with(b"*/") {
-                    i += 1;
-                }
-                i += 2;
-            }
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                if depth > MAX_BRACKET_DEPTH {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            b')' | b']' | b'}' => {
-                depth = depth.saturating_sub(1);
-                prefix = 0;
-            }
-            b'!' | b'~' | b'+' | b'-' => {
-                prefix += 1;
-                if prefix > MAX_PREFIX_RUN {
-                    return too_deep();
-                }
-            }
-            b'?' => {
-                conditionals += 1;
-                if conditionals > MAX_CONDITIONALS {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            c if c.is_ascii_whitespace() => {}
-            _ => prefix = 0,
-        }
     }
     None
 }
@@ -112,8 +47,8 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
     if let Some(why) = refuse(script) {
         return failed(why);
     }
-    // A document script too long or too deeply nested to run safely is skipped and reported,
-    // as one that throws is; the others and the script still run (#3940).
+    // A document script too long to run safely is skipped and reported, as one that fails to
+    // parse or throws is; the others and the script still run (#3940).
     let mut skipped = Vec::new();
     let kept: Vec<(usize, &str)> = doc_scripts
         .iter()
@@ -145,8 +80,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
-/// and async kin). Such code is built at run time, so it never passed [`refuse`], and boa's
-/// recursive parser would overflow the stack on a deeply nested one.
+/// and async kin). Such code is built at run time, so it never passed [`refuse`].
 struct NoCodeFromStrings;
 
 impl HostHooks for NoCodeFromStrings {
@@ -155,8 +89,9 @@ impl HostHooks for NoCodeFromStrings {
     }
 }
 
-/// Host hooks that hold code compiled from strings to the checks a script passes ([`refuse`]),
-/// for runners that start the script itself through `eval`.
+/// Host hooks that hold code compiled from strings to the length limit a script is held to
+/// ([`refuse`]), for runners that start the script itself through `eval`. The parser's own limits
+/// apply to it as they do to any script.
 pub(crate) struct CheckedCodeFromStrings;
 
 impl HostHooks for CheckedCodeFromStrings {
@@ -165,14 +100,7 @@ impl HostHooks for CheckedCodeFromStrings {
         if units > MAX_SCRIPT_BYTES {
             return Err(JsNativeError::range().with_message("the code is too long to compile").into());
         }
-        // As one text: brackets left open in one parameter carry into the next.
-        let mut source = parameters.iter().map(JsString::to_std_string_lossy).collect::<Vec<_>>().join(",");
-        source.push('\n');
-        source.push_str(&body.to_std_string_lossy());
-        match refuse(&source) {
-            Some(why) => Err(JsNativeError::range().with_message(why).into()),
-            None => Ok(()),
-        }
+        Ok(())
     }
 }
 
@@ -199,6 +127,11 @@ fn run_here(
             return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
         }
     };
+    // boa's optimizer, on by default, runs while a script is parsed (`eval`, which XFA scripts go
+    // through, skips it). It evaluates constant expressions, whatever they cost and whether or not
+    // they ever run: `3n**499999999n`, 14 bytes, takes minutes. And it copies what it keeps of each
+    // dead `if`, once per level of a ladder. A form gains nothing from it.
+    ctx.set_optimizer_options(boa_engine::optimizer::OptimizerOptions::empty());
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {

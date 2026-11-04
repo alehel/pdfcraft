@@ -104,6 +104,9 @@ where
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
         let span = cursor.peek(0, interner).or_abrupt()?.span();
         let ident = Identifier.parse(cursor, interner)?;
+        // PdfCraft patch: every name a declaration states comes through here. An arrow function's
+        // parameters, read first as an expression, are counted when they turn out to be parameters.
+        cursor.declare_name(ident.sym(), interner)?;
         match ident.sym() {
             Sym::ARGUMENTS | Sym::EVAL if cursor.strict() => {
                 let name = interner

@@ -52,7 +52,7 @@ use boa_ast::{
         operator::{assign::AssignTarget, binary::BinaryOp},
     },
     function::{FormalParameter, FormalParameterList},
-    operations::{ContainsSymbol, contains},
+    operations::{ContainsSymbol, bound_names, contains},
     pattern::{ArrayPattern, ObjectPattern, Pattern},
 };
 use boa_interner::{Interner, Sym};
@@ -528,6 +528,15 @@ where
         }
 
         let parameters = FormalParameterList::from(parameters);
+
+        // PdfCraft patch: these were expressions when they were read, so they never passed
+        // `BindingIdentifier`: `({a0,a1,…})=>0`. See `Cursor::declare_name`.
+        {
+            let _names = cursor.enter_function_names();
+            for name in bound_names(&parameters) {
+                cursor.declare_name(name, interner)?;
+            }
+        }
 
         if let Some(span) = tailing_comma
             && parameters.has_rest_parameter()

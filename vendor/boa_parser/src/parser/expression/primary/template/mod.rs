@@ -80,6 +80,9 @@ where
             let token = cursor.lex_template(self.start, interner)?;
             match token.kind() {
                 TokenKind::TemplateMiddle(template_string) => {
+                    // PdfCraft patch: the compiler holds a register per substitution, and scans
+                    // them for each it takes: `${a}${a}…`, 52,000 of them, took 2 s.
+                    cursor.chain_link(interner)?;
                     let Some(cooked) = template_string.cooked() else {
                         return Err(Error::general(
                             "invalid escape in template literal",

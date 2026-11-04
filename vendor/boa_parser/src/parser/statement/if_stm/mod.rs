@@ -50,13 +50,52 @@ impl IfStatement {
     }
 }
 
+/// PdfCraft patch: one clause of an `if` ladder.
+enum Clause {
+    /// `if (condition) then else`, with `else if` following.
+    ElseIf(boa_ast::Expression, boa_ast::Statement),
+    /// The end of the ladder.
+    Last(If),
+}
+
 impl<R> TokenParser<R> for IfStatement
 where
     R: ReadChar,
 {
     type Output = If;
 
+    /// PdfCraft patch: an `else if` ladder is parsed in this loop, not one recursive call per
+    /// `else if`: ladders with hundreds of branches are ordinary in form scripts, where the
+    /// nesting limit is meant for what nests. The tree is the same, so it counts towards the
+    /// tree's height; a later clause sits under all the links before it.
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        let mut ladder = Vec::new();
+        let mut links = 0_u32;
+        let last = loop {
+            let (clause, height) = cursor.measure_height(|cursor| self.clause(cursor, interner))?;
+            cursor.include_height(links.saturating_add(height), interner)?;
+            links = links.saturating_add(1);
+            match clause {
+                Clause::ElseIf(condition, then_node) => ladder.push((condition, then_node)),
+                Clause::Last(last) => break last,
+            }
+        };
+        Ok(ladder
+            .into_iter()
+            .rev()
+            .fold(last, |else_node, (condition, then_node)| {
+                If::new(condition, then_node, Some(else_node.into()))
+            }))
+    }
+}
+
+impl IfStatement {
+    /// PdfCraft patch: this was `parse`, whose `else if` parsed the rest as a statement.
+    fn clause<R: ReadChar>(
+        self,
+        cursor: &mut Cursor<R>,
+        interner: &mut Interner,
+    ) -> ParseResult<Clause> {
         cursor.expect((Keyword::If, false), "if statement", interner)?;
         cursor.expect(Punctuator::OpenParen, "if statement", interner)?;
 
@@ -116,6 +155,11 @@ where
                     let token = cursor.peek(0, interner).or_abrupt()?;
                     let position = token.span().start();
                     let stmt = match token.kind() {
+                        // PdfCraft patch: see `parse`. An escaped `if` falls to `Statement`,
+                        // whose `IfStatement` refuses it.
+                        TokenKind::Keyword((Keyword::If, false)) => {
+                            return Ok(Clause::ElseIf(condition, then_node));
+                        }
                         TokenKind::Keyword((Keyword::Function, _)) => {
                             // FunctionDeclarations in IfStatement Statement Clauses
                             // https://tc39.es/ecma262/#sec-functiondeclarations-in-ifstatement-statement-clauses
@@ -161,6 +205,6 @@ where
             None
         };
 
-        Ok(If::new(condition, then_node, else_stmt))
+        Ok(Clause::Last(If::new(condition, then_node, else_stmt)))
     }
 }

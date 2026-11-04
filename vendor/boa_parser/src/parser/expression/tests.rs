@@ -1089,24 +1089,25 @@ fn check_logical_expressions() {
     check_script_parser(
         "a && b || c && d || e",
         vec![
+            // PdfCraft patch: `||` is left-associative, as the grammar has it (`Cursor::chain_link`).
             Statement::Expression(Expression::from(Binary::new(
                 LogicalOp::Or.into(),
                 Binary::new(
-                    LogicalOp::And.into(),
-                    Identifier::new(
-                        interner.get_or_intern_static("a", utf16!("a")),
-                        Span::new((1, 1), (1, 2)),
-                    )
-                    .into(),
-                    Identifier::new(
-                        interner.get_or_intern_static("b", utf16!("b")),
-                        Span::new((1, 6), (1, 7)),
-                    )
-                    .into(),
-                )
-                .into(),
-                Binary::new(
                     LogicalOp::Or.into(),
+                    Binary::new(
+                        LogicalOp::And.into(),
+                        Identifier::new(
+                            interner.get_or_intern_static("a", utf16!("a")),
+                            Span::new((1, 1), (1, 2)),
+                        )
+                        .into(),
+                        Identifier::new(
+                            interner.get_or_intern_static("b", utf16!("b")),
+                            Span::new((1, 6), (1, 7)),
+                        )
+                        .into(),
+                    )
+                    .into(),
                     Binary::new(
                         LogicalOp::And.into(),
                         Identifier::new(
@@ -1121,11 +1122,11 @@ fn check_logical_expressions() {
                         .into(),
                     )
                     .into(),
-                    Identifier::new(
-                        interner.get_or_intern_static("e", utf16!("e")),
-                        Span::new((1, 21), (1, 22)),
-                    )
-                    .into(),
+                )
+                .into(),
+                Identifier::new(
+                    interner.get_or_intern_static("e", utf16!("e")),
+                    Span::new((1, 21), (1, 22)),
                 )
                 .into(),
             )))

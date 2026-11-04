@@ -67,6 +67,8 @@ where
     type Output = FormalParameterList;
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        // PdfCraft patch: see `Cursor::declare_name`.
+        let _names = cursor.enter_function_names();
         cursor.set_goal(InputElement::RegExp);
 
         let Some(start_position) = cursor
@@ -469,6 +471,8 @@ where
     type Output = AstFunctionBody;
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        // PdfCraft patch: see `Cursor::declare_name`.
+        let _names = cursor.enter_function_names();
         let start = if self.parse_full_input {
             cursor
                 .peek(0, interner)?

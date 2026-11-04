@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** patch (gap 15: what a script can still do while it runs, now that parsing and compiling one are bounded; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -334,7 +335,10 @@ update the numbers.
 
 - **Missing:** the wider Acrobat JavaScript object model (annotations, layers, dialogs), document
   actions, the Actions tab triggers that run JavaScript, form submission, the debugger, barcode
-  fields, rich-text values; XFA flattening and complete dynamic-form fidelity.
+  fields, rich-text values; XFA flattening and complete dynamic-form fidelity. Limits while a script
+  runs: boa's native functions recurse over data a script builds with no limit, so a deep enough
+  array or proxy chain still aborts the app, and memory and regular expression time are unbounded
+  (`form.js-security`).
 - **Evidence:** `form.js-host` partial, `form.document-actions`, `form.submit-form`,
   `edit.action-javascript`, `form.js-debugger`, `form.xfa-flatten` planned; XFA layout, FormCalc
   and data partial.

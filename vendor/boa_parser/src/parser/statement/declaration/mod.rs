@@ -65,6 +65,8 @@ where
     type Output = ast::Declaration;
 
     fn parse(self, cursor: &mut Cursor<R>, interner: &mut Interner) -> ParseResult<Self::Output> {
+        // PdfCraft patch: see `Cursor::enter_nesting`.
+        let _nesting = cursor.enter_nesting(interner)?;
         let tok = cursor.peek(0, interner).or_abrupt()?;
         let tok_kind = tok.kind().clone();
         let tok_span = tok.span();

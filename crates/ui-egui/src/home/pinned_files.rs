@@ -1,5 +1,6 @@
-//! Files pinned to Home: the PDFs the user keeps coming back to, in a box under the community
-//! card, one click away whatever else they open and whether or not Recent is cleared.
+//! Files pinned to Home: the PDFs the user keeps coming back to, listed above the pinned folders
+//! and laid out like them, one click away whatever else they open and whether or not Recent is
+//! cleared.
 //!
 //! Local only: a pinned file is a path on this computer, kept in the settings and read only when
 //! it is opened. Nothing is read to draw the box, so a file on an offline drive or in a cloud
@@ -95,7 +96,7 @@ fn clean(path: &str) -> Option<String> {
     (fits && p.is_absolute() && p.file_name().is_some()).then(|| path.to_string())
 }
 
-/// The file name in `path`, for tiles and messages.
+/// The file name in `path`, for rows and messages.
 pub fn file_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
@@ -175,116 +176,80 @@ impl PdfCraftApp {
     }
 }
 
-/// A file's tile is at least this wide where the row has room, and widens to fill the row.
+/// A pinned file's row: as tall as a pinned folder's heading row, whose layout it follows.
 #[cfg(not(target_arch = "wasm32"))]
-const TILE_MIN_WIDTH: f32 = 230.0;
-/// ...but no wider than this, on a very wide Home.
-#[cfg(not(target_arch = "wasm32"))]
-const TILE_MAX_WIDTH: f32 = 340.0;
-#[cfg(not(target_arch = "wasm32"))]
-const TILE_HEIGHT: f32 = 56.0;
-#[cfg(not(target_arch = "wasm32"))]
-const TILE_GAP: f32 = 10.0;
+const ROW_HEIGHT: f32 = 30.0;
 
-/// The width of each tile in a row `room` wide: as many as fit at [`TILE_MIN_WIDTH`], widened
-/// to share the row. A row narrower than one tile gets one tile as wide as the row.
-#[cfg(not(target_arch = "wasm32"))]
-fn tile_width(room: f32) -> f32 {
-    let room = if room.is_finite() { room.max(1.0) } else { TILE_MIN_WIDTH };
-    let columns = ((room + TILE_GAP) / (TILE_MIN_WIDTH + TILE_GAP)).floor().max(1.0);
-    ((room - TILE_GAP * (columns - 1.0)) / columns).clamp(1.0, TILE_MAX_WIDTH)
-}
-
-/// The Home view's Pinned files box, right under the community card (desktop only: the web build
-/// opens files from the browser, without paths to keep).
+/// The Home view's Pinned files section, right above Folders and laid out like it: a heading
+/// with Pin a file… beside it, then one row per file with its name, where it is and Unpin.
+/// Desktop only: the web build opens files from the browser, without paths to keep.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    use egui::{CornerRadius, Rect, Sense, Stroke, vec2};
+    use egui::{Align2, CornerRadius, Rect, Sense, vec2};
 
     use crate::theme::{self, Tokens};
     use crate::{icons, widgets};
 
     let t = Tokens::get(ui.ctx());
     let mut pick = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Pinned files")).font(theme::semibold(17.0)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            pick = widgets::ghost_button(ui, "pin", tl!("Pin a file…")).clicked();
+        });
+    });
+    ui.add_space(4.0);
+    if app.pinned_files.is_empty() {
+        ui.label(
+            egui::RichText::new(tl!(
+                "Pin the PDFs you use most to open them here in one click: hover a recent file and click its pin, or choose a file."
+            ))
+            .color(t.text_muted),
+        );
+    }
     let mut open = None;
     let mut unpin = None;
-    egui::Frame::NONE
-        .fill(t.card)
-        .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(12))
-        .inner_margin(egui::Margin::same(14))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                // As tall as the button from the start, so the heading centres on it.
-                ui.set_min_height(30.0);
-                let (icon, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-                icons::paint(ui, icon, "pin", 17.0, t.icon);
-                ui.label(egui::RichText::new(tl!("Pinned files")).font(theme::semibold(15.0)));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    pick = widgets::ghost_button(ui, "pin", tl!("Pin a file…")).clicked();
-                });
-            });
-            if app.pinned_files.is_empty() {
-                ui.add_space(2.0);
-                ui.label(
-                    egui::RichText::new(tl!("Keep the PDFs you use most one click away: pin a file here, or hover a recent file and click its pin."))
-                        .color(t.text_muted),
-                );
-                return;
-            }
-            ui.add_space(8.0);
-            let width = tile_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(TILE_GAP, TILE_GAP);
-                for path in app.pinned_files.paths() {
-                    let name = file_name(path);
-                    let (rect, resp) = ui.allocate_exact_size(vec2(width, TILE_HEIGHT), Sense::click());
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
-                    let press = theme::Press::track(ui, &resp);
-                    super::card_lift(ui, &t, rect, press);
-                    let fill = press.fill(t.card, t.hover, t.pressed);
-                    ui.painter().rect(rect, CornerRadius::same(10), fill, Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
-                    let body = rect.translate(press.offset());
-                    icons::paint(
-                        ui,
-                        Rect::from_min_size(body.min + vec2(12.0, 16.0), vec2(24.0, 24.0)),
-                        "file-text",
-                        22.0,
-                        egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
-                    );
-                    // Room on the right for the unpin button; hovering shows the whole path.
-                    let text_width = body.width() - 44.0 - 40.0;
-                    widgets::row_text(ui, body.min + vec2(44.0, 20.0), name.as_str(), theme::medium(13.0), t.text, text_width);
-                    let place = super::folders_ui::location(path);
-                    widgets::row_text(ui, body.min + vec2(44.0, 38.0), place, theme::regular(11.5), t.text_faint, text_width);
-                    // The tile, not its response: the pointer stays "in" the tile over its button.
-                    if ui.rect_contains_pointer(rect) {
-                        let x_rect = Rect::from_center_size(rect.right_top() + vec2(-18.0, 18.0), vec2(24.0, 24.0));
-                        let x = ui.interact(x_rect, ui.scope_id().with(("unpin-file", path)), Sense::click());
-                        let label = crate::i18n::fmt(tl!("Unpin {name}"), &[("name", &name)]);
-                        x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-                        if x.hovered() {
-                            ui.painter().rect_filled(x_rect, CornerRadius::same(6), t.pressed);
-                        }
-                        icons::paint(ui, x_rect.shrink(5.0), "x", 14.0, t.icon);
-                        if theme::hand(x).on_hover_text(tl!("Unpin from Home")).clicked() {
-                            unpin = Some(path.clone());
-                        }
-                    }
-                    let resp = theme::hand(resp).on_hover_text(path);
-                    resp.context_menu(|ui| {
-                        if ui.button(tl!("Unpin from Home")).clicked() {
-                            unpin = Some(path.clone());
-                            ui.close();
-                        }
-                    });
-                    if resp.clicked() && unpin.is_none() {
-                        open = Some(path.clone());
-                    }
-                }
-            });
-        });
+    for path in app.pinned_files.paths() {
+        let name = file_name(path);
+        ui.add_space(6.0);
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+        // The row, not its response: the pointer stays "in" the row over its Unpin button. The
+        // wash reaches a little past the icon and the button, which line up with the headings.
+        if ui.rect_contains_pointer(rect) {
+            ui.painter().rect_filled(rect.expand2(vec2(6.0, 0.0)), CornerRadius::same(8), t.hover);
+        }
+        // Unpin, as on a pinned folder; laid out first so the name and location stop short of it.
+        let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        let button = widgets::ghost_button(&mut right, "x", tl!("Unpin"));
+        // Every file has an Unpin button: say which one it is.
+        let label = crate::i18n::fmt(tl!("Unpin {name}"), &[("name", &name)]);
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        if button.clicked() {
+            unpin = Some(path.clone());
+        }
+        let end = right.min_rect().left() - 12.0;
+        icons::paint(
+            ui,
+            Rect::from_center_size(rect.left_center() + vec2(11.0, 0.0), vec2(22.0, 22.0)),
+            "file-text",
+            20.0,
+            egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
+        );
+        // File names and paths are file/path chrome: explicitly left to right, so an Arabic name
+        // keeps its `.pdf` at the visual end. A long name or location is cut short, never Unpin.
+        let name_x = rect.left() + 30.0;
+        let name_galley = ltr_galley(ui, name.clone(), theme::semibold(14.0), t.text, end - name_x);
+        let place_x = name_x + name_galley.size().x + 10.0;
+        ui.painter().galley(Align2::LEFT_CENTER.anchor_size(egui::pos2(name_x, rect.center().y), name_galley.size()).min, name_galley, t.text);
+        if end - place_x >= 24.0 {
+            let place = ltr_galley(ui, super::folders_ui::location(path), theme::regular(12.0), t.text_faint, end - place_x);
+            ui.painter().galley(Align2::LEFT_CENTER.anchor_size(egui::pos2(place_x, rect.center().y), place.size()).min, place, t.text_faint);
+        }
+        if theme::hand(resp).on_hover_text(path).clicked() && unpin.is_none() {
+            open = Some(path.clone());
+        }
+    }
     if pick {
         app.pin_file_dialog();
     }
@@ -294,6 +259,15 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(path) = open {
         app.open_recent(&path);
     }
+}
+
+/// `text` on one line, left to right, cut with "…" at `max_width`.
+#[cfg(not(target_arch = "wasm32"))]
+fn ltr_galley(ui: &egui::Ui, text: String, font: egui::FontId, color: egui::Color32, max_width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+    job.direction = egui::epaint::text::TextDirection::LeftToRight;
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
+    ui.painter().layout_job(job)
 }
 
 #[cfg(test)]
@@ -338,24 +312,6 @@ mod tests {
         let mut p = PinnedFiles::default();
         p.restore(&serde_json::Value::Array(items));
         assert!(p.is_empty(), "entries past the first {MAX_RESTORED_ENTRIES} are not read");
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn tiles_fill_the_row() {
-        for room in [0.0, 100.0, 229.0, 230.0, 469.0, 470.0, 1066.0, 5000.0] {
-            let w = tile_width(room);
-            let columns = ((room + TILE_GAP) / (w + TILE_GAP)).floor().max(1.0);
-            assert!((1.0..=TILE_MAX_WIDTH).contains(&w), "{room}: {w}");
-            assert!(columns * w + (columns - 1.0) * TILE_GAP <= room.max(1.0) + 0.01, "{room}: {columns} tiles of {w} fit");
-            if room >= TILE_MIN_WIDTH {
-                assert!(w >= TILE_MIN_WIDTH, "{room}: {w}");
-            }
-        }
-        assert_eq!(tile_width(f32::NAN), TILE_MIN_WIDTH);
-        assert_eq!(tile_width(f32::INFINITY), TILE_MIN_WIDTH);
-        // Four tiles share the Home of a 1440-point window with the tools panel open.
-        assert!((tile_width(1066.0) - 259.0).abs() < 0.01);
     }
 
     #[test]

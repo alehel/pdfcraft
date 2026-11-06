@@ -1,4 +1,4 @@
-//! Files pinned to Home: the Pinned files box right under the community card, pinning from
+//! Files pinned to Home: the Pinned files section right above the pinned folders, pinning from
 //! Recent, File ▸ Pin file to Home… and a tab's menu, opening and unpinning, and the setting
 //! surviving a restart and Clear Recent Files.
 
@@ -73,18 +73,35 @@ fn text_top(h: &Harness<'static, PdfCraftApp>, text: &str) -> f32 {
         .unwrap_or_else(|| panic!("{text:?} is painted"))
 }
 
+const HINT: &str = "Pin the PDFs you use most to open them here in one click";
+
 #[test]
-fn the_pinned_box_sits_right_under_the_community_card() {
+fn pinned_files_sit_right_above_pinned_folders() {
     let h = harness(|_| {});
-    h.get_by_label_contains("Keep the PDFs you use most one click away");
-    let community = text_top(&h, "Join the ArtCraft community");
-    let pinned = text_top(&h, "Pinned files");
+    h.get_by_label_contains(HINT);
     let tools = text_top(&h, "Recommended tools");
-    assert!(community < pinned && pinned < tools, "community card {community}, pinned files {pinned}, recommended tools {tools}");
+    let pinned = text_top(&h, "Pinned files");
+    let folders = text_top(&h, "Folders");
+    assert!(tools < pinned && pinned < folders, "recommended tools {tools}, pinned files {pinned}, folders {folders}");
+    // Headed like Folders, with its button beside the heading.
+    let heading = |text: &str| {
+        h.output()
+            .shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.text() == text => Some(t.galley.job.sections.first().map(|s| s.format.font_id.size)),
+                _ => None,
+            })
+            .flatten()
+    };
+    assert_eq!(heading("Pinned files"), heading("Folders"));
+    let pin_file = h.get_by_label("Pin a file…").rect();
+    let pin_folder = h.get_by_label("Pin a folder…").rect();
+    assert!((pin_file.right() - pin_folder.right()).abs() < 0.5, "both buttons end at the same edge");
 }
 
 #[test]
-fn pinning_a_recent_file_shows_it_in_the_box() {
+fn pinning_a_recent_file_lists_it_above_the_folders() {
     let dir = TempFolder::new("from-recent");
     let path = dir.pdf("contract.pdf");
     let row = path.clone();
@@ -96,8 +113,9 @@ fn pinning_a_recent_file_shows_it_in_the_box() {
     h.get_by_label("Pin contract.pdf to Home").click();
     h.run_steps(2);
     assert!(h.state().pinned_files.contains(&path));
-    assert_eq!(h.query_all_by_label("contract.pdf").count(), 2, "the Recent row and its tile in the box");
-    assert!(h.query_by_label_contains("Keep the PDFs you use most").is_none(), "the hint goes once a file is pinned");
+    assert_eq!(h.query_all_by_label("contract.pdf").count(), 2, "the Recent row and its Pinned files row");
+    assert!(h.query_by_label_contains(HINT).is_none(), "the hint goes once a file is pinned");
+    assert!(text_top(&h, "Pinned files") < text_top(&h, "Folders"));
     // A pinned file's row shows its pin without hovering, and the pin unpins it.
     h.hover_at(egui::pos2(1.0, 1.0));
     h.run_steps(2);
@@ -121,20 +139,18 @@ fn clicking_a_pinned_file_opens_it() {
 }
 
 #[test]
-fn unpinning_a_tile_keeps_the_file() {
+fn unpinning_keeps_the_file() {
     let dir = TempFolder::new("unpin");
     let path = dir.pdf("keep.pdf");
     let pin = path.clone();
     let mut h = harness(move |app| assert!(app.pin_file(&pin)));
-    assert!(h.query_by_label("Unpin keep.pdf").is_none(), "the unpin button shows only over its tile");
-    h.get_by_label("keep.pdf").hover();
-    h.run_steps(2);
+    // Like a pinned folder's, the Unpin button is always there.
     h.get_by_label("Unpin keep.pdf").click();
     h.run_steps(2);
     assert!(h.state().pinned_files.is_empty());
     assert!(h.state().views.is_empty(), "unpinning doesn't open the file");
     assert!(h.query_by_label("keep.pdf").is_none());
-    h.get_by_label_contains("Keep the PDFs you use most one click away");
+    h.get_by_label_contains(HINT);
     assert!(std::path::Path::new(&path).exists(), "unpinning never touches the file");
 }
 

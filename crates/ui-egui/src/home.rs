@@ -62,14 +62,6 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.add_space(22.0);
             }
 
-            // The files the user pinned, right under the community card (or the welcome text once
-            // that card is closed).
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                pinned_files::section(app, ui);
-                ui.add_space(22.0);
-            }
-
             egui::Frame::NONE
                 .fill(t.card)
                 .stroke(Stroke::new(1.0, t.border))
@@ -143,6 +135,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
             #[cfg(not(target_arch = "wasm32"))]
             {
+                // The files the user pinned, right above the pinned folders and laid out like them.
+                ui.add_space(26.0);
+                pinned_files::section(app, ui);
                 ui.add_space(26.0);
                 crate::folders_ui::section(app, ui);
             }

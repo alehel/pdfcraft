@@ -231,6 +231,25 @@ fn an_unavailable_file_is_checked_again_rather_than_opened() {
 }
 
 #[test]
+fn an_unavailable_file_open_in_a_tab_brings_the_tab_forward() {
+    let dir = TempFolder::new("unavailable-tab");
+    // Open in a tab, but gone from its drive since.
+    let path = dir.0.join("away.pdf").to_string_lossy().into_owned();
+    let (pin, open) = (path.clone(), path.clone());
+    let mut h = harness(move |app| {
+        app.open_bytes("away.pdf", Some(open), FIXTURE.to_vec()).unwrap();
+        app.recent.clear();
+        assert!(app.pin_file(&pin));
+        app.active = None;
+    });
+    h.run_steps(2);
+    assert_eq!(h.state().pinned_previews.state(&path), PreviewState::Unavailable);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "away.pdf").click();
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0), "its tab comes to the front");
+}
+
+#[test]
 fn previews_are_drawn_off_the_ui_thread_in_the_app() {
     let dir = TempFolder::new("threaded-app");
     let path = dir.pdf("threaded.pdf");

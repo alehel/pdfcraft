@@ -337,8 +337,9 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         // Found unavailable, or its drive isn't answering a read (a hung network drive, say):
         // opening it would ask that drive here, on the UI thread, and wait. It is checked again
         // instead, off the UI thread (unless a check is under way), and the user is told; it can be
-        // opened once its card is back.
-        if app.pinned_previews.unresponsive(&path, now) {
+        // opened once its card is back. A tab already showing it comes to the front, which asks
+        // nothing of the drive.
+        if app.tab_showing(&path).is_none() && app.pinned_previews.unresponsive(&path, now) {
             app.pinned_previews.recheck_now(&path);
             app.notify_fmt("{name} isn't available right now. Try again in a moment.", &[("name", &file_name(&path))]);
         } else {

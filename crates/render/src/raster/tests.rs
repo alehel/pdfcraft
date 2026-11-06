@@ -7308,3 +7308,25 @@ trailer << /Root 1 0 R >>
     assert_eq!(page_size(&Arc::new(b"not a pdf".to_vec()), None, 0), None);
     assert_eq!(page_size(&Arc::new(Vec::new()), None, 0), None);
 }
+
+/// A pool made to render on its own threads only does, and answers like any other.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_threaded_pool_renders_off_the_callers_thread() {
+    let pdf = Arc::new(
+        b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+            .to_vec(),
+    );
+    let pool = RenderPool::threaded(pdf, 1, RenderConfig::default()).expect("a thread starts");
+    assert!(!pool.is_inline());
+    assert_eq!(pool.threads(), 1);
+    pool.set_queue(vec![RenderRequest { page: 0, scale: 0.5, tag: 7, ..Default::default() }]);
+    let page = receive_before_deadline(&pool);
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.request.tag, page.width, page.height), (7, 150, 200));
+}

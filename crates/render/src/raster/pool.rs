@@ -257,18 +257,38 @@ impl RenderPool {
         Self::with_mode(bytes, threads, config, false)
     }
 
+    /// A pool that renders on its own threads only: `None` when none could start, where
+    /// [`RenderPool::new`] would render on the caller's thread instead (parsing the document there
+    /// at once). For callers that must never render on the UI thread, such as previews. Always
+    /// `None` on the web, which has no threads.
+    pub fn threaded(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig) -> Option<Self> {
+        let pool = Self::spawned(bytes, threads.max(1), config);
+        let started = !lock(&pool._workers).is_empty();
+        started.then_some(pool)
+    }
+
     fn with_mode(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, inline: bool) -> Self {
-        let threads = if inline || cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
+        let threads = if inline { 0 } else { threads.max(1) };
+        let mut pool = Self::spawned(bytes.clone(), threads, config.clone());
+        if lock(&pool._workers).is_empty() {
+            pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(bytes, config)));
+        }
+        pool
+    }
+
+    /// A pool with `threads` workers started (none on the web), and no fallback.
+    fn spawned(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig) -> Self {
+        let threads = if cfg!(target_arch = "wasm32") { 0 } else { threads };
         let shared = Arc::new(Shared::default());
         let results_tx = shared.queue.clone();
         let results = ResultReceiver(shared.queue.clone());
-        let mut pool = Self {
+        let pool = Self {
             shared,
             wake: Mutex::new(Vec::new()),
             results,
             results_tx,
-            bytes: bytes.clone(),
-            config: config.clone(),
+            bytes,
+            config,
             _workers: Mutex::new(Vec::new()),
             stuck_after: STUCK_AFTER,
             replacements_left: Mutex::new(threads),
@@ -277,9 +297,6 @@ impl RenderPool {
         };
         for _ in 0..threads {
             pool.spawn_worker();
-        }
-        if lock(&pool._workers).is_empty() {
-            pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(bytes, config)));
         }
         pool
     }

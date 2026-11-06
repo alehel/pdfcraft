@@ -158,6 +158,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 }
                                 let id = app.views[i].id;
                                 let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
+                                let pinned = doc.path.as_deref().is_some_and(|p| app.pinned_files.contains(p));
                                 response.context_menu(|ui| {
                                     if ui.button(tl!("Close Tab")).clicked() {
                                         action = Some(crate::tab_context::Action::Close(id));
@@ -170,6 +171,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
                                     if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
                                         action = Some(crate::tab_context::Action::Reveal(id));
+                                        ui.close();
+                                    }
+                                    // A file kept on Home, one click away (the web build has no path to keep).
+                                    let pin = if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
+                                    if ui.add_enabled(reveal, egui::Button::new(pin)).clicked() {
+                                        action = Some(crate::tab_context::Action::TogglePin(id));
                                         ui.close();
                                     }
                                 });

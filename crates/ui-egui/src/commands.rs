@@ -182,6 +182,7 @@ impl PdfCraftApp {
             },
             "file.clear_recent" if self.recent.is_empty() => self.notify_tr("No recent files"),
             "file.clear_recent" => self.recent.clear(),
+            "file.pin_file" => self.pin_file_dialog(),
             "file.pin_folder" => self.pin_folder_dialog(),
             "file.save" => {
                 self.save_active(SaveTarget::InPlace);

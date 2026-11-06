@@ -103,6 +103,7 @@ use dialogs::protect;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
 pub use home::folders_ui;
+pub use home::pinned_files;
 pub use hooks::{FailedInbox, HostDirtyFn, HostSaveFn, Inbox, OsEvent, OsEventsFn};
 use menus::tab_context;
 use panels::all_tools_ui;
@@ -372,6 +373,8 @@ pub struct PdfCraftApp {
     open_prepare_gate: Option<std::sync::Arc<open_worker::PrepareGate>>,
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
+    /// Files pinned to Home, in the order they were pinned.
+    pub pinned_files: pinned_files::PinnedFiles,
     pub toast: Option<(String, f64)>,
     /// The form script message the toast shows now, if it shows one: drawn with its title and
     /// icon (#4293).

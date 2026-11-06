@@ -110,6 +110,7 @@ const FILE: &[&str] = &[
     "create.blank",
     "file.open",
     "file.open_recent",
+    "file.pin_file",
     "file.pin_folder",
     SEP,
     "page.combine",

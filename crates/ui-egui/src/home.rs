@@ -1,5 +1,5 @@
-//! Home tab: recommended tools, open card, pinned folders and recent files (local only, never
-//! another app's list).
+//! Home tab: pinned files, recommended tools, open card, pinned folders and recent files (local
+//! only, never another app's list).
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::catalog;
@@ -8,6 +8,7 @@ use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, panels::human_size, widgets};
 
 pub mod folders_ui;
+pub mod pinned_files;
 
 const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
@@ -58,6 +59,14 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             app.execute(cmd);
                         }
                     });
+                ui.add_space(22.0);
+            }
+
+            // The files the user pinned, right under the community card (or the welcome text once
+            // that card is closed).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                pinned_files::section(app, ui);
                 ui.add_space(22.0);
             }
 
@@ -156,6 +165,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             let mut open = None;
             let mut remove = None;
+            let mut pin = None;
+            // The web build keeps no paths to pin: its rows have no pin button.
+            let can_pin = cfg!(not(target_arch = "wasm32"));
             for r in &app.recent {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &r.name));
@@ -182,6 +194,22 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         remove = Some(r.path.clone());
                     }
                 }
+                // Pin to Home: shown over the row, and always on a pinned file so it reads as pinned.
+                let pinned = can_pin && app.pinned_files.contains(&r.path);
+                if can_pin && (hovered || pinned) {
+                    let pin_rect = Rect::from_center_size(rect.right_center() - vec2(58.0, 0.0), vec2(28.0, 28.0));
+                    let button = ui.interact(pin_rect, ui.scope_id().with(("pin-recent", &r.path)), Sense::click());
+                    let label = if pinned { tl!("Unpin {name} from Home") } else { tl!("Pin {name} to Home") };
+                    let label = crate::i18n::fmt(label, &[("name", &r.name)]);
+                    button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                    if button.hovered() {
+                        ui.painter().rect_filled(pin_rect, CornerRadius::same(6), t.pressed);
+                    }
+                    icons::paint(ui, pin_rect.shrink(6.0), "pin", 16.0, if pinned { t.accent } else { t.icon });
+                    if button.on_hover_text(if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") }).clicked() {
+                        pin = Some(r.path.clone());
+                    }
+                }
                 let body = rect.translate(press.offset());
                 icons::paint(
                     ui,
@@ -190,9 +218,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     22.0,
                     egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
                 );
-                // Room on the right for the remove button.
+                // Room on the right for the pin and remove buttons.
                 let detail = ui.painter().text(
-                    body.right_center() - vec2(48.0, 0.0),
+                    body.right_center() - vec2(if can_pin { 80.0 } else { 48.0 }, 0.0),
                     Align2::RIGHT_CENTER,
                     format!("{}  ·  {}", crate::i18n::trn(crate::i18n::current(), r.pages as u64, "{n} page", "{n} pages"), human_size(r.size)),
                     theme::regular(12.0),
@@ -211,6 +239,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             if let Some(p) = remove {
                 app.recent.retain(|r| r.path != p);
+            }
+            if let Some(p) = pin {
+                app.toggle_pinned_file(&p);
             }
             if clear {
                 app.execute("file.clear_recent");

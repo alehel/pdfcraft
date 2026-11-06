@@ -146,6 +146,7 @@ impl PdfCraftApp {
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
+        v["pinned_files"] = self.pinned_files.to_json();
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
         v.to_string()
@@ -206,6 +207,7 @@ impl PdfCraftApp {
             self.show_secured_notice = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
+        self.pinned_files.restore(&v["pinned_files"]);
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);
         }

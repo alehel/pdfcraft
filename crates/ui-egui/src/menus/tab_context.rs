@@ -5,6 +5,8 @@ pub(crate) enum Action {
     Close(DocId),
     Reopen,
     Reveal(DocId),
+    /// Pin the tab's file to Home, or unpin it.
+    TogglePin(DocId),
 }
 
 impl crate::PdfCraftApp {
@@ -43,6 +45,10 @@ impl crate::PdfCraftApp {
                 #[cfg(target_arch = "wasm32")]
                 let _ = id;
             }
+            Action::TogglePin(id) => match self.session.get(id).and_then(|d| d.path.clone()) {
+                Some(path) => self.toggle_pinned_file(&path),
+                None => self.notify_tr("Save this document to a file first, then pin it to Home"),
+            },
         }
     }
 }

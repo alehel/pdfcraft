@@ -1,7 +1,8 @@
 //! First-page previews of the pinned files, for Home's grid.
 //!
 //! Nothing is read on the UI thread, so an offline drive or a cloud folder still syncing never
-//! stalls the frame. One file at a time is read on a loader thread, and only while Home shows:
+//! stalls the frame. One file at a time is read on a loader thread (so at most one download runs,
+//! and a large file downloading slowly holds back the files after it), and only while Home shows:
 //! its size first (a file over [`MAX_FILE_BYTES`] gets no preview), then its first page's size,
 //! and the page renders through a one-thread [`RenderPool`] (its panic guard, size caps and
 //! watchdog) at the size a card shows it. At most [`MAX_THREADS`] render threads exist at once,
@@ -11,7 +12,8 @@
 //! answer used, and its file isn't read again meanwhile, even unpinned and pinned again; only
 //! while [`MAX_STUCK`] such reads are stuck does no new one start. While Home shows, each file is checked again every [`RECHECK_SECS`]: one
 //! changed on disk renders again, one that can't be read shows as unavailable, and a preview
-//! drawn for another screen density is drawn again. While Home doesn't show, the work stops
+//! is drawn again when the screen's density rises well past the one it was drawn for (a smaller
+//! one only scales it down, so zooming the interface doesn't read every file again). While Home doesn't show, the work stops
 //! ([`Previews::park_unless_drawn`]).
 
 use std::collections::HashMap;
@@ -34,6 +36,11 @@ const MAX_SIDE: f32 = 512.0;
 const LOAD_TIMEOUT: f64 = 20.0;
 /// A file is read this many bytes at a time, each one counting as progress.
 const CHUNK: usize = 256 << 10;
+/// A read with no progress for this long (seconds) may be waiting on a drive that doesn't answer:
+/// its file isn't opened on a click meanwhile (opening asks the drive on the UI thread).
+const STALL_HINT: f64 = 2.0;
+/// A preview is drawn again when the box it is shown in grows past this factor (in pixels).
+const SHARPER: f32 = 1.5;
 /// Reads given up on that may still be stuck before no new read starts (threads can't be
 /// killed). Each is a different file, pinned now or earlier: more than can be pinned at once.
 const MAX_STUCK: usize = super::MAX_PINNED_FILES + 8;
@@ -174,6 +181,13 @@ impl Previews {
         Some((tex.id(), egui::vec2(w as f32, h as f32)))
     }
 
+    /// Whether opening `path` now could wait on a drive that doesn't answer: it was found
+    /// unavailable, or a read of it has made no progress for [`STALL_HINT`] (`now` is egui time).
+    pub(crate) fn unresponsive(&self, path: &str, now: f64) -> bool {
+        self.state(path) == PreviewState::Unavailable
+            || self.reads.iter().any(|r| r.path == path && Arc::strong_count(&r.slot) > 1 && (r.abandoned || now - r.since > STALL_HINT))
+    }
+
     /// Check `path` again on the next frame, unless a read of it is under way.
     pub(crate) fn recheck_now(&mut self, path: &str) {
         if let Some(e) = self.entries.get_mut(path) {
@@ -220,10 +234,10 @@ impl Previews {
         let (keep, gone): (Vec<Job>, Vec<Job>) = self.jobs.drain(..).partition(|j| paths.contains(&j.path));
         self.jobs = keep;
         self.retiring.extend(gone.into_iter().map(|j| j.pool.retire()));
-        // A preview drawn for a box of another size (another screen density) is drawn again; the
-        // old one stands in meanwhile. Asked for every frame until one of the new size is in, so a
-        // check under way that finds the file unchanged doesn't end it.
-        let off = |a: f32, b: f32| (a - b).abs() > 0.2 * b.max(1.0);
+        // A preview drawn for a box well smaller than now (a denser screen) is drawn again; the old
+        // one stands in meanwhile. Asked for every frame until a sharp enough one is in, so a check
+        // under way that finds the file unchanged doesn't end it.
+        let off = |drawn: f32, wanted: f32| wanted > drawn * SHARPER;
         let reads = &self.reads;
         for (path, e) in self.entries.iter_mut() {
             if e.tex.is_some() && (off(e.px.x, px.x) || off(e.px.y, px.y)) && !reads.iter().any(|r| r.path == *path) {
@@ -274,7 +288,11 @@ impl Previews {
     /// so a file due but waiting for a read (its own, or another's) asks for nothing.
     fn schedule(&self, ctx: &egui::Context, now: f64, drew: bool, waiting: bool) {
         use std::time::Duration;
-        let after = |secs: f64| ctx.request_repaint_after(Duration::from_secs_f64(secs.clamp(0.0, RECHECK_SECS)));
+        let after = |secs: f64| {
+            if secs.is_finite() {
+                ctx.request_repaint_after(Duration::from_secs_f64(secs.clamp(0.0, RECHECK_SECS)));
+            }
+        };
         if drew {
             ctx.request_repaint();
         }
@@ -332,7 +350,8 @@ impl Previews {
     /// A file never read yet shows as unavailable; one read before keeps its card as it was. Either
     /// way the read's answer is still used if it comes.
     fn give_up_slow_read(&mut self, now: f64) {
-        for r in self.reads.iter_mut().filter(|r| !r.abandoned) {
+        // A read whose thread is done (its answer waits for a render thread) isn't slow.
+        for r in self.reads.iter_mut().filter(|r| !r.abandoned && Arc::strong_count(&r.slot) > 1) {
             // Bytes arrived since the last look: still going (a slow download, say).
             let read = r.progress.load(Ordering::Relaxed);
             if read != r.seen {
@@ -407,6 +426,9 @@ impl Previews {
         let Some(entry) = self.entries.get_mut(&path) else { return };
         entry.checked = now;
         match found {
+            // As it was when the read started; but a card made since (the file unpinned and pinned
+            // again meanwhile) knows nothing of that: read again now.
+            Found::Unchanged if entry.stamp.is_none() => entry.checked = f64::NEG_INFINITY,
             // As it was: the preview (or why there is none) stands, even after a slow read.
             Found::Unchanged => {}
             Found::Unavailable => *entry = Entry::new(PreviewState::Unavailable, None, now),
@@ -508,6 +530,12 @@ fn load(path: &str, known: Option<Stamp>, max_bytes: u64, progress: &AtomicU64) 
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => return Found::Unavailable,
         };
+        // Room for the whole file once its data flows (not for a read that stalls before), so
+        // the buffer doesn't grow by doubling to twice the file's size. Within the limit checked
+        // above; a file grown since only grows the buffer as usual.
+        if bytes.capacity() == 0 {
+            bytes.reserve_exact(usize::try_from(stamp.len).unwrap_or(0).max(n));
+        }
         bytes.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
         let read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         progress.store(read, Ordering::Relaxed);
@@ -515,6 +543,7 @@ fn load(path: &str, known: Option<Stamp>, max_bytes: u64, progress: &AtomicU64) 
             return Found::NoPreview(stamp);
         }
     }
+    bytes.shrink_to_fit();
     let bytes = Arc::new(bytes);
     match pdfcraft_render::page_size(&bytes, None, 0) {
         Some(size) => Found::Read { bytes, size, stamp },
@@ -907,18 +936,143 @@ trailer << /Root 1 0 R >>
             })
             .drop_without_applying_deltas();
         };
-        // Home shows: the read it started stays.
+        let read_done = |p: &Previews| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !p.reads.iter().all(|r| Arc::strong_count(&r.slot) == 1) {
+                assert!(std::time::Instant::now() < deadline, "the read finishes");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
         pass(&mut p, true);
-        assert_eq!(p.reads(), 1);
         gate.open();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while !p.reads.iter().all(|r| Arc::strong_count(&r.slot) == 1) {
-            assert!(std::time::Instant::now() < deadline, "the read finishes");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        // A pass without Home: the file read but not drawn is let go of.
+        read_done(&p);
+        // Home shows: its render starts, and stays (or is already drawn).
+        pass(&mut p, true);
+        assert!(p.jobs.len() == 1 || matches!(p.state(&file), PreviewState::Ready { .. }), "not let go of while Home shows");
+        // A pass without Home: a render under way is let go of.
         pass(&mut p, false);
-        assert!(p.reads.iter().all(|r| r.slot.lock().unwrap().is_none()));
+        assert!(p.jobs.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_file_whose_drive_doesnt_answer_isnt_opened() {
+        let path = temp("answer.pdf", PDF);
+        let file = path.to_string_lossy().into_owned();
+        let paths = vec![file.clone()];
+        let gate = Arc::new(Gate::default());
+        let calls = Arc::new(Mutex::new(0usize));
+        let (wait, count) = (gate.clone(), calls.clone());
+        let mut p = Previews {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
+                let first = {
+                    let mut n = count.lock().unwrap();
+                    *n += 1;
+                    *n == 1
+                };
+                if !first {
+                    wait.wait();
+                }
+                load(f, known, MAX_FILE_BYTES, progress)
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut now = 0.0;
+        frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&file), PreviewState::Ready { .. }));
+        assert!(!p.unresponsive(&file, now), "drawn and nothing under way: opens");
+        // A check that gets no answer: briefly, it may still answer; soon, it isn't opened, though
+        // its card keeps the preview.
+        p.recheck();
+        p.frame(&ctx, &paths, PX, now, false);
+        assert!(!p.unresponsive(&file, now + 1.0));
+        assert!(p.unresponsive(&file, now + STALL_HINT + 1.0));
+        p.frame(&ctx, &paths, PX, now + LOAD_TIMEOUT + 1.0, false);
+        assert!(matches!(p.state(&file), PreviewState::Ready { .. }));
+        assert!(p.unresponsive(&file, now + LOAD_TIMEOUT + 1.0));
+        gate.open();
+        let mut later = now + LOAD_TIMEOUT + 1.0;
+        frames_until(&mut p, &ctx, &paths, &mut later, |p| p.reads() == 0);
+        assert!(!p.unresponsive(&file, later), "it answered");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_file_pinned_again_during_a_check_gets_its_preview_back() {
+        let path = temp("repin.pdf", PDF);
+        let file = path.to_string_lossy().into_owned();
+        let paths = vec![file.clone()];
+        let gate = Arc::new(Gate::default());
+        let calls = Arc::new(Mutex::new(0usize));
+        let (wait, count) = (gate.clone(), calls.clone());
+        let mut p = Previews {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
+                let n = {
+                    let mut n = count.lock().unwrap();
+                    *n += 1;
+                    *n
+                };
+                if n == 2 {
+                    wait.wait();
+                }
+                load(f, known, MAX_FILE_BYTES, progress)
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut now = 0.0;
+        frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&file), PreviewState::Ready { .. }));
+        // A check starts; the file is unpinned and pinned again meanwhile; the check finds it as
+        // it was, which its new card knows nothing of: it is read and drawn again.
+        p.recheck();
+        p.frame(&ctx, &paths, PX, now, false);
+        p.frame(&ctx, &[], PX, now, false);
+        p.frame(&ctx, &paths, PX, now, false);
+        assert_eq!(p.state(&file), PreviewState::Pending);
+        gate.open();
+        frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&file), PreviewState::Ready { .. }));
+        assert_eq!(*calls.lock().unwrap(), 3);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_read_waiting_for_a_render_thread_isnt_called_slow() {
+        let mut p = Previews::default();
+        let path = "/nowhere/read.pdf".to_owned();
+        p.entries.insert(path.clone(), Entry::new(PreviewState::Pending, None, 0.0));
+        // Its thread is done (the slot has no other owner) and its answer waits in the slot.
+        let slot = Arc::new(Mutex::new(Some(Found::NoPreview(Stamp { len: 0, modified: None }))));
+        p.reads.push(Reading { path: path.clone(), slot, progress: Arc::new(AtomicU64::new(0)), seen: 0, since: 0.0, abandoned: false });
+        p.give_up_slow_read(10.0 * LOAD_TIMEOUT);
+        assert!(p.reads.iter().all(|r| !r.abandoned));
+        assert_eq!(p.state(&path), PreviewState::Pending);
+    }
+
+    #[test]
+    fn a_small_density_change_doesnt_read_the_files_again() {
+        let path = temp("zoom.pdf", PDF);
+        let file = path.to_string_lossy().into_owned();
+        let paths = vec![file.clone()];
+        let calls = Arc::new(Mutex::new(0usize));
+        let count = calls.clone();
+        let mut p = Previews {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
+                *count.lock().unwrap() += 1;
+                load(f, known, MAX_FILE_BYTES, progress)
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut now = 0.0;
+        frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&file), PreviewState::Ready { .. }));
+        // Interface zoom steps up and down: the preview scales, the file isn't read again.
+        for zoom in [1.2, 0.8, 0.5, 1.4] {
+            for _ in 0..5 {
+                p.frame(&ctx, &paths, PX * zoom, now, false);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        assert_eq!(*calls.lock().unwrap(), 1);
         let _ = std::fs::remove_file(&path);
     }
 

@@ -286,9 +286,13 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let name_at = Align2::CENTER_CENTER.anchor_size(pos2(body.center().x, fit_box.bottom() + 20.0), galley.size());
             painter.galley(name_at.min, galley, t.text);
 
-            if hovered {
+            // Shown over a hovered card, and for the keyboard while the card or the button itself
+            // has focus. Tab hands the card's focus on as the card registers, so the button is
+            // there on that frame too, to take it.
+            let x_id = ui.scope_id().with(("unpin-file", path));
+            if hovered || ui.memory(|m| m.has_focus(x_id)) || widgets::focus_or_tabbing_on(ui, &resp) {
                 let x_rect = Rect::from_center_size(rect.right_top() + vec2(-16.0, 16.0), vec2(24.0, 24.0));
-                let x = ui.interact(x_rect, ui.scope_id().with(("unpin-file", path)), Sense::click());
+                let x = ui.interact(x_rect, x_id, Sense::click());
                 let label = crate::i18n::fmt(tl!("Unpin {name}"), &[("name", &name)]);
                 x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
                 ui.painter().circle_filled(x_rect.center(), 11.0, if x.hovered() { t.pressed } else { t.card });
@@ -298,9 +302,13 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     unpin = Some(path.clone());
                 }
             }
-            // Hovering shows the whole path, and why there is no preview.
+            // Hovering shows the whole path, and why there is no preview (screen readers get the
+            // reason as the card's description).
             let tip = match why {
-                Some((_, reason)) => format!("{path}\n{reason}"),
+                Some((_, reason)) => {
+                    ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(reason));
+                    format!("{path}\n{reason}")
+                }
                 None => path.clone(),
             };
             let resp = theme::hand(resp).on_hover_text(tip);

@@ -173,9 +173,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         action = Some(crate::tab_context::Action::Reveal(id));
                                         ui.close();
                                     }
-                                    // A file kept on Home, one click away (the web build has no path to keep).
+                                    // A file kept on Home, one click away (the web build has no path to keep,
+                                    // and no item for it).
                                     let pin = if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
-                                    if ui.add_enabled(reveal, egui::Button::new(pin)).clicked() {
+                                    if cfg!(not(target_arch = "wasm32")) && ui.add_enabled(reveal, egui::Button::new(pin)).clicked() {
                                         action = Some(crate::tab_context::Action::TogglePin(id));
                                         ui.close();
                                     }

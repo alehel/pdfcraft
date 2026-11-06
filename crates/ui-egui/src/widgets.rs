@@ -315,6 +315,13 @@ pub fn row_text(ui: &egui::Ui, pos: egui::Pos2, text: impl Into<String>, font: e
     ui.painter().galley(rect.min, galley, color);
 }
 
+/// Whether `resp`'s widget has keyboard focus, or is handing it on with Tab this frame: for a
+/// button shown only while its row or card has focus, so Tab reaches it. (Tab moves focus as the
+/// focused widget registers, so by the time the button would be added the row has lost it.)
+pub fn focus_or_tabbing_on(ui: &egui::Ui, resp: &Response) -> bool {
+    resp.has_focus() || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Tab) && !i.modifiers.shift))
+}
+
 /// A wrapping label for a file name or folder path, laid out explicitly left to right so an
 /// Arabic name keeps `.pdf` at the end. The accessibility name is the logical text.
 pub fn label_ltr(ui: &mut egui::Ui, text: impl Into<String>, font: egui::FontId, color: Color32) -> Response {

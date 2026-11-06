@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use crate::support;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::pinned_files::MAX_PINNED_FILES;
@@ -178,9 +179,11 @@ fn files_that_cant_be_previewed_say_why() {
     h.run_steps(4);
     assert_eq!(h.state().pinned_previews.state(&broken), PreviewState::None);
     assert_eq!(h.state().pinned_previews.state(&gone), PreviewState::Unavailable);
-    // Both stay pinned and listed; a file that comes back is drawn when it is next checked.
-    h.get_by_label("broken.pdf");
-    h.get_by_label("gone.pdf");
+    // Both stay pinned and listed, and say why there is no page (on hover, and to screen
+    // readers); a file that comes back is drawn when it is next checked.
+    let why = |label: &str| h.get_by_label(label).accesskit_node().description().map(|d| d.to_string());
+    assert_eq!(why("broken.pdf").as_deref(), Some("No preview"));
+    assert!(why("gone.pdf").is_some_and(|d| d.contains("isn't available right now")), "{:?}", why("gone.pdf"));
     std::fs::write(&gone, FIXTURE).unwrap();
     h.state_mut().pinned_previews.recheck();
     h.run_steps(4);
@@ -236,13 +239,34 @@ fn unpinning_keeps_the_file() {
 }
 
 #[test]
+fn a_card_can_be_unpinned_from_the_keyboard() {
+    let dir = TempFolder::new("keyboard");
+    let path = dir.pdf("keys.pdf");
+    let pin = path.clone();
+    let mut h = harness(move |app| assert!(app.pin_file(&pin)));
+    // Away from the pointer: the button shows for the card with focus, and Tab reaches it.
+    h.hover_at(egui::pos2(1.0, 1.0));
+    h.get_by_label("keys.pdf").focus();
+    h.run_steps(2);
+    h.get_by_label("Unpin keys.pdf");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert!(h.get_by_label("Unpin keys.pdf").is_focused());
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().pinned_files.is_empty());
+    assert!(h.state().views.is_empty(), "unpinned, not opened");
+}
+
+#[test]
 fn file_menu_pins_the_chosen_files() {
     let dir = TempFolder::new("menu");
     let picked = vec![dir.pdf("a.pdf"), dir.pdf("b.pdf")];
     let pick = picked.clone();
     let mut h = harness(move |app| app.pick_override = Some(pick));
     h.get_by_label("Pin a file…");
-    assert!(h.state_mut().execute("file.pin_file"));
+    support::open_menu(&mut h, "File");
+    support::menu_row(&h, "Pin file to Home…").click();
     h.run_steps(3);
     assert_eq!(h.state().pinned_files.paths(), picked.as_slice());
     assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Pinned 2 files to Home"));
@@ -297,11 +321,13 @@ fn pinned_files_survive_a_restart_and_clear_recent() {
     drop(dir);
     let mut c = PdfCraftApp::new();
     c.restore(&a.persist());
+    assert_eq!(c.pinned_files.paths(), std::slice::from_ref(&path));
+    // Settings that can't be read change nothing.
+    c.restore("{not json");
+    c.restore("{\"pinned_files\": \"not a list\"}");
     assert_eq!(c.pinned_files.paths(), [path]);
     c.restore("{\"pinned_files\": [5, \"relative/a.pdf\", null]}");
     assert!(c.pinned_files.is_empty(), "only absolute file paths are restored");
-    c.restore("{not json");
-    assert!(c.pinned_files.is_empty());
 }
 
 #[test]

@@ -190,10 +190,13 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 }
                 // Pin to Home: shown over the row, and always on a pinned file so it reads as pinned.
+                // And for the keyboard while the row or the button itself has focus (Tab goes on
+                // from the row to it).
                 let pinned = can_pin && app.pinned_files.contains(&r.path);
-                if can_pin && (hovered || pinned) {
+                let pin_id = ui.scope_id().with(("pin-recent", &r.path));
+                if can_pin && (hovered || pinned || ui.memory(|m| m.has_focus(pin_id)) || widgets::focus_or_tabbing_on(ui, &resp)) {
                     let pin_rect = Rect::from_center_size(rect.right_center() - vec2(58.0, 0.0), vec2(28.0, 28.0));
-                    let button = ui.interact(pin_rect, ui.scope_id().with(("pin-recent", &r.path)), Sense::click());
+                    let button = ui.interact(pin_rect, pin_id, Sense::click());
                     let label = if pinned { tl!("Unpin {name} from Home") } else { tl!("Pin {name} to Home") };
                     let label = crate::i18n::fmt(label, &[("name", &r.name)]);
                     button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));

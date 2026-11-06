@@ -5,16 +5,17 @@
 //! its size first (a file over [`MAX_FILE_BYTES`] gets no preview), then its first page's size,
 //! and the page renders through a one-thread [`RenderPool`] (its panic guard, size caps and
 //! watchdog) at the size a card shows it. At most [`MAX_THREADS`] render threads exist at once,
-//! counted until they have actually exited: a file read while none is free is read again when
-//! one is. A read that takes longer than [`LOAD_TIMEOUT`] (a hung network drive) stops holding up
-//! the other files: it is still waited for and its answer used, and its file isn't read again
-//! meanwhile, even unpinned and pinned again; only while [`MAX_STUCK`] such reads are stuck does
-//! no new one start. While Home shows, each file is checked again every [`RECHECK_SECS`]: one
+//! counted until they have actually exited: a file read while none is free waits for one. A read
+//! that makes no progress for [`LOAD_TIMEOUT`] (a hung network drive; a slow download still
+//! progressing is waited for) stops holding up the other files: it is still waited for and its
+//! answer used, and its file isn't read again meanwhile, even unpinned and pinned again; only
+//! while [`MAX_STUCK`] such reads are stuck does no new one start. While Home shows, each file is checked again every [`RECHECK_SECS`]: one
 //! changed on disk renders again, one that can't be read shows as unavailable, and a preview
 //! drawn for another screen density is drawn again. While Home doesn't show, the work stops
 //! ([`Previews::park_unless_drawn`]).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
@@ -29,8 +30,10 @@ pub const RECHECK_SECS: f64 = 30.0;
 const MAX_THREADS: usize = 2;
 /// The longest side of a preview, in pixels: a card's page at a high-density screen's scale.
 const MAX_SIDE: f32 = 512.0;
-/// A file read that takes longer than this (seconds) stops holding up the other files.
+/// A file read that makes no progress for this long (seconds) stops holding up the other files.
 const LOAD_TIMEOUT: f64 = 20.0;
+/// A file is read this many bytes at a time, each one counting as progress.
+const CHUNK: usize = 256 << 10;
 /// Reads given up on that may still be stuck before no new read starts (threads can't be
 /// killed). Each is a different file, pinned now or earlier: more than can be pinned at once.
 const MAX_STUCK: usize = super::MAX_PINNED_FILES + 8;
@@ -92,10 +95,14 @@ enum Found {
 struct Reading {
     path: String,
     slot: Arc<Mutex<Option<Found>>>,
-    /// When (egui time) the read started.
+    /// Bytes read so far, counted by the loader.
+    progress: Arc<AtomicU64>,
+    /// `progress` when last looked at.
+    seen: u64,
+    /// When (egui time) the read started or last made progress.
     since: f64,
-    /// Given up on after [`LOAD_TIMEOUT`]: still polled, so a slow read that finishes is used,
-    /// but no longer holding up the other files.
+    /// No progress for [`LOAD_TIMEOUT`]: still polled, so a read that finishes is used, but no
+    /// longer holding up the other files.
     abandoned: bool,
 }
 
@@ -109,11 +116,17 @@ enum Answer {
 }
 
 impl Reading {
-    fn answer(&self) -> Answer {
+    /// The read's answer, if it has one. With `hold_read`, a file read (its bytes) stays in the
+    /// slot: no render thread is free for it yet.
+    fn answer(&self, hold_read: bool) -> Answer {
         // Whether the thread has let go first, then the slot: a thread fills the slot before it
         // lets go, so an answer given just before is never mistaken for none.
         let ended = Arc::strong_count(&self.slot) == 1;
-        match self.slot.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if hold_read && matches!(*slot, Some(Found::Read { .. })) {
+            return Answer::Waiting;
+        }
+        match slot.take() {
             Some(found) => Answer::Found(found),
             None if ended => Answer::Lost,
             None => Answer::Waiting,
@@ -129,8 +142,9 @@ struct Job {
     px: Vec2,
 }
 
-/// Reads a file for its preview, unless it is still as the stamp says (tests stand in for it).
-type Loader = Arc<dyn Fn(&str, Option<Stamp>) -> Found + Send + Sync>;
+/// Reads a file for its preview, unless it is still as the stamp says, counting the bytes read
+/// (tests stand in for it).
+type Loader = Arc<dyn Fn(&str, Option<Stamp>, &AtomicU64) -> Found + Send + Sync>;
 
 /// The pinned files' previews and the work under way.
 #[derive(Default)]
@@ -158,6 +172,13 @@ impl Previews {
         let tex = self.entries.get(path)?.tex.as_ref()?;
         let [w, h] = tex.size();
         Some((tex.id(), egui::vec2(w as f32, h as f32)))
+    }
+
+    /// Check `path` again on the next frame, unless a read of it is under way.
+    pub(crate) fn recheck_now(&mut self, path: &str) {
+        if let Some(e) = self.entries.get_mut(path) {
+            e.checked = f64::NEG_INFINITY;
+        }
     }
 
     /// Check every file again on the next frame (tests).
@@ -188,16 +209,27 @@ impl Previews {
         // Reads of files unpinned stay listed until they finish: such a file isn't read again
         // while one is stuck, even pinned again, and its answer is dropped.
         self.entries.retain(|path, _| paths.contains(path));
+        // A file pinned again while its earlier read is still under way waits for that read (its
+        // answer is used), and its card says so meanwhile.
+        for r in &self.reads {
+            if paths.contains(&r.path) && !self.entries.contains_key(&r.path) {
+                let state = if r.abandoned { PreviewState::Unavailable } else { PreviewState::Pending };
+                self.entries.insert(r.path.clone(), Entry::new(state, None, now));
+            }
+        }
         let (keep, gone): (Vec<Job>, Vec<Job>) = self.jobs.drain(..).partition(|j| paths.contains(&j.path));
         self.jobs = keep;
         self.retiring.extend(gone.into_iter().map(|j| j.pool.retire()));
         // A preview drawn for a box of another size (another screen density) is drawn again; the
-        // old one stands in meanwhile.
+        // old one stands in meanwhile. Asked for every frame until one of the new size is in, so a
+        // check under way that finds the file unchanged doesn't end it.
         let off = |a: f32, b: f32| (a - b).abs() > 0.2 * b.max(1.0);
-        for e in self.entries.values_mut().filter(|e| e.tex.is_some() && (off(e.px.x, px.x) || off(e.px.y, px.y))) {
-            e.px = px;
-            e.stamp = None;
-            e.checked = f64::NEG_INFINITY;
+        let reads = &self.reads;
+        for (path, e) in self.entries.iter_mut() {
+            if e.tex.is_some() && (off(e.px.x, px.x) || off(e.px.y, px.y)) && !reads.iter().any(|r| r.path == *path) {
+                e.stamp = None;
+                e.checked = f64::NEG_INFINITY;
+            }
         }
 
         self.take_reads(px, now, inline);
@@ -274,13 +306,15 @@ impl Previews {
         entry.checked = now;
         let slot = Arc::new(Mutex::new(None));
         let out = slot.clone();
+        let progress = Arc::new(AtomicU64::new(0));
+        let counted = progress.clone();
         let file = path.clone();
         let ctx = ctx.clone();
         let loader = self.loader.clone();
         let work = move || {
             let found = match &loader {
-                Some(load) => load(&file, known),
-                None => load(&file, known, MAX_FILE_BYTES),
+                Some(load) => load(&file, known, &counted),
+                None => load(&file, known, MAX_FILE_BYTES, &counted),
             };
             *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(found);
             ctx.request_repaint();
@@ -291,14 +325,21 @@ impl Previews {
             // No thread now: tried again when it is next due.
             return;
         }
-        self.reads.push(Reading { path, slot, since: now, abandoned: false });
+        self.reads.push(Reading { path, slot, progress, seen: 0, since: now, abandoned: false });
     }
 
-    /// The read under way for longer than [`LOAD_TIMEOUT`] stops holding up the other files. A
-    /// file never read yet shows as unavailable; one read before keeps its card as it was (a slow
-    /// check of a file being synced, say). Either way the read's answer is still used if it comes.
+    /// The read under way with no progress for [`LOAD_TIMEOUT`] stops holding up the other files.
+    /// A file never read yet shows as unavailable; one read before keeps its card as it was. Either
+    /// way the read's answer is still used if it comes.
     fn give_up_slow_read(&mut self, now: f64) {
         for r in self.reads.iter_mut().filter(|r| !r.abandoned) {
+            // Bytes arrived since the last look: still going (a slow download, say).
+            let read = r.progress.load(Ordering::Relaxed);
+            if read != r.seen {
+                r.seen = read;
+                r.since = now;
+                continue;
+            }
             // `now < since`: the clock restarted (a new context in tests).
             if now >= r.since && now - r.since < LOAD_TIMEOUT {
                 continue;
@@ -342,7 +383,10 @@ impl Previews {
     fn take_reads(&mut self, px: Vec2, now: f64, inline: bool) {
         let mut i = 0;
         while i < self.reads.len() {
-            let answer = self.reads.get(i).map_or(Answer::Waiting, Reading::answer);
+            // A file read waits in its slot for a free render thread (answers of reads given up
+            // on can arrive together).
+            let hold = !inline && self.threads() >= MAX_THREADS;
+            let answer = self.reads.get(i).map_or(Answer::Waiting, |r| r.answer(hold));
             match answer {
                 Answer::Waiting => i += 1,
                 // Tried again when it is next due.
@@ -360,20 +404,13 @@ impl Previews {
     /// Use what a read found for `path`.
     fn take_found(&mut self, path: String, found: Found, px: Vec2, now: f64, inline: bool) {
         // Unpinned while it was read.
-        if !self.entries.contains_key(&path) {
-            return;
-        }
-        // A file read while no render thread is free (answers of reads given up on can arrive
-        // together) is read again when one is.
-        let full = !inline && matches!(found, Found::Read { .. }) && self.threads() >= MAX_THREADS;
         let Some(entry) = self.entries.get_mut(&path) else { return };
-        entry.checked = if full { f64::NEG_INFINITY } else { now };
+        entry.checked = now;
         match found {
             // As it was: the preview (or why there is none) stands, even after a slow read.
             Found::Unchanged => {}
             Found::Unavailable => *entry = Entry::new(PreviewState::Unavailable, None, now),
             Found::NoPreview(stamp) => *entry = Entry::new(PreviewState::None, Some(stamp), now),
-            Found::Read { .. } if full => {}
             Found::Read { bytes, size: (w, h), stamp } => {
                 // Fitted in the card's box, never longer than a preview's side.
                 let scale = (px.x / w).min(px.y / h).min(MAX_SIDE / w.max(h));
@@ -442,9 +479,9 @@ fn texture(ctx: &egui::Context, tag: u64, size: [u32; 2], pixels: pdfcraft_rende
     Some(ctx.load_texture(format!("pinned-file-preview-{tag}"), image, egui::TextureOptions::LINEAR))
 }
 
-/// Read `path` for its preview, unless it is still as `known` says. Files over `max_bytes` aren't
-/// read.
-fn load(path: &str, known: Option<Stamp>, max_bytes: u64) -> Found {
+/// Read `path` for its preview, unless it is still as `known` says, counting the bytes read in
+/// `progress`. Files over `max_bytes` aren't read.
+fn load(path: &str, known: Option<Stamp>, max_bytes: u64, progress: &AtomicU64) -> Found {
     use std::io::Read;
 
     let Ok(meta) = std::fs::metadata(path) else { return Found::Unavailable };
@@ -458,14 +495,25 @@ fn load(path: &str, known: Option<Stamp>, max_bytes: u64) -> Found {
     if stamp.len > max_bytes {
         return Found::NoPreview(stamp);
     }
-    let Ok(file) = std::fs::File::open(path) else { return Found::Unavailable };
-    // The size can change after it was looked at: read no more than allowed, whatever it says.
-    let mut bytes = Vec::with_capacity(usize::try_from(stamp.len).unwrap_or(0));
-    if file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).is_err() {
-        return Found::Unavailable;
-    }
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
-        return Found::NoPreview(stamp);
+    let Ok(mut file) = std::fs::File::open(path) else { return Found::Unavailable };
+    // A chunk at a time, so the reader can tell a slow download from a hung drive, and memory
+    // grows only as the file arrives. The size can change after it was looked at: no more than
+    // allowed is read, whatever it says.
+    let mut bytes = Vec::new();
+    let mut chunk = vec![0u8; CHUNK];
+    loop {
+        let n = match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Found::Unavailable,
+        };
+        bytes.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+        let read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        progress.store(read, Ordering::Relaxed);
+        if read > max_bytes {
+            return Found::NoPreview(stamp);
+        }
     }
     let bytes = Arc::new(bytes);
     match pdfcraft_render::page_size(&bytes, None, 0) {
@@ -495,13 +543,13 @@ trailer << /Root 1 0 R >>
     fn a_file_is_read_once_until_it_changes() {
         let path = temp("load.pdf", PDF);
         let file = path.to_string_lossy().into_owned();
-        let Found::Read { size, stamp, .. } = load(&file, None, MAX_FILE_BYTES) else { panic!("the file is read") };
+        let Found::Read { size, stamp, .. } = load(&file, None, MAX_FILE_BYTES, &AtomicU64::new(0)) else { panic!("the file is read") };
         assert_eq!(size, (300.0, 400.0));
-        assert!(matches!(load(&file, Some(stamp), MAX_FILE_BYTES), Found::Unchanged));
+        assert!(matches!(load(&file, Some(stamp), MAX_FILE_BYTES, &AtomicU64::new(0)), Found::Unchanged));
         std::fs::write(&path, b"%PDF-1.7 not really").unwrap();
-        assert!(matches!(load(&file, Some(stamp), MAX_FILE_BYTES), Found::NoPreview(_)), "changed, and no page to draw");
+        assert!(matches!(load(&file, Some(stamp), MAX_FILE_BYTES, &AtomicU64::new(0)), Found::NoPreview(_)), "changed, and no page to draw");
         let _ = std::fs::remove_file(&path);
-        assert!(matches!(load(&file, Some(stamp), MAX_FILE_BYTES), Found::Unavailable));
+        assert!(matches!(load(&file, Some(stamp), MAX_FILE_BYTES, &AtomicU64::new(0)), Found::Unavailable));
     }
 
     #[test]
@@ -509,9 +557,9 @@ trailer << /Root 1 0 R >>
         let path = temp("large.pdf", PDF);
         let file = path.to_string_lossy().into_owned();
         let len = PDF.len() as u64;
-        assert!(matches!(load(&file, None, len), Found::Read { .. }), "a file at the limit is read");
+        assert!(matches!(load(&file, None, len, &AtomicU64::new(0)), Found::Read { .. }), "a file at the limit is read");
         // One byte over: not read at all (its size says so before any read).
-        assert!(matches!(load(&file, None, len - 1), Found::NoPreview(_)));
+        assert!(matches!(load(&file, None, len - 1, &AtomicU64::new(0)), Found::NoPreview(_)));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -554,9 +602,9 @@ trailer << /Root 1 0 R >>
         let readers = Arc::new(Mutex::new(Vec::new()));
         let seen = readers.clone();
         let mut p = Previews {
-            loader: Some(Arc::new(move |f: &str, known| {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
                 seen.lock().unwrap().push(std::thread::current().id());
-                load(f, known, MAX_FILE_BYTES)
+                load(f, known, MAX_FILE_BYTES, progress)
             })),
             ..Default::default()
         };
@@ -581,13 +629,13 @@ trailer << /Root 1 0 R >>
         let calls = Arc::new(Mutex::new(0usize));
         let (wait, count) = (gate.clone(), calls.clone());
         let mut p = Previews {
-            loader: Some(Arc::new(move |f: &str, known| {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
                 if f.ends_with("stuck.pdf") {
                     *count.lock().unwrap() += 1;
                     wait.wait();
                     return Found::NoPreview(Stamp { len: 0, modified: None });
                 }
-                load(f, known, MAX_FILE_BYTES)
+                load(f, known, MAX_FILE_BYTES, progress)
             })),
             ..Default::default()
         };
@@ -622,7 +670,7 @@ trailer << /Root 1 0 R >>
         let calls = Arc::new(Mutex::new(0usize));
         let (wait, count) = (gate.clone(), calls.clone());
         let mut p = Previews {
-            loader: Some(Arc::new(move |f: &str, known| {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
                 let first = {
                     let mut n = count.lock().unwrap();
                     *n += 1;
@@ -631,7 +679,7 @@ trailer << /Root 1 0 R >>
                 if !first {
                     wait.wait();
                 }
-                load(f, known, MAX_FILE_BYTES)
+                load(f, known, MAX_FILE_BYTES, progress)
             })),
             ..Default::default()
         };
@@ -662,7 +710,7 @@ trailer << /Root 1 0 R >>
         let calls = Arc::new(Mutex::new(0usize));
         let (wait, count) = (gate.clone(), calls.clone());
         let mut p = Previews {
-            loader: Some(Arc::new(move |f: &str, known| {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
                 let first = {
                     let mut n = count.lock().unwrap();
                     *n += 1;
@@ -671,7 +719,7 @@ trailer << /Root 1 0 R >>
                 if !first {
                     wait.wait();
                 }
-                load(f, known, MAX_FILE_BYTES)
+                load(f, known, MAX_FILE_BYTES, progress)
             })),
             ..Default::default()
         };
@@ -693,11 +741,13 @@ trailer << /Root 1 0 R >>
     fn late_answers_wait_for_a_render_thread() {
         let files: Vec<String> = (0..4).map(|i| temp(&format!("late{i}.pdf"), PDF).to_string_lossy().into_owned()).collect();
         let gate = Arc::new(Gate::default());
-        let wait = gate.clone();
+        let calls = Arc::new(Mutex::new(0usize));
+        let (wait, count) = (gate.clone(), calls.clone());
         let mut p = Previews {
-            loader: Some(Arc::new(move |f: &str, known| {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
+                *count.lock().unwrap() += 1;
                 wait.wait();
-                load(f, known, MAX_FILE_BYTES)
+                load(f, known, MAX_FILE_BYTES, progress)
             })),
             ..Default::default()
         };
@@ -719,6 +769,7 @@ trailer << /Root 1 0 R >>
             assert!(p.threads() <= MAX_THREADS, "{} render threads", p.threads());
             files.iter().all(|f| matches!(p.state(f), PreviewState::Ready { .. }))
         });
+        assert_eq!(*calls.lock().unwrap(), 4, "the answers waited: no file was read twice");
         for f in &files {
             let _ = std::fs::remove_file(f);
         }
@@ -734,13 +785,13 @@ trailer << /Root 1 0 R >>
         let calls = Arc::new(Mutex::new(Vec::new()));
         let (wait, seen) = (gate.clone(), calls.clone());
         let mut p = Previews {
-            loader: Some(Arc::new(move |f: &str, known| {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
                 if f.starts_with("/nowhere/") {
                     seen.lock().unwrap().push(f.to_owned());
                     wait.wait();
-                    return Found::Unavailable;
+                    return Found::NoPreview(Stamp { len: 0, modified: None });
                 }
-                load(f, known, MAX_FILE_BYTES)
+                load(f, known, MAX_FILE_BYTES, progress)
             })),
             ..Default::default()
         };
@@ -751,14 +802,19 @@ trailer << /Root 1 0 R >>
             now += LOAD_TIMEOUT + 1.0;
         }
         frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&ok), PreviewState::Ready { .. }));
-        // A stuck file unpinned and pinned again isn't read again while its read is stuck.
+        // A stuck file unpinned and pinned again isn't read again while its read is stuck, and its
+        // card says so; the stuck read's answer is used when it comes.
         let without: Vec<String> = paths.iter().filter(|f| **f != hung[0]).cloned().collect();
         p.frame(&ctx, &without, PX, now, false);
+        assert_eq!(p.state(&hung[0]), PreviewState::Pending, "unpinned: nothing known");
         p.frame(&ctx, &paths, PX, now + 10.0 * RECHECK_SECS, false);
+        assert_eq!(p.state(&hung[0]), PreviewState::Unavailable);
         assert_eq!(calls.lock().unwrap().iter().filter(|f| **f == hung[0]).count(), 1);
         gate.open();
         let mut later = now + 10.0 * RECHECK_SECS;
         frames_until(&mut p, &ctx, &paths, &mut later, |p| p.reads() == 0);
+        assert_eq!(p.state(&hung[0]), PreviewState::None, "its answer, not a second read");
+        assert_eq!(calls.lock().unwrap().iter().filter(|f| **f == hung[0]).count(), 1);
         let _ = std::fs::remove_file(&ok);
     }
 
@@ -770,9 +826,9 @@ trailer << /Root 1 0 R >>
         let gate = Arc::new(Gate::default());
         let wait = gate.clone();
         let mut p = Previews {
-            loader: Some(Arc::new(move |f: &str, known| {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
                 wait.wait();
-                load(f, known, MAX_FILE_BYTES)
+                load(f, known, MAX_FILE_BYTES, progress)
             })),
             ..Default::default()
         };
@@ -787,11 +843,126 @@ trailer << /Root 1 0 R >>
         // Home went away with the file read but not drawn: its bytes are let go of.
         p.park();
         assert!(p.reads.iter().all(|r| r.slot.lock().unwrap().is_none()));
-        assert!(p.jobs.is_empty());
         // Back on Home, it is read and drawn again straight away.
         let mut now = 1.0;
         frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&file), PreviewState::Ready { .. }));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_render_under_way_stops_while_home_is_hidden() {
+        let path = temp("hidden-render.pdf", PDF);
+        let file = path.to_string_lossy().into_owned();
+        let paths = vec![file.clone()];
+        let gate = Arc::new(Gate::default());
+        let wait = gate.clone();
+        let mut p = Previews {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
+                wait.wait();
+                load(f, known, MAX_FILE_BYTES, progress)
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        p.frame(&ctx, &paths, PX, 0.0, false);
+        gate.open();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !p.reads.iter().all(|r| Arc::strong_count(&r.slot) == 1) {
+            assert!(std::time::Instant::now() < deadline, "the read finishes");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Its render starts, and Home goes away before its answer is taken.
+        p.take_reads(PX, 1.0, false);
+        assert_eq!(p.jobs.len(), 1);
+        p.park();
+        assert!(p.jobs.is_empty(), "the render is let go of");
+        frames_until(&mut p, &ctx, &[], &mut 2.0, |p| p.threads() == 0);
+        // Back on Home, it is read and drawn again.
+        let mut now = 3.0;
+        frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&file), PreviewState::Ready { .. }));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn work_is_let_go_of_only_in_passes_without_home() {
+        let path = temp("passes.pdf", PDF);
+        let file = path.to_string_lossy().into_owned();
+        let paths = vec![file.clone()];
+        let gate = Arc::new(Gate::default());
+        let wait = gate.clone();
+        let mut p = Previews {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
+                wait.wait();
+                load(f, known, MAX_FILE_BYTES, progress)
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let pass = |p: &mut Previews, home: bool| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                if home {
+                    p.frame(ui.ctx(), &paths, PX, 0.0, false);
+                }
+                p.park_unless_drawn(ui.ctx());
+            })
+            .drop_without_applying_deltas();
+        };
+        // Home shows: the read it started stays.
+        pass(&mut p, true);
+        assert_eq!(p.reads(), 1);
+        gate.open();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !p.reads.iter().all(|r| Arc::strong_count(&r.slot) == 1) {
+            assert!(std::time::Instant::now() < deadline, "the read finishes");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // A pass without Home: the file read but not drawn is let go of.
+        pass(&mut p, false);
+        assert!(p.reads.iter().all(|r| r.slot.lock().unwrap().is_none()));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_slow_read_still_progressing_is_waited_for() {
+        let ok = temp("waits.pdf", PDF).to_string_lossy().into_owned();
+        let slow = "/nowhere/downloading.pdf".to_owned();
+        let paths = vec![slow.clone(), ok.clone()];
+        let gate = Arc::new(Gate::default());
+        let wait = gate.clone();
+        let step = Arc::new(Mutex::new(0u64));
+        let ticks = step.clone();
+        let mut p = Previews {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
+                if f == "/nowhere/downloading.pdf" {
+                    // Bytes arrive whenever the test says so, until it opens the gate.
+                    while !*wait.0.lock().unwrap() {
+                        progress.store(*ticks.lock().unwrap(), Ordering::Relaxed);
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    return Found::NoPreview(Stamp { len: 0, modified: None });
+                }
+                load(f, known, MAX_FILE_BYTES, progress)
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        p.frame(&ctx, &paths, PX, 0.0, false);
+        // Far past the timeout in all, but never that long without progress: still waited for,
+        // and the next file waits its turn.
+        for k in 1..=10u32 {
+            *step.lock().unwrap() = u64::from(k);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            p.frame(&ctx, &paths, PX, f64::from(k) * LOAD_TIMEOUT * 0.6, false);
+            assert!(p.reads.iter().all(|r| !r.abandoned), "step {k}");
+            assert_eq!(p.state(&ok), PreviewState::Pending);
+        }
+        // No more progress: given up on after the timeout, and the next file goes.
+        p.frame(&ctx, &paths, PX, 6.0 * LOAD_TIMEOUT + LOAD_TIMEOUT + 1.0, false);
+        assert!(p.reads.iter().any(|r| r.path == slow && r.abandoned));
+        gate.open();
+        let mut now = 8.0 * LOAD_TIMEOUT;
+        frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&ok), PreviewState::Ready { .. }) && p.reads() == 0);
+        let _ = std::fs::remove_file(&ok);
     }
 
     #[test]
@@ -819,7 +990,52 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
+    fn a_density_change_during_a_check_still_draws_again() {
+        let path = temp("density-check.pdf", PDF);
+        let file = path.to_string_lossy().into_owned();
+        let paths = vec![file.clone()];
+        let gate = Arc::new(Gate::default());
+        let calls = Arc::new(Mutex::new(0usize));
+        let (wait, count) = (gate.clone(), calls.clone());
+        let mut p = Previews {
+            loader: Some(Arc::new(move |f: &str, known, progress: &AtomicU64| {
+                let n = {
+                    let mut n = count.lock().unwrap();
+                    *n += 1;
+                    *n
+                };
+                if n == 2 {
+                    wait.wait();
+                }
+                load(f, known, MAX_FILE_BYTES, progress)
+            })),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut now = 0.0;
+        frames_until(&mut p, &ctx, &paths, &mut now, |p| matches!(p.state(&file), PreviewState::Ready { .. }));
+        let PreviewState::Ready { width, .. } = p.state(&file) else { panic!("drawn") };
+        // A check starts (it will find the file unchanged), and the density changes meanwhile.
+        p.recheck();
+        p.frame(&ctx, &paths, PX, now, false);
+        let sharper = PX * 2.0;
+        p.frame(&ctx, &paths, sharper, now, false);
+        gate.open();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            p.frame(&ctx, &paths, sharper, now, false);
+            if matches!(p.state(&file), PreviewState::Ready { width: w, .. } if w > width) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "drawn again at the new size");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            now += 0.005;
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn a_folder_is_no_file() {
-        assert!(matches!(load(&std::env::temp_dir().to_string_lossy(), None, MAX_FILE_BYTES), Found::Unavailable));
+        assert!(matches!(load(&std::env::temp_dir().to_string_lossy(), None, MAX_FILE_BYTES, &AtomicU64::new(0)), Found::Unavailable));
     }
 }

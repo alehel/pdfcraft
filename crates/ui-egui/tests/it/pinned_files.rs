@@ -208,6 +208,51 @@ fn a_changed_file_is_drawn_again() {
 }
 
 #[test]
+fn an_unavailable_file_is_checked_again_rather_than_opened() {
+    let dir = TempFolder::new("unavailable-click");
+    let path = dir.0.join("away.pdf").to_string_lossy().into_owned();
+    let pin = path.clone();
+    let mut h = harness(move |app| assert!(app.pin_file(&pin)));
+    h.run_steps(2);
+    assert_eq!(h.state().pinned_previews.state(&path), PreviewState::Unavailable);
+    // Opening would wait on its drive on the UI thread: it is checked again instead.
+    h.get_by_label("away.pdf").click();
+    h.run_steps(2);
+    assert!(h.state().views.is_empty());
+    assert!(h.state().toast.as_ref().is_some_and(|(m, _)| m.contains("isn't available right now")), "{:?}", h.state().toast);
+    // Back again: the check that click asked for finds it, and the next click opens it.
+    std::fs::write(&path, FIXTURE).unwrap();
+    h.get_by_label("away.pdf").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().pinned_previews.state(&path), PreviewState::Ready { .. }));
+    h.get_by_label("away.pdf").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1, "it opens");
+}
+
+#[test]
+fn previews_are_drawn_off_the_ui_thread_in_the_app() {
+    let dir = TempFolder::new("threaded-app");
+    let path = dir.pdf("threaded.pdf");
+    let pin = path.clone();
+    // Not inline: the loader and render threads the desktop app uses, through the app's frames.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        assert!(app.pin_file(&pin));
+        app
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !matches!(h.state().pinned_previews.state(&path), PreviewState::Ready { .. }) {
+        assert!(std::time::Instant::now() < deadline, "drawn: {:?}", h.state().pinned_previews.state(&path));
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let (page, _) = preview_and_name(&h, "threaded.pdf");
+    assert!(page.height() > page.width());
+}
+
+#[test]
 fn clicking_a_pinned_file_opens_it() {
     let dir = TempFolder::new("open");
     let path = dir.pdf("handbook.pdf");

@@ -334,7 +334,14 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.unpin_file(&path);
     }
     if let Some(path) = open {
-        app.open_recent(&path);
+        // Known to be unreachable (a hung network drive, say): opening it would wait on the drive
+        // here, on the UI thread. It is checked again instead, off it, and opens once it is back.
+        if app.pinned_previews.state(&path) == previews::PreviewState::Unavailable {
+            app.pinned_previews.recheck_now(&path);
+            app.notify_fmt("{name} isn't available right now. Checking it again…", &[("name", &file_name(&path))]);
+        } else {
+            app.open_recent(&path);
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-//! Home tab: pinned files, recommended tools, open card, pinned folders and recent files (local
+//! Home tab: recommended tools, open card, pinned files and folders, and recent files (local
 //! only, never another app's list).
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};

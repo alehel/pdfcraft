@@ -96,6 +96,9 @@ impl PdfCraftApp {
         self.finish_document_copy(ctx);
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
+        // Pinned files' previews move on only while Home shows: elsewhere they let go of their work.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.pinned_previews.park_unless_drawn(ctx);
         // Retire hidden documents before admitting the visible document's textures, so the
         // three cache limits apply to the application, regardless of how many tabs are open.
         // Side by side: the comparison's old file renders alongside the active one.

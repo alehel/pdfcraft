@@ -137,6 +137,8 @@ impl PdfCraftApp {
             open_prepare_gate: None,
             pinned: Default::default(),
             pinned_files: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pinned_previews: Default::default(),
             toast: None,
             toast_script: None,
             script_messages: std::collections::VecDeque::new(),

@@ -1,12 +1,13 @@
-//! Files pinned to Home: the Pinned files section right above the pinned folders, pinning from
-//! Recent, File ▸ Pin file to Home… and a tab's menu, opening and unpinning, and the setting
-//! surviving a restart and Clear Recent Files.
+//! Files pinned to Home: the Pinned files section right above the pinned folders, a grid of each
+//! file's first page with its name below, pinning from Recent, File ▸ Pin file to Home… and a
+//! tab's menu, opening and unpinning, and the setting surviving a restart and Clear Recent Files.
 
 use std::path::PathBuf;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::pinned_files::MAX_PINNED_FILES;
+use pdfcraft_ui_egui::pinned_files::previews::PreviewState;
 use pdfcraft_ui_egui::{PdfCraftApp, RecentFile};
 
 /// A one-page PDF.
@@ -30,8 +31,13 @@ impl TempFolder {
 
     /// Write the fixture as `name` and return its path.
     fn pdf(&self, name: &str) -> String {
+        self.file(name, FIXTURE)
+    }
+
+    /// Write `bytes` as `name` and return its path.
+    fn file(&self, name: &str, bytes: &[u8]) -> String {
         let path = self.0.join(name);
-        std::fs::write(&path, FIXTURE).unwrap();
+        std::fs::write(&path, bytes).unwrap();
         path.to_string_lossy().into_owned()
     }
 }
@@ -113,7 +119,7 @@ fn pinning_a_recent_file_lists_it_above_the_folders() {
     h.get_by_label("Pin contract.pdf to Home").click();
     h.run_steps(2);
     assert!(h.state().pinned_files.contains(&path));
-    assert_eq!(h.query_all_by_label("contract.pdf").count(), 2, "the Recent row and its Pinned files row");
+    assert_eq!(h.query_all_by_label("contract.pdf").count(), 2, "the Recent row and its Pinned files card");
     assert!(h.query_by_label_contains(HINT).is_none(), "the hint goes once a file is pinned");
     assert!(text_top(&h, "Pinned files") < text_top(&h, "Folders"));
     // A pinned file's row shows its pin without hovering, and the pin unpins it.
@@ -123,6 +129,79 @@ fn pinning_a_recent_file_lists_it_above_the_folders() {
     h.run_steps(2);
     assert!(!h.state().pinned_files.contains(&path));
     assert_eq!(h.state().recent.len(), 1, "unpinning leaves Recent alone");
+}
+
+/// Where the first page (a textured image) and `name` are painted on the last frame.
+fn preview_and_name(h: &Harness<'static, PdfCraftApp>, name: &str) -> (egui::Rect, egui::Rect) {
+    let mut image = None;
+    let mut text = None;
+    for c in &h.output().shapes {
+        match &c.shape {
+            egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() && image.is_none() => image = Some(m.calc_bounds()),
+            egui::Shape::Text(t) if t.galley.text() == name => text = Some(t.visual_bounding_rect()),
+            _ => {}
+        }
+    }
+    (image.expect("a page is drawn"), text.expect("the name is painted"))
+}
+
+#[test]
+fn a_pinned_file_shows_its_first_page_with_its_name_below() {
+    let dir = TempFolder::new("preview");
+    let path = dir.pdf("handbook.pdf");
+    let pin = path.clone();
+    let mut h = harness(move |app| assert!(app.pin_file(&pin)));
+    h.run_steps(2);
+    // The 300 × 400 point page, at its own shape.
+    let PreviewState::Ready { width, height } = h.state().pinned_previews.state(&path) else {
+        panic!("the first page is drawn: {:?}", h.state().pinned_previews.state(&path))
+    };
+    assert!((width as f32 / height as f32 - 0.75).abs() < 0.02, "{width} × {height}");
+    let (page, name) = preview_and_name(&h, "handbook.pdf");
+    assert!((page.width() / page.height() - 0.75).abs() < 0.02, "drawn at its shape: {page:?}");
+    assert!(page.bottom() <= name.top(), "the name is under the page: {page:?}, {name:?}");
+    assert!((page.center().x - name.center().x).abs() < 1.0, "and centred below it");
+    assert!(text_top(&h, "Pinned files") < page.top() && page.bottom() < text_top(&h, "Folders"), "in the Pinned files section");
+}
+
+#[test]
+fn files_that_cant_be_previewed_say_why() {
+    let dir = TempFolder::new("no-preview");
+    let broken = dir.file("broken.pdf", b"%PDF-1.7 this is not a PDF");
+    let gone = dir.0.join("gone.pdf").to_string_lossy().into_owned();
+    let pins = [broken.clone(), gone.clone()];
+    let mut h = harness(move |app| {
+        for p in &pins {
+            assert!(app.pin_file(p));
+        }
+    });
+    h.run_steps(4);
+    assert_eq!(h.state().pinned_previews.state(&broken), PreviewState::None);
+    assert_eq!(h.state().pinned_previews.state(&gone), PreviewState::Unavailable);
+    // Both stay pinned and listed; a file that comes back is drawn when it is next checked.
+    h.get_by_label("broken.pdf");
+    h.get_by_label("gone.pdf");
+    std::fs::write(&gone, FIXTURE).unwrap();
+    h.state_mut().pinned_previews.recheck();
+    h.run_steps(4);
+    assert!(matches!(h.state().pinned_previews.state(&gone), PreviewState::Ready { .. }));
+}
+
+#[test]
+fn a_changed_file_is_drawn_again() {
+    let dir = TempFolder::new("changed");
+    let path = dir.pdf("plan.pdf");
+    let pin = path.clone();
+    let mut h = harness(move |app| assert!(app.pin_file(&pin)));
+    h.run_steps(2);
+    let portrait = h.state().pinned_previews.state(&path);
+    assert!(matches!(portrait, PreviewState::Ready { width, height } if width < height), "{portrait:?}");
+    // The same file, now landscape and a little longer.
+    std::fs::write(&path, String::from_utf8_lossy(FIXTURE).replace("0 0 300 400", "0 0 400 300 ")).unwrap();
+    h.state_mut().pinned_previews.recheck();
+    h.run_steps(4);
+    let landscape = h.state().pinned_previews.state(&path);
+    assert!(matches!(landscape, PreviewState::Ready { width, height } if width > height), "{landscape:?}");
 }
 
 #[test]
@@ -144,7 +223,9 @@ fn unpinning_keeps_the_file() {
     let path = dir.pdf("keep.pdf");
     let pin = path.clone();
     let mut h = harness(move |app| assert!(app.pin_file(&pin)));
-    // Like a pinned folder's, the Unpin button is always there.
+    assert!(h.query_by_label("Unpin keep.pdf").is_none(), "the unpin button shows only over its card");
+    h.get_by_label("keep.pdf").hover();
+    h.run_steps(2);
     h.get_by_label("Unpin keep.pdf").click();
     h.run_steps(2);
     assert!(h.state().pinned_files.is_empty());

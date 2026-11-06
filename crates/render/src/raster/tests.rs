@@ -7282,3 +7282,29 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     // `EI` inside the data was not taken for the end.
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
 }
+
+/// A page's size is read without rendering, as a render draws it (rotation applied, an empty
+/// box read as A4); nothing for a page that isn't there or a file that isn't a PDF.
+#[test]
+fn page_sizes_are_read_without_rendering() {
+    let pdf = |boxes: &str| {
+        Arc::new(
+            format!(
+                "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R {boxes} >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+            )
+            .into_bytes(),
+        )
+    };
+    assert_eq!(page_size(&pdf("/MediaBox [0 0 300 400]"), None, 0), Some((300.0, 400.0)));
+    assert_eq!(page_size(&pdf("/MediaBox [0 0 300 400] /Rotate 90"), None, 0), Some((400.0, 300.0)));
+    assert_eq!(page_size(&pdf("/MediaBox [0 0 300 400]"), None, 1), None, "no second page");
+    // An empty page box is read as A4, the size a render draws it at.
+    assert_eq!(page_size(&pdf("/MediaBox [0 0 0 0]"), None, 0), page_size(&pdf("/MediaBox [0 0 595.2756 841.8898]"), None, 0));
+    assert_eq!(page_size(&Arc::new(b"not a pdf".to_vec()), None, 0), None);
+    assert_eq!(page_size(&Arc::new(Vec::new()), None, 0), None);
+}

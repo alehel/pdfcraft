@@ -1,13 +1,16 @@
-//! Files pinned to Home: the PDFs the user keeps coming back to, listed above the pinned folders
-//! and laid out like them, one click away whatever else they open and whether or not Recent is
-//! cleared.
+//! Files pinned to Home: the PDFs the user keeps coming back to, shown above the pinned folders as
+//! a grid of their first pages with their names below, one click away whatever else they open and
+//! whether or not Recent is cleared.
 //!
-//! Local only: a pinned file is a path on this computer, kept in the settings and read only when
-//! it is opened. Nothing is read to draw the box, so a file on an offline drive or in a cloud
-//! folder that is still syncing never blocks the frame; opening it says what went wrong, and the
-//! file stays pinned until the user unpins it.
+//! Local only: a pinned file is a path on this computer, kept in the settings. Its preview is read
+//! off the UI thread ([`previews`]), so a file on an offline drive or in a cloud folder that is
+//! still syncing never blocks the frame; it shows as unavailable, and stays pinned until the user
+//! unpins it.
 
 use crate::PdfCraftApp;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod previews;
 
 /// At most this many files can be pinned.
 pub const MAX_PINNED_FILES: usize = 24;
@@ -176,16 +179,33 @@ impl PdfCraftApp {
     }
 }
 
-/// A pinned file's row: as tall as a pinned folder's heading row, whose layout it follows.
+/// A pinned file's card: its first page fitted in [`PAPER`], its name below.
 #[cfg(not(target_arch = "wasm32"))]
-const ROW_HEIGHT: f32 = 30.0;
+const CARD: egui::Vec2 = egui::vec2(144.0, 200.0);
+/// The box a card's page is fitted in.
+#[cfg(not(target_arch = "wasm32"))]
+const PAPER: egui::Vec2 = egui::vec2(112.0, 146.0);
+/// A page drawn before its size is known: US Letter.
+#[cfg(not(target_arch = "wasm32"))]
+const FALLBACK_PAGE: egui::Vec2 = egui::vec2(612.0, 792.0);
+/// Icons on the (always white) paper, in either theme.
+#[cfg(not(target_arch = "wasm32"))]
+const ON_PAPER: egui::Color32 = egui::Color32::from_rgb(0x5E, 0x5E, 0x66);
 
-/// The Home view's Pinned files section, right above Folders and laid out like it: a heading
-/// with Pin a file… beside it, then one row per file with its name, where it is and Unpin.
-/// Desktop only: the web build opens files from the browser, without paths to keep.
+/// `size` fitted in `fit`, keeping its shape; `fit` itself for a size that isn't one.
+#[cfg(not(target_arch = "wasm32"))]
+fn fitted(size: egui::Vec2, fit: egui::Vec2) -> egui::Vec2 {
+    let s = (fit.x / size.x).min(fit.y / size.y);
+    if s.is_finite() && s > 0.0 { size * s } else { fit }
+}
+
+/// The Home view's Pinned files section, right above Folders and headed like it: a grid of the
+/// files' first pages, each with its name below. A click opens the file; × over a card (or its
+/// menu) unpins it. Desktop only: the web build opens files from the browser, without paths
+/// to keep.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    use egui::{Align2, CornerRadius, Rect, Sense, vec2};
+    use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, pos2, vec2};
 
     use crate::theme::{self, Tokens};
     use crate::{icons, widgets};
@@ -199,7 +219,12 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(4.0);
-    if app.pinned_files.is_empty() {
+    // The previews this frame needs, drawn at the screen's density.
+    let ppp = ui.ctx().pixels_per_point();
+    let now = ui.input(|i| i.time);
+    let paths = app.pinned_files.paths().to_vec();
+    app.pinned_previews.frame(ui.ctx(), &paths, PAPER * ppp, now, app.run_inline);
+    if paths.is_empty() {
         ui.label(
             egui::RichText::new(tl!(
                 "Pin the PDFs you use most to open them here in one click: hover a recent file and click its pin, or choose a file."
@@ -209,47 +234,91 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     let mut open = None;
     let mut unpin = None;
-    for path in app.pinned_files.paths() {
-        let name = file_name(path);
-        ui.add_space(6.0);
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
-        // The row, not its response: the pointer stays "in" the row over its Unpin button. The
-        // wash reaches a little past the icon and the button, which line up with the headings.
-        if ui.rect_contains_pointer(rect) {
-            ui.painter().rect_filled(rect.expand2(vec2(6.0, 0.0)), CornerRadius::same(8), t.hover);
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+        for path in &paths {
+            let name = file_name(path);
+            let (rect, resp) = ui.allocate_exact_size(CARD, Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+            let press = theme::Press::track(ui, &resp);
+            // The card, not its response: the pointer stays "in" the card over its × button.
+            let hovered = ui.rect_contains_pointer(rect);
+            if hovered || press.down > 0.04 {
+                super::card_lift(ui, &t, rect, press);
+                let fill = press.fill(t.card, t.card, t.pressed);
+                ui.painter().rect(rect, CornerRadius::same(10), fill, Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
+            }
+            let body = rect.translate(press.offset());
+
+            // The first page, standing on the card's baseline so the names line up.
+            let preview = app.pinned_previews.texture(path);
+            let size = fitted(preview.map_or(FALLBACK_PAGE, |(_, s)| s), PAPER);
+            let fit_box = Rect::from_min_size(pos2(body.center().x - PAPER.x / 2.0, body.top() + 12.0), PAPER);
+            let paper = Rect::from_min_size(pos2(body.center().x - size.x / 2.0, fit_box.bottom() - size.y), size);
+            let painter = ui.painter_at(rect.expand(4.0));
+            painter.rect_filled(paper.translate(vec2(0.0, 1.5)), CornerRadius::same(1), t.page_shadow);
+            painter.rect_filled(paper, CornerRadius::ZERO, Color32::WHITE);
+            let state = app.pinned_previews.state(path);
+            let why = match (&preview, &state) {
+                (Some((tex, _)), _) => {
+                    painter.image(*tex, paper, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    None
+                }
+                (None, previews::PreviewState::Unavailable) => {
+                    Some(("triangle-alert", tl!("This file isn't available right now. It may have moved, or its drive or cloud sync is offline.")))
+                }
+                (None, previews::PreviewState::None) => Some(("file-text", tl!("No preview"))),
+                (None, _) => None,
+            };
+            if let Some((icon, _)) = why {
+                icons::paint(ui, Rect::from_center_size(paper.center(), vec2(28.0, 28.0)), icon, 28.0, ON_PAPER);
+            }
+            painter.rect_stroke(paper, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+
+            // The name, shortened in the middle to fit, keeping its extension. A file name is
+            // file/path chrome: always left to right, so an Arabic name ends in `.pdf`.
+            let font = theme::medium(12.5);
+            let max_w = body.width() - 14.0;
+            let fits = |s: &str| crate::bidi::layout_ltr(ui, s.to_owned(), font.clone(), t.text).size().x <= max_w;
+            let shown = crate::combine_grid::fit_name(&name, fits);
+            let galley = crate::bidi::layout_ltr(ui, shown, font, t.text);
+            let name_at = Align2::CENTER_CENTER.anchor_size(pos2(body.center().x, fit_box.bottom() + 20.0), galley.size());
+            painter.galley(name_at.min, galley, t.text);
+
+            if hovered {
+                let x_rect = Rect::from_center_size(rect.right_top() + vec2(-16.0, 16.0), vec2(24.0, 24.0));
+                let x = ui.interact(x_rect, ui.scope_id().with(("unpin-file", path)), Sense::click());
+                let label = crate::i18n::fmt(tl!("Unpin {name}"), &[("name", &name)]);
+                x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                ui.painter().circle_filled(x_rect.center(), 11.0, if x.hovered() { t.pressed } else { t.card });
+                ui.painter().circle_stroke(x_rect.center(), 11.0, Stroke::new(1.0, t.divider));
+                icons::paint(ui, x_rect.shrink(6.0), "x", 12.0, t.icon);
+                if theme::hand(x).on_hover_text(tl!("Unpin from Home")).clicked() {
+                    unpin = Some(path.clone());
+                }
+            }
+            // Hovering shows the whole path, and why there is no preview.
+            let tip = match why {
+                Some((_, reason)) => format!("{path}\n{reason}"),
+                None => path.clone(),
+            };
+            let resp = theme::hand(resp).on_hover_text(tip);
+            resp.context_menu(|ui| {
+                if ui.button(tl!("Open")).clicked() {
+                    open = Some(path.clone());
+                    ui.close();
+                }
+                if ui.button(tl!("Unpin from Home")).clicked() {
+                    unpin = Some(path.clone());
+                    ui.close();
+                }
+            });
+            if resp.clicked() && unpin.is_none() {
+                open = Some(path.clone());
+            }
         }
-        // Unpin, as on a pinned folder; laid out first so the name and location stop short of it.
-        let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        let button = widgets::ghost_button(&mut right, "x", tl!("Unpin"));
-        // Every file has an Unpin button: say which one it is.
-        let label = crate::i18n::fmt(tl!("Unpin {name}"), &[("name", &name)]);
-        button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-        if button.clicked() {
-            unpin = Some(path.clone());
-        }
-        let end = right.min_rect().left() - 12.0;
-        icons::paint(
-            ui,
-            Rect::from_center_size(rect.left_center() + vec2(11.0, 0.0), vec2(22.0, 22.0)),
-            "file-text",
-            20.0,
-            egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
-        );
-        // File names and paths are file/path chrome: explicitly left to right, so an Arabic name
-        // keeps its `.pdf` at the visual end. A long name or location is cut short, never Unpin.
-        let name_x = rect.left() + 30.0;
-        let name_galley = ltr_galley(ui, name.clone(), theme::semibold(14.0), t.text, end - name_x);
-        let place_x = name_x + name_galley.size().x + 10.0;
-        ui.painter().galley(Align2::LEFT_CENTER.anchor_size(egui::pos2(name_x, rect.center().y), name_galley.size()).min, name_galley, t.text);
-        if end - place_x >= 24.0 {
-            let place = ltr_galley(ui, super::folders_ui::location(path), theme::regular(12.0), t.text_faint, end - place_x);
-            ui.painter().galley(Align2::LEFT_CENTER.anchor_size(egui::pos2(place_x, rect.center().y), place.size()).min, place, t.text_faint);
-        }
-        if theme::hand(resp).on_hover_text(path).clicked() && unpin.is_none() {
-            open = Some(path.clone());
-        }
-    }
+    });
     if pick {
         app.pin_file_dialog();
     }
@@ -259,15 +328,6 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(path) = open {
         app.open_recent(&path);
     }
-}
-
-/// `text` on one line, left to right, cut with "…" at `max_width`.
-#[cfg(not(target_arch = "wasm32"))]
-fn ltr_galley(ui: &egui::Ui, text: String, font: egui::FontId, color: egui::Color32, max_width: f32) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
-    job.direction = egui::epaint::text::TextDirection::LeftToRight;
-    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
-    ui.painter().layout_job(job)
 }
 
 #[cfg(test)]

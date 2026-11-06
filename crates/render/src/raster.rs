@@ -543,6 +543,18 @@ impl PageRenderer {
     }
 }
 
+/// The displayed size in points (rotation applied, as a render draws it) of page `page`
+/// (0-based), read from the page tree without drawing anything: for fitting a thumbnail before
+/// asking for it. `None` when the file can't be read (with `password`), has no such page, or the
+/// page's box is empty or invalid. Never panics.
+pub fn page_size(bytes: &Arc<Vec<u8>>, password: Option<&str>, page: usize) -> Option<(f32, f32)> {
+    let pdf = parse(bytes, password)?;
+    catch_unwind(AssertUnwindSafe(|| pdf.pages().get(page).map(|p| p.render_dimensions())))
+        .ok()
+        .flatten()
+        .filter(|(w, h)| w.is_finite() && h.is_finite() && *w >= 0.5 && *h >= 0.5)
+}
+
 fn parse(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<Pdf> {
     catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or("")).ok())).ok().flatten()
 }

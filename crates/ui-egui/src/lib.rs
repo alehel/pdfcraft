@@ -375,6 +375,9 @@ pub struct PdfCraftApp {
     pub pinned: folders_ui::PinnedFolders,
     /// Files pinned to Home, in the order they were pinned.
     pub pinned_files: pinned_files::PinnedFiles,
+    /// Previews of the pinned files' first pages, read while Home shows.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub pinned_previews: pinned_files::previews::Previews,
     pub toast: Option<(String, f64)>,
     /// The form script message the toast shows now, if it shows one: drawn with its title and
     /// icon (#4293).

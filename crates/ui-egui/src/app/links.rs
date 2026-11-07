@@ -37,12 +37,12 @@ impl PdfCraftApp {
     fn open_resolved_remote_link(&mut self, path: std::path::PathBuf, destination: pdfcraft_render::RemoteDestination) {
         let path = path.to_string_lossy().into_owned();
         let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
-        let stamp = file_watch::Stamp::at(&path);
         self.startup_superseded = true;
         let result = self.schedule_open(OpenRequest {
             name: name.clone(),
             path: Some(path.clone()),
-            stamp,
+            // The worker takes it, before reading (not here, on the UI thread).
+            stamp: None,
             input: open_worker::Input::RemotePath(std::path::PathBuf::from(path)),
             password: None,
             activate: true,

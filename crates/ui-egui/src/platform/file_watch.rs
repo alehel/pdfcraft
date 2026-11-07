@@ -608,6 +608,32 @@ mod tests {
         assert!(matches!(app.dialog, Some(crate::Dialog::OverwriteChanged)));
     }
 
+    /// Opening a file once the app is running goes through the open worker, which takes its stamp
+    /// there, just before reading: the UI thread asks nothing of the file (on a drive that doesn't
+    /// answer, even that would freeze the app), and the watcher still knows the version opened.
+    #[test]
+    fn a_file_opened_through_the_worker_is_stamped_there() {
+        let (_dir, path) = TempDir::new("worker-stamp", &fixture(2));
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app
+        });
+        h.run_steps(2);
+        assert!(h.state().ctx.is_some() && !h.state().run_inline, "the open goes to the worker");
+        assert!(matches!(h.state_mut().open_path(&path), crate::OpenOutcome::Pending));
+        assert!(h.state().pending_opens.iter().all(|p| p.stamp.is_none()), "nothing asked of the file on the UI thread");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while h.state().views.is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the file opens");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let id = h.state().views[0].id;
+        assert!(Stamp::at(&path).is_some());
+        assert_eq!(h.state().watch.known.get(&id).copied(), Stamp::at(&path), "the watcher knows the version opened");
+    }
+
     /// #1802: the watcher found version B of the file, then the user saved version C over it
     /// before B was applied. B is older than the document now: it is not applied, the undo history
     /// stays, and C stays on disk.

@@ -135,7 +135,12 @@ impl PdfCraftApp {
                 break;
             }
             match pending.receiver.try_recv() {
-                Ok(result) if result.token == pending.token => self.finish_pending_open(pending, result.kind),
+                Ok(result) if result.token == pending.token => {
+                    // A file read from its path: its stamp was taken by the worker, before reading.
+                    let mut pending = pending;
+                    pending.stamp = pending.stamp.or(result.stamp);
+                    self.finish_pending_open(pending, result.kind);
+                }
                 Ok(_) => waiting.push(pending),
                 Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(pending),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -547,12 +552,13 @@ impl PdfCraftApp {
             return OpenOutcome::Pending;
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
-        // Taken before reading: a build that rewrites the file meanwhile still counts as a change.
-        let stamp = file_watch::Stamp::at(path);
         // Before the first frame there is no interaction to keep responsive; this also preserves
         // deterministic inline startup and test flows. Once live, reading and preparation use
-        // the bounded worker and commit on the UI thread.
+        // the bounded worker and commit on the UI thread, and the file isn't touched here at all:
+        // on a drive that doesn't answer, even looking at it would freeze the app.
         if self.ctx.is_none() || self.run_inline {
+            // Taken before reading: a build that rewrites the file meanwhile still counts as a change.
+            let stamp = file_watch::Stamp::at(path);
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let before = self.views.len();
@@ -587,7 +593,8 @@ impl PdfCraftApp {
             match self.schedule_open(OpenRequest {
                 name: name.clone(),
                 path: Some(path.to_string()),
-                stamp,
+                // The worker takes it, before reading.
+                stamp: None,
                 input: open_worker::Input::Path(std::path::PathBuf::from(path)),
                 password: None,
                 activate: true,

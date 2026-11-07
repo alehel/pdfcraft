@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use crate::RecoveryStore;
+use crate::file_watch::Stamp;
 use pdfcraft_engine::{OpenContext, PreparedDocument, SourceKind};
 use pdfcraft_render::OpenError;
 
@@ -30,6 +31,9 @@ pub(crate) enum ResultKind {
 pub(crate) struct ResultMessage {
     pub token: u64,
     pub kind: ResultKind,
+    /// A file read from its path: how it was on disk just before it was read, taken here rather
+    /// than on the UI thread, where a drive that doesn't answer would freeze the app.
+    pub stamp: Option<Stamp>,
 }
 
 struct Job {
@@ -142,9 +146,14 @@ fn run(queue: Arc<(Mutex<Queue>, Condvar)>) {
         let reply = job.reply.clone();
         #[cfg(test)]
         let gate = job.gate.clone();
+        // Before reading: a build that rewrites the file meanwhile still counts as a change.
+        let stamp = match &job.input {
+            Input::Path(path) | Input::RemotePath(path) => Stamp::at(&path.to_string_lossy()),
+            Input::Recovery(..) | Input::Bytes(_) => None,
+        };
         let kind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare(job)))
             .unwrap_or_else(|_| ResultKind::Failed("opening failed unexpectedly in the background worker".into()));
-        let _ = reply.send(ResultMessage { token, kind });
+        let _ = reply.send(ResultMessage { token, kind, stamp });
         let repaint = {
             let (lock, _) = &*queue;
             lock.lock().unwrap_or_else(PoisonError::into_inner).repaint.clone()

@@ -364,7 +364,11 @@ mod tests {
         assert!(!ctx.has_requested_repaint());
         let (reply, receiver) = std::sync::mpsc::channel();
         reply
-            .send(crate::open_worker::ResultMessage { token: 1, kind: crate::open_worker::ResultKind::ReadFailed("controlled failure".into()) })
+            .send(crate::open_worker::ResultMessage {
+                token: 1,
+                kind: crate::open_worker::ResultKind::ReadFailed("controlled failure".into()),
+                stamp: None,
+            })
             .unwrap();
         app.pending_opens.push(crate::PendingOpen {
             token: 1,

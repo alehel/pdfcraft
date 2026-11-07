@@ -219,11 +219,9 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(4.0);
-    // The previews this frame needs, drawn at the screen's density.
-    let ppp = ui.ctx().pixels_per_point();
     let now = ui.input(|i| i.time);
     let paths = app.pinned_files.paths().to_vec();
-    app.pinned_previews.frame(ui.ctx(), &paths, PAPER * ppp, now, app.run_inline);
+    app.pinned_previews.frame(ui.ctx(), &paths, now, app.run_inline);
     if paths.is_empty() {
         ui.label(
             egui::RichText::new(tl!(
@@ -334,17 +332,7 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.unpin_file(&path);
     }
     if let Some(path) = open {
-        // Found unavailable, or its drive isn't answering a read (a hung network drive, say):
-        // opening it would ask that drive here, on the UI thread, and wait. It is checked again
-        // instead, off the UI thread (unless a check is under way), and the user is told; it can be
-        // opened once its card is back. A tab already showing it comes to the front, which asks
-        // nothing of the drive.
-        if app.tab_showing(&path).is_none() && app.pinned_previews.unresponsive(&path, now) {
-            app.pinned_previews.recheck_now(&path);
-            app.notify_fmt("{name} isn't available right now. Try again in a moment.", &[("name", &file_name(&path))]);
-        } else {
-            app.open_recent(&path);
-        }
+        app.open_recent(&path);
     }
 }
 

@@ -102,7 +102,7 @@ egui = "0.37"
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
-rfd = "0.17"
+rfd = "0.18"
 # Monotonic time for logic-only work on native and web (`App::logic` runs without a UI pass).
 web-time = "1.1"
 

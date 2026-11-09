@@ -36,6 +36,12 @@ fmv-macos-events = "=0.1.0"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }
 
+[target.'cfg(target_os = "illumos")'.dependencies]
+# OpenIndiana has no Wayland client library to link, and wayland-sys's build script otherwise
+# asks pkg-config for one. With dlopen it is looked up at run time instead and the window falls
+# back to X11 when it is missing. Already in the tree through winit.
+wayland-backend = { version = "0.3", features = ["dlopen"] }
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 # Whether the window is on Wayland, where it can't bring itself forward (src/single_instance.rs).
 # Already in the tree through winit and eframe.

@@ -16,7 +16,8 @@ pdfcraft-ui-egui = { workspace = true }
 pdfcraft-engine = { workspace = true }
 # wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
 # driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links", "clipboard"] }
+# Wayland and AccessKit are added below for every platform but illumos (see there).
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "x11", "persistence", "links", "clipboard"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (src/logging.rs).
@@ -36,11 +37,11 @@ fmv-macos-events = "=0.1.0"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }
 
-[target.'cfg(target_os = "illumos")'.dependencies]
-# OpenIndiana has no Wayland client library to link, and wayland-sys's build script otherwise
-# asks pkg-config for one. With dlopen it is looked up at run time instead and the window falls
-# back to X11 when it is missing. Already in the tree through winit.
-wayland-backend = { version = "0.3", features = ["dlopen"] }
+[target.'cfg(not(target_os = "illumos"))'.dependencies]
+# The Wayland backend (and, through egui-winit, arboard's Wayland clipboard), and AccessKit, whose
+# winit adapter turns the Wayland backend on by itself. OpenIndiana has no Wayland and
+# wayland-backend does not build for illumos, so that target is X11 only and without AccessKit.
+eframe = { workspace = true, features = ["wayland", "accesskit"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 # Whether the window is on Wayland, where it can't bring itself forward (src/single_instance.rs).

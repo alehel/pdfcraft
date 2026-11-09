@@ -102,7 +102,9 @@ egui = "0.37"
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
-rfd = "0.18"
+# Wayland (portal dialogs under a Wayland session) is enabled per target in ui-egui: its crates do
+# not build for illumos.
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
 # Monotonic time for logic-only work on native and web (`App::logic` runs without a UI pass).
 web-time = "1.1"
 

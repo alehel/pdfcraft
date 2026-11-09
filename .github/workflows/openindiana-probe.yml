@@ -89,10 +89,18 @@ jobs:
           fi
           git config --global --add safe.directory "*"
           status=0
+          # step: the probe fails if this fails. info: reported, never fatal (test-only
+          # dependencies such as egui_kittest still pull Wayland through AccessKit on illumos).
           step() {
             name=$1; shift
             echo "::group::$name"
             if "$@"; then echo "RESULT $name: ok"; else echo "RESULT $name: FAILED"; status=1; fi
+            echo "::endgroup::"
+          }
+          info() {
+            name=$1; shift
+            echo "::group::$name (informational)"
+            if "$@"; then echo "RESULT $name: ok"; else echo "RESULT $name: FAILED (informational)"; fi
             echo "::endgroup::"
           }
           # Bottom up, so the first failing layer is obvious.
@@ -100,6 +108,8 @@ jobs:
           step "engine (pulls aws-lc-sys)"      cargo build --locked -p pdfcraft-engine
           step "pdfcraft-cli (headless app)"    cargo build --locked -p pdfcraft-cli
           step "pdfcraft (desktop app)"         cargo build --locked -p pdfcraft
-          step "workspace check, all targets"   cargo check --locked --workspace --all-targets
           step "cos tests"                      cargo test --locked -p pdfcraft-cos
+          info "pdfcraft-cli --version runs"    "$CARGO_TARGET_DIR/debug/pdfcraft-cli" --version
+          info "pdfcraft --version runs"        "$CARGO_TARGET_DIR/debug/pdfcraft" --version
+          info "workspace check, all targets"   cargo check --locked --workspace --all-targets
           exit $status

@@ -4284,7 +4284,6 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "uds_windows",
- "wayland-backend",
  "wayland-client",
  "wayland-protocols",
  "windows",

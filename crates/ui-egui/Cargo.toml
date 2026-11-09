@@ -29,7 +29,8 @@ pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
 egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links", "clipboard"] }
+# AccessKit is added per target below: its winit adapter does not build for illumos.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence", "links", "clipboard"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -63,6 +64,13 @@ pollster = "1.0"
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 # Discover configured font directories without linking libfontconfig or running a subprocess.
 fontconfig-parser = "0.5.8"
+
+[target.'cfg(not(target_os = "illumos"))'.dependencies]
+# Portal file dialogs under a Wayland session. OpenIndiana has no Wayland, and the Wayland crates
+# do not build for illumos, so it keeps the X11 portal path only.
+rfd = { workspace = true, features = ["wayland"] }
+# AccessKit's winit adapter enables winit's Wayland backend, which does not build for illumos.
+eframe = { workspace = true, features = ["accesskit"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.

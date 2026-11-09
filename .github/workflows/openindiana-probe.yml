@@ -1,0 +1,94 @@
+# Fork-only probe: does the workspace compile on OpenIndiana (illumos, x86_64)?
+#
+# Runs in an OpenIndiana VM on a Linux runner (GitHub has no illumos runners). This file lives on
+# a test/ branch of a fork and is not meant for storytold/pdfcraft main: shared CI belongs in
+# storytold/craft-common-actions. It answers one question for the OpenIndiana port: which crates
+# build, and what the first failures are.
+name: OpenIndiana probe
+
+on:
+  push:
+    branches: [test/openindiana-probe]
+  workflow_dispatch:
+
+concurrency:
+  group: openindiana-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  openindiana:
+    name: OpenIndiana x86_64 (compile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      CARGO_HOME: /var/tmp/craft-cargo
+      CARGO_TARGET_DIR: /var/tmp/craft-target
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 4
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_NET_RETRY: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Start the OpenIndiana VM
+        uses: vmactions/openindiana-vm@b0669479e0325a25198dc7ed2a4b6089e98f91b3 # v1.2.0
+        with:
+          # The -build images carry gcc, make and friends already.
+          release: "202610-build"
+          usesh: true
+          cpu: 4
+          mem: 12288
+          sync: rsync
+          copyback: false
+          envs: "CARGO_HOME CARGO_TARGET_DIR CARGO_INCREMENTAL CARGO_BUILD_JOBS CARGO_PROFILE_DEV_DEBUG CARGO_NET_RETRY"
+          prepare: |
+            set -u
+            uname -a
+            # Install what we can name; a missing package is reported, not fatal, so the build
+            # step still shows what breaks without it.
+            for p in developer/build/cmake developer/build/pkg-config developer/versioning/git web/curl developer/build/gnu-make system/header; do
+              pkg install -q "$p" || echo "::warning::could not install $p"
+            done
+            # aws-lc-sys has no pregenerated bindings for illumos and needs libclang for bindgen.
+            clang=$(pkg list -aH 'developer/clang-[0-9]*' 2>/dev/null | awk '{print $1}' | sort -t- -k2 -n | tail -1)
+            if [ -n "$clang" ]; then pkg install -q "$clang" || echo "::warning::could not install $clang"; else echo "::warning::no developer/clang-* package found"; fi
+            pkg list | grep -E 'clang|gcc|cmake|pkg-config' || true
+            # x86_64-unknown-illumos is a tier-2 target with host tools: rustup installs natively.
+            unset CARGO_HOME CARGO_TARGET_DIR
+            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+      - name: Compile
+        shell: openindiana {0}
+        run: |
+          set -u
+          . "$HOME/.cargo/env"
+          rustc -vV
+          cargo --version
+          cc --version 2>/dev/null | head -1 || gcc --version | head -1
+          cmake --version | head -1 || true
+          # libclang for bindgen: pick the newest installed clang's lib directory.
+          for d in /usr/clang/*/lib /usr/lib/clang/*/lib; do
+            [ -d "$d" ] && export LIBCLANG_PATH="$d"
+          done
+          echo "LIBCLANG_PATH=${LIBCLANG_PATH:-unset}"
+          # aws-lc-sys calls the bindgen CLI when the target has no pregenerated bindings.
+          if ! command -v bindgen >/dev/null 2>&1; then
+            cargo install --locked bindgen-cli || echo "::warning::bindgen-cli did not install; aws-lc-sys may fail"
+          fi
+          git config --global --add safe.directory "*"
+          status=0
+          step() {
+            name=$1; shift
+            echo "::group::$name"
+            if "$@"; then echo "RESULT $name: ok"; else echo "RESULT $name: FAILED"; status=1; fi
+            echo "::endgroup::"
+          }
+          # Bottom up, so the first failing layer is obvious.
+          step "cos (parser, no C deps)"        cargo build --locked -p pdfcraft-cos
+          step "engine (pulls aws-lc-sys)"      cargo build --locked -p pdfcraft-engine
+          step "pdfcraft-cli (headless app)"    cargo build --locked -p pdfcraft-cli
+          step "pdfcraft (desktop app)"         cargo build --locked -p pdfcraft
+          step "workspace check, all targets"   cargo check --locked --workspace --all-targets
+          step "cos tests"                      cargo test --locked -p pdfcraft-cos
+          exit $status

@@ -44,10 +44,12 @@ jobs:
           copyback: false
           envs: "CARGO_HOME CARGO_TARGET_DIR CARGO_INCREMENTAL CARGO_BUILD_JOBS CARGO_PROFILE_DEV_DEBUG CARGO_NET_RETRY"
           prepare: |
+            # The action runs this under set -e; a missing package must not end the probe.
+            set +e
             set -u
             uname -a
             # pkg exits 4 when a package is already installed; the -build image has most of these.
-            pkgi() { pkg install -q "$@"; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 4 ] || echo "::warning::could not install $*"; }
+            pkgi() { rc=0; pkg install -q "$@" || rc=$?; [ $rc -eq 0 ] || [ $rc -eq 4 ] || echo "::warning::could not install $* (exit $rc)"; }
             pkgi developer/build/cmake developer/build/pkg-config developer/versioning/git web/curl developer/build/gnu-make system/header
             # aws-lc-sys has no pregenerated bindings for illumos and needs libclang for bindgen.
             pkgi developer/clang-21
@@ -64,6 +66,7 @@ jobs:
               echo "::warning::rustup failed; trying OpenIndiana's rustc package"
               pkgi developer/lang/rustc
             fi
+            exit 0
       - name: Compile
         shell: openindiana {0}
         run: |

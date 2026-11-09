@@ -53,19 +53,14 @@ jobs:
             pkgi developer/build/cmake developer/build/pkg-config developer/versioning/git web/curl developer/build/gnu-make system/header
             # aws-lc-sys has no pregenerated bindings for illumos and needs libclang for bindgen.
             pkgi developer/clang-21
-            # rustup-init, rustc and cargo link libgcc_s.so.1, which lives under /usr/gcc/<v>/lib
-            # and is not in the 64-bit default search path. Add it system-wide.
-            pkgi system/library/gcc-14-runtime
-            gcclib=$(ls -d /usr/gcc/*/lib/amd64 2>/dev/null | sort -V | tail -1)
-            if [ -n "$gcclib" ]; then crle -64 -u -l "$gcclib"; fi
-            crle -64 | head -5
-            pkg list | grep -E 'clang|gcc|cmake|pkg-config|rust' || true
-            # x86_64-unknown-illumos is a tier-2 target with host tools: rustup installs natively.
-            unset CARGO_HOME CARGO_TARGET_DIR
-            if ! curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal; then
-              echo "::warning::rustup failed; trying OpenIndiana's rustc package"
-              pkgi developer/lang/rustc
-            fi
+            # Wayland for winit's wayland backend (wayland-sys probes pkg-config for wayland-client).
+            pkgi library/wayland
+            pkg list | grep -E 'clang|gcc|cmake|pkg-config|rust|wayland|libx' || true
+            pkg-config --modversion wayland-client || echo "::warning::no wayland-client .pc file"
+            # OpenIndiana packages Rust itself (1.99 at 202610, above the workspace's rust-version).
+            # rustup-init cannot start here: libgcc_s.so.1 is not on the 64-bit default search path.
+            pkgi developer/lang/rustc
+            rustc -vV
             exit 0
       - name: Compile
         shell: openindiana {0}
@@ -81,6 +76,13 @@ jobs:
             [ -f "$d/libclang.so" ] && export LIBCLANG_PATH="$d"
           done
           echo "LIBCLANG_PATH=${LIBCLANG_PATH:-unset}"
+          # The desktop app only: without a Wayland client library the wayland-sys build script
+          # fails before anything else is tried. Skipping its probe lets cargo check go further;
+          # the real binary then cannot link, which the app step will show.
+          if ! pkg-config --exists wayland-client; then
+            echo "::warning::wayland-client missing; setting WAYLAND_CLIENT_NO_PKG_CONFIG=1"
+            export WAYLAND_CLIENT_NO_PKG_CONFIG=1
+          fi
           # aws-lc-sys calls the bindgen CLI when the target has no pregenerated bindings.
           if ! command -v bindgen >/dev/null 2>&1; then
             cargo install --locked bindgen-cli || echo "::warning::bindgen-cli did not install; aws-lc-sys may fail"

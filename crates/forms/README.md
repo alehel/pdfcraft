@@ -63,7 +63,10 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   box that the font can't hold go through the layout Add text and text boxes use
   (`pdfcraft_fonts::shaped_text::line_pieces`: the bidirectional algorithm, then shaping in the
   craft-fonts faces), drawn beside the field's font, keeping `/DA`; a right-to-left line carries
-  its typing order as `/ActualText`, and wrapping, automatic size, `/Q`, overflow and
+  its typing order as `/ActualText`. An empty nested replacement before the glyphs lets Poppler
+  26.11 use their ToUnicode mappings without reversing that logical text; PdfCraft keeps the
+  outer replacement for exact mixed-direction copy/search order (see the
+  [font compatibility note](../fonts/README.md)). Wrapping, automatic size, `/Q`, overflow and
   `TextBox::fits` measure the shaped pieces that are drawn. `/Q` is followed as written (as a text
   box follows its own): right-to-left text is not moved to the right edge. A build without the
   script's face refuses the value; comb fields and list boxes are not shaped. Any other value or

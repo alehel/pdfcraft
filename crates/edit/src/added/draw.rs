@@ -78,7 +78,8 @@ pub(super) fn draw_laid_shaped(
     let paragraphs: Vec<usize> = laid.iter().map(|(_, _, p, ..)| *p).collect();
     for (i, (line, rtl, _, pieces, w)) in laid.iter().enumerate() {
         // Shaped glyphs are painted in visual order. Keep the original line's typing order
-        // explicitly, including marks, ligatures, digits and mixed-script punctuation.
+        // explicitly, including marks, ligatures, digits and mixed-script punctuation. The shared
+        // opener also supplies the empty nested boundary for Poppler before any drawing.
         out.extend(shaped_text::actual_text_span(line).bytes());
         let spaces = line.matches(' ').count();
         let (x, tw) = placed(t, r, &paragraphs, i, *w, spaces, *rtl);

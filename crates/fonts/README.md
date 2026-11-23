@@ -50,7 +50,7 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   default `document_japanese_font` / `japanese_glyph` APIs still use regular document Mincho.
 - `document_arabic_font` / `shape_arabic` / `arabic_glyph`: the first `Arab` face, shaped with
   harfrust (joining forms, ligatures, mark positions) into clusters for Arabic text written into
-  PDFs; the editor draws each cluster as one Type 3 glyph with a ToUnicode entry and per-line ActualText for logical copy/search order. Without the face
+  PDFs; the editor draws each cluster as one Type 3 glyph with a ToUnicode entry and per-line ActualText for logical copy/search order (see the compatibility note below). Without the face
   they return `GlyphError::NoFont` and the editor reports a clear error.
 - `document_japanese_fonts_for_style`: every `Jpan` face in that order of preference, so the
   editor can use the first one that has all of the replacement's glyphs (the faces differ in
@@ -101,3 +101,20 @@ the PDF's font program stays intact. `pdf::LegacyThaiFont` shapes verified THSar
 positional glyphs into their original PDF codes, retaining the source face and weight. Missing
 contextual glyphs are refused. `pdf::recovered_thai_map` recognizes narrowly fingerprinted
 damaged exporter maps; callers must record repairs and apply them to page-owned font copies.
+
+Generated right-to-left lines retain their original Unicode text in an outer `/Span` with
+`/ActualText` (ISO 32000-2:2020 §14.9.4). Before any glyph, `actual_text_span` opens and closes an
+empty nested replacement (§14.6). This is an extraction compatibility workaround measured with
+Poppler 26.11: it then reads the visual glyphs through ToUnicode, without reversing the logical
+line replacement. PdfCraft retains the outer replacement, so mixed Arabic/English text copies
+and searches in typing order; pdf.js page extraction is unchanged. The empty span changes no
+paint or font mapping. It must precede all glyphs: putting it after them loses text in Poppler.
+Other readers and Poppler versions have not been measured; this is not a general guarantee of
+mixed-direction reading order in external tools. `pdftotext` may still reorder whole numeric or
+English segments, while the Arabic words retain their logical letters.
+
+`cargo test -p pdfcraft-fonts line_replacements_preserve_popplers_cluster_copy_order` compares
+marked and unmarked generated text using the separate `pdftotext` executable when available.
+It uses original synthetic outlines and Arabic, Thai and English mappings; no font installation
+or external fixture is required. Without the executable the external comparison is reported as
+unavailable.

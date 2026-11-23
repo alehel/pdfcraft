@@ -7,6 +7,11 @@
 //! content. Boxes are in display space (points, origin at the bottom-left of the page as shown,
 //! after `/UserUnit` and `/Rotate`), so items stay upright on rotated pages; an item records the
 //! `/UserUnit` it was written for.
+//!
+//! Shaped text keeps each line's typing order in `/ActualText`, including mixed Arabic/English
+//! text. The shared span writer opens and closes an empty nested replacement before any glyph:
+//! Poppler 26.11 then extracts the glyphs through ToUnicode, while PdfCraft retains the outer
+//! logical replacement. This compatibility boundary changes no paint; see `pdfcraft-fonts`' README.
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{GlyphError, GlyphOutline, ShapedScript, Std14, literal, shaped_glyph, win_ansi};

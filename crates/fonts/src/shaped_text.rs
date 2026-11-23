@@ -533,9 +533,21 @@ pub fn wrap(text: &str, size: f64, width: f64, latin: impl Fn(&str, f64) -> f64)
 /// The marked-content operator that opens a line painted in drawing order and gives its typing
 /// order (`/ActualText`, ISO 32000-2 §14.9.4), so copy and search read `line` as it was typed,
 /// marks, ligatures, digits and mixed-script punctuation included. The caller closes it with `EMC`.
+///
+/// For right-to-left text, an empty replacement is opened and closed before any glyph. It has
+/// no content to replace (marked-content nesting, §14.6), so the outer replacement still gives
+/// the whole line its logical text. This is a compatibility workaround observed with Poppler
+/// 26.11: its extraction then uses the glyphs' ToUnicode instead of reversing the logical line
+/// as though it were visual text. Consumers retaining the outer replacement keep the exact
+/// typing order, which cannot in general be recovered from mixed-direction glyph positions.
+/// Keep this empty boundary before all drawing; putting it after glyphs loses text in Poppler.
 pub fn actual_text_span(line: &str) -> String {
     let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
-    format!("/Span <</ActualText <FEFF{logical}>>> BDC\n")
+    let mut span = format!("/Span <</ActualText <FEFF{logical}>>> BDC\n");
+    if line.chars().any(|c| matches!(unicode_bidi::bidi_class(c), unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL)) {
+        span.push_str("/Span <</ActualText ()>> BDC EMC\n");
+    }
+    span
 }
 
 /// `line` split into its Thai runs, shaped with the Thai face, and the text between them, left to
@@ -1070,6 +1082,96 @@ mod tests {
         ShapedCluster { script: ShapedScript::Thai, glyphs: vec![(id, [0.0, 0.0])], advance: 0.5, text: text.into() }
     }
 
+    /// Original synthetic outlines, including a word containing lam-alef. No font input or
+    /// external fixture is needed. Poppler is an optional executable oracle, never linked:
+    /// when installed, a line replacement must preserve what its cluster mappings extract.
+    #[test]
+    fn line_replacements_preserve_popplers_cluster_copy_order() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        use pdfcraft_cos::{SaveOptions, write_full};
+
+        fn dict<const N: usize>(entries: [(&str, Object); N]) -> Dict {
+            let mut d = Dict::new();
+            for (key, value) in entries {
+                d.set(key.as_bytes().to_vec(), value);
+            }
+            d
+        }
+
+        let lines: Vec<(String, Vec<ShapedCluster>)> = [
+            (ShapedScript::Arabic, vec!["م", "ك", "ي", "ل", "ع", " ", "م", "ا", "ل", "س", "ل", "ا"]),
+            (ShapedScript::Thai, vec!["ภ", "า", "ษ", "า", "ไ", "ท", "ย", " ", "1", "2", "3"]),
+            (ShapedScript::Latin, vec!["T", "e", "x", "t", " ", "1", "2", "3"]),
+        ]
+        .into_iter()
+        .map(|(script, text)| {
+            let logical = if script == ShapedScript::Arabic { text.iter().rev().copied().collect() } else { text.concat() };
+            let clusters = text.into_iter().enumerate().map(|(i, text)| ShapedCluster { script, ..cluster(text, i as u32) }).collect();
+            (logical, clusters)
+        })
+        .collect();
+        let pdf = |replace: bool| {
+            let mut doc = Document::new_empty();
+            let mut fonts = Dict::new();
+            let all = lines.iter().flat_map(|(_, clusters)| clusters);
+            let made = ShapedFonts::new(all, |_, _| Ok(boxed(0.5)), &Dict::new(), &mut fonts, "Test", &mut |o| Object::Ref(doc.add(o))).unwrap();
+            let mut body = b"BT\n".to_vec();
+            for (i, (logical, clusters)) in lines.iter().enumerate() {
+                if replace {
+                    body.extend(actual_text_span(logical).bytes());
+                }
+                made.show(&mut body, clusters, 40.0, 200.0 - i as f64 * 40.0, 12.0, 0.0, 0.0, &mut None);
+                if replace {
+                    body.extend_from_slice(b"EMC\n");
+                }
+            }
+            body.extend_from_slice(b"ET\n");
+            let content = doc.add(Object::Stream(Stream::flate(Dict::new(), &body)));
+            let pages = doc.add(Object::Dict(Dict::new()));
+            let page = doc.add(Object::Dict(dict([
+                ("Type", Object::name("Page")),
+                ("Parent", Object::Ref(pages)),
+                ("MediaBox", Object::Array([0, 0, 300, 300].map(Object::Int).to_vec())),
+                ("Resources", Object::Dict(dict([("Font", Object::Dict(fonts))]))),
+                ("Contents", Object::Ref(content)),
+            ])));
+            doc.update_dict(pages, |d| {
+                d.set(b"Type".to_vec(), Object::name("Pages"));
+                d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+                d.set(b"Count".to_vec(), Object::Int(1));
+            })
+            .unwrap();
+            let catalog = doc.add(Object::Dict(dict([("Type", Object::name("Catalog")), ("Pages", Object::Ref(pages))])));
+            doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+            write_full(&doc, &SaveOptions::default()).unwrap()
+        };
+        let extract = |bytes: &[u8]| {
+            let child = Command::new("pdftotext").args(["-", "-"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+            let mut child = match child {
+                Ok(child) => child,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+                Err(e) => panic!("cannot start pdftotext: {e}"),
+            };
+            child.stdin.take().unwrap().write_all(bytes).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            // Poppler adds directional wrappers and page/line separators to plain text.
+            Some(String::from_utf8(output.stdout).unwrap().chars().filter(|c| !is_bidi_control(*c) && !c.is_whitespace()).collect::<String>())
+        };
+        let bare = pdf(false);
+        let marked = pdf(true);
+        let Some(bare) = extract(&bare) else {
+            eprintln!("pdftotext is not installed: external cluster-copy comparison unavailable");
+            return;
+        };
+        let marked = extract(&marked).unwrap();
+        let typed: String = lines.iter().flat_map(|(text, _)| text.chars()).filter(|c| !c.is_whitespace()).collect();
+        assert_eq!(bare, typed, "the synthetic glyph mappings retain the logical letters, including lam-alef");
+        assert_eq!(marked, bare, "adding a logical line replacement must not reverse those letters");
+    }
+
     #[test]
     fn appearance_fonts_keep_their_streams_until_stored_then_refer_to_them() {
         let clusters = [cluster("น้ำ", 1), cluster("ก", 2), cluster("น้ำ", 1)];
@@ -1193,7 +1295,7 @@ mod tests {
         assert_eq!(first_undrawable_shaped("Café\r\nок"), Some('о'));
         assert_eq!(first_undrawable_shaped("Café\n— 5€"), None);
         assert_eq!(line_reach("Hg"), None);
-        assert_eq!(actual_text_span("aب"), "/Span <</ActualText <FEFF00610628>>> BDC\n");
+        assert_eq!(actual_text_span("aب"), "/Span <</ActualText <FEFF00610628>>> BDC\n/Span <</ActualText ()>> BDC EMC\n");
         // A line never starts with a mark: Arabic fatha and shadda, Hebrew qamats, Thai mai tho.
         assert!(['\u{064E}', '\u{0651}', '\u{05B8}', '\u{0E49}'].into_iter().all(joins_previous));
         assert!(!['ب', 'ש', 'ก', 'a', ' '].into_iter().any(joins_previous));

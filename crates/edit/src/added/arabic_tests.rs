@@ -173,8 +173,10 @@ fn an_item_below_the_old_limit_is_drawn_exactly_as_before() {
     }
     let mut bytes = out.clone();
     for (line, ..) in &laid {
+        // Includes the empty nested boundary used by legacy text extractors. Removing the
+        // complete opening leaves exactly the same glyph drawing for the golden below.
         let hex: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
-        let header = format!("/Span <</ActualText <FEFF{hex}>>> BDC\n").into_bytes();
+        let header = format!("/Span <</ActualText <FEFF{hex}>>> BDC\n/Span <</ActualText ()>> BDC EMC\n").into_bytes();
         let start = bytes.windows(header.len()).position(|w| w == header).expect("each line has its logical text");
         bytes.drain(start..start + header.len());
         let end = bytes.windows(4).position(|w| w == b"EMC\n").expect("each ActualText span closes");

@@ -7085,11 +7085,11 @@ fn arabic_and_hebrew_headers_footers_and_watermarks_are_shaped_right_to_left() {
         for (k, page) in [0usize, 2].into_iter().enumerate() {
             let drawn = streams(&doc, page).concat();
             assert!(drawn.contains("/PCAr") && drawn.contains("(DRAFT) Tj") && !drawn.contains("(?"), "{script}: {drawn}");
-            // Each reordered line carries what was typed; the Latin line needs nothing.
+            // Each reordered line carries what was typed and an empty boundary; the Latin line needs nothing.
             let line = typed.replace("<<1>>", &(k + 1).to_string());
             let span = actual_text_span(&line);
             assert!(drawn.contains(&span) && drawn.contains(&actual_text_span(word)), "{script}: {drawn}");
-            assert_eq!(drawn.matches("/ActualText").count(), 2, "{script}: {drawn}");
+            assert_eq!(drawn.matches("/ActualText").count(), 4, "{script}: {drawn}");
             // The footer's shows, left to right: the page number is in the standard font, between
             // the two words, and the line is centred by the width of what is drawn.
             let shows = drawn.split(&span).nth(1).and_then(|rest| rest.split("EMC").next()).unwrap();
@@ -7104,7 +7104,7 @@ fn arabic_and_hebrew_headers_footers_and_watermarks_are_shaped_right_to_left() {
         // The typing order nested in the mark goes with it.
         assert_eq!(remove_marks(&mut doc, &[0, 2], MarkKind::HeaderFooter).unwrap(), 2);
         assert_eq!(marks_present(&doc), [MarkKind::Watermark]);
-        assert_eq!(streams(&doc, 0).concat().matches("/ActualText").count(), 1, "the watermark's is left");
+        assert_eq!(streams(&doc, 0).concat().matches("/ActualText").count(), 2, "the watermark's is left");
     }
 }
 

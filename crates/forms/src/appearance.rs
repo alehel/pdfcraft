@@ -22,6 +22,8 @@
 //! (`pdfcraft_fonts::shaped_text::line_pieces`): shaped in the craft-fonts faces as Type 3 glyphs
 //! beside the field's font, which draws the rest, right-to-left runs in drawing order with the
 //! line's typing order beside it (`/ActualText`), so copy and search read what was typed. The
+//! shared span writer adds an empty nested boundary before drawing for Poppler extraction
+//! compatibility, while PdfCraft keeps the outer logical replacement. The
 //! same pieces are measured, wrapped, sized and drawn. `/Q` is followed as it is, as in a text
 //! box: right-to-left text is not moved to the right edge on its own. A build without a script's
 //! face refuses the value, saying what to do ([`script_refusal`]), as it always refused Thai. Comb

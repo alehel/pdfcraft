@@ -1482,13 +1482,13 @@ fn arabic_and_hebrew_a_field_font_cannot_hold_are_shaped_right_to_left() {
             assert!(starts.last().unwrap()[0] < starts_at + width, "{script} {name}: {starts:?} in {width}");
         }
         // The multi-line value: the lines the shared layout wraps, each from the left edge (/Q 0),
-        // none wider than the room, the reordered ones with what was typed on them.
+        // none wider than the room, the reordered ones with what was typed and an empty boundary.
         let room = 300.0 - 2.0 * left;
         let lines = wrap(&format!("{long}\nplain"), 12.0, room, helv);
         assert!(lines.len() > 3 && lines.last().is_some_and(|l| (l.text.as_str(), l.rtl) == ("plain", false)), "{lines:?}");
         let (ap, starts) = drawn(&doc, "note");
         assert!(!ap.contains('?') && ap.contains("(plain) Tj") && ap.contains("(end) Tj"), "{script}: {ap}");
-        assert_eq!(ap.matches("/ActualText").count(), lines.len() - 1, "{script}: {ap}");
+        assert_eq!(ap.matches("/ActualText").count(), 2 * (lines.len() - 1), "{script}: {ap}");
         let mut rows: Vec<f64> = starts.iter().map(|p| p[1]).collect();
         rows.dedup();
         assert_eq!(rows.len(), lines.len(), "{script}: {rows:?}");

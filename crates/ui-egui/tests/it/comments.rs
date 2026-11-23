@@ -5248,3 +5248,35 @@ fn comment_menu_rows_follow_permissions_and_run_their_action() {
     }
     attachment_page_menu_row();
 }
+
+fn fields(h: &Harness<'static, PdfCraftApp>) -> usize {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().form.len()
+}
+
+/// Delete deletes the newer of a Prepare field and a comment: with a field placed and then a comment clicked, Delete
+/// deletes the comment and the field stays; the next Delete takes the field. The field went, and the comment stayed.
+#[test]
+fn delete_takes_a_comment_selected_after_a_field() {
+    let mut h = selected_square();
+    assert!(h.state_mut().execute(&egui::Context::default(), "form.add.text"));
+    h.run_steps(2);
+    drag_pt(&mut h, (160.0, 180.0), (280.0, 150.0));
+    h.run_steps(2);
+    h.set_option("quick", "select").unwrap();
+    // The square was selected before the field: let go of it, and click it again.
+    h.state_mut().views[0].session.comments.clear_selection();
+    h.run_steps(2);
+    click_pt(&mut h, (90.0, 70.0));
+    h.run_steps(2);
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the field is still selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "and the comment, clicked last");
+    let before = fields(&h);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty(), "the comment, selected last, goes");
+    assert_eq!(fields(&h), before, "the field stays");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(fields(&h), before - 1, "the next Delete takes the field");
+}

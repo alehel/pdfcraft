@@ -21,6 +21,7 @@ use super::crop::{CropResult, CropTool};
 use super::page_parts::{Owner, PagePress};
 use super::page_select::{PageSelectTool, PickSlots};
 use super::selection::DocTexts;
+use super::selection_ages::Held;
 use super::zoom_snap::SnapshotTool;
 use super::{PageGeometry, PageSession, PageXform, presenter};
 use crate::QuickTool;
@@ -288,6 +289,11 @@ pub(crate) fn page_tool<'a>(
     press: &'a PressState,
 ) -> PageTool<'a> {
     let tool = seen_tool(session, chosen);
+    let mut ages = std::mem::take(&mut session.ages);
+    ages.note(session);
+    session.ages = ages;
+    // A comment selected after the field takes Delete: Prepare leaves it to the comment.
+    let field_behind = session.ages.newer(Held::Comment, Held::Field);
     let ToolBench { texts: texts_slot, xforms, map: map_slot } = bench;
     let sizes = cx.sizes;
     let size = move |page: usize| sizes.get(page).copied().unwrap_or_default();
@@ -298,9 +304,9 @@ pub(crate) fn page_tool<'a>(
     let content_delete = tool == QuickTool::Select && session.content.selected.is_some() && session.content.draft.is_none();
     let arm = match tool {
         // Prepare a form under the Select tool: the selection rectangle and the moves of fields are Prepare's.
-        QuickTool::Select if cx.preparing => {
-            Arm::Area(Box::new(PrepareTool::new(None, cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms)))
-        }
+        QuickTool::Select if cx.preparing => Arm::Area(Box::new(
+            PrepareTool::new(None, cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms).behind_comment(field_behind),
+        )),
         QuickTool::Select | QuickTool::ColumnSelect | QuickTool::Comment(_) | QuickTool::Redact => {
             let texts: &'a DocTexts<'a> = texts_slot.insert(DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes));
             let picks = PickSlots::new(&mut session.pending_pick, &mut session.picked_image, &mut session.actions_dismissed);
@@ -347,7 +353,8 @@ pub(crate) fn page_tool<'a>(
                         annotate
                     };
                     if cx.preparing && matches!(tool, QuickTool::Comment(_)) {
-                        let prepare = PrepareTool::new(None, cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms);
+                        let prepare = PrepareTool::new(None, cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms)
+                            .behind_comment(field_behind);
                         Arm::Area(Box::new(PrepareWithComment { prepare, comments: Box::new(annotate) }))
                     } else {
                         Arm::Area(Box::new(annotate))
@@ -392,9 +399,10 @@ pub(crate) fn page_tool<'a>(
                 .over(place);
             Arm::Area(Box::new(annotate))
         }
-        QuickTool::Field(field_tool) => {
-            Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms)))
-        }
+        QuickTool::Field(field_tool) => Arm::Area(Box::new(
+            PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms)
+                .behind_comment(field_behind),
+        )),
         QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.pages, cx.text_style))),
         QuickTool::EditText => {
             Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info, cx.pages, press, cx.geometry()).button_held(cx.button_held)))

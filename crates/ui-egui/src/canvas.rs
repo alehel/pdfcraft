@@ -47,6 +47,7 @@ pub(crate) mod pictures;
 mod presenter;
 pub mod scroll_speed;
 mod selection;
+pub(crate) mod selection_ages;
 pub(super) mod signature_drag;
 mod xform;
 mod zoom;
@@ -360,6 +361,8 @@ pub struct PageSession {
     pub(crate) text_background: crate::edit_text_ui::TextBackground,
     pub(crate) move_background: crate::content_ui::MoveBackground,
     pub(crate) objects: crate::object_ui::ObjectSelection,
+    /// When each kind of selection was last made, so that a key two could take acts on the newer.
+    pub(crate) ages: selection_ages::SelectionAges,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Tells each picture preview cut for a gesture from the one before it under the same name.
     pub(crate) image_serials: craft::ui::primitives::Serials,
@@ -447,6 +450,7 @@ impl PageSession {
             text_background: Default::default(),
             move_background: Default::default(),
             objects: Default::default(),
+            ages: Default::default(),
             image_selection: None,
             image_serials: Default::default(),
             picked_image: None,

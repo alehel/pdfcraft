@@ -9,6 +9,7 @@ use craft::ui::primitives::Draw;
 use pdfcraft_engine::Document;
 use pdfcraft_render::DocInfo;
 
+use crate::canvas::selection_ages::Held;
 use crate::canvas::{PageGeometry, PageSession};
 use crate::object_ui;
 
@@ -116,9 +117,13 @@ impl CanvasTool for EditTextTool<'_> {
                 if self.button_held {
                     return true;
                 }
-                let edit = object_ui::delete(self.session)
-                    .or_else(|| crate::edit_text_ui::delete_picture(self.session, self.placed, self.geo.viewport))
-                    .or_else(|| crate::content_ui::delete_selected(self.session));
+                // The picture goes first when it was selected after the objects.
+                let edit = if self.session.ages.newer(Held::Picture, Held::Objects) {
+                    crate::edit_text_ui::delete_picture(self.session, self.placed, self.geo.viewport).or_else(|| object_ui::delete(self.session))
+                } else {
+                    object_ui::delete(self.session).or_else(|| crate::edit_text_ui::delete_picture(self.session, self.placed, self.geo.viewport))
+                };
+                let edit = edit.or_else(|| crate::content_ui::delete_selected(self.session));
                 self.queue(edit);
                 true
             }

@@ -117,6 +117,8 @@ pub(crate) struct PrepareTool<'a> {
     info: &'a DocInfo,
     /// The transforms of the pages placed this pass.
     xforms: &'a [(usize, PageXform)],
+    /// A comment was selected after the field: Delete is the comment's.
+    behind_comment: bool,
 }
 
 impl<'a> PrepareTool<'a> {
@@ -131,7 +133,14 @@ impl<'a> PrepareTool<'a> {
         info: &'a DocInfo,
         xforms: &'a [(usize, PageXform)],
     ) -> Self {
-        Self { tool, allowed, form, prepare, placed, info, xforms }
+        Self { tool, allowed, form, prepare, placed, info, xforms, behind_comment: false }
+    }
+
+    /// The tool with a comment selected after the field (`behind`): it leaves Delete to the comment.
+    #[must_use]
+    pub(crate) fn behind_comment(mut self, behind: bool) -> Self {
+        self.behind_comment = behind;
+        self
     }
 
     /// Whether a pointer gesture is currently active in Prepare.
@@ -290,12 +299,12 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.prepare.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.prepare.selected.is_some() && !self.behind_comment { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
     }
 
     fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
         match key {
-            ToolKey::Delete { .. } if self.prepare.selected.is_some() => {
+            ToolKey::Delete { .. } if self.prepare.selected.is_some() && !self.behind_comment => {
                 self.prepare.outcome.edit = delete_selected_from(self.prepare);
                 true
             }

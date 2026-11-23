@@ -17,6 +17,7 @@ use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKi
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
+use crate::canvas::selection_ages::Held;
 use crate::canvas::{DocView, PageGeometry, PageSession, PageXform};
 
 #[derive(Default)]
@@ -518,14 +519,15 @@ pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &D
     // `info` is the page geometry every press handler takes; the move itself needs none.
 }
 
-/// An arrow key moves the selected objects, else the selected picture, a point (`far`: ten points), as
-/// in Acrobat. `direction` is a unit vector on screen. Nothing while an edit waits to be applied.
+/// An arrow key moves the selected objects, or the selected picture when it was selected after them, a point
+/// (`far`: ten points), as in Acrobat. `direction` is a unit vector on screen. Nothing while an edit waits to be applied.
 pub(crate) fn nudge(session: &mut PageSession, doc: &Document, direction: Vec2, far: bool, geo: PageGeometry<'_>) -> Option<Edit> {
     if session.pending_edit.is_some() {
         return None;
     }
     let image = session.image_selection.as_ref().map(|s| (s.page, s.index));
-    let objects = session.objects.page.filter(|_| !session.objects.selected.is_empty());
+    let picture_first = image.is_some() && session.ages.newer(Held::Picture, Held::Objects);
+    let objects = session.objects.page.filter(|_| !session.objects.selected.is_empty() && !picture_first);
     let page = objects.or(image.map(|(page, _)| page))?;
     let xf = session.page_xform(page, geo)?;
     let step = direction * if far { 10.0 } else { 1.0 };
